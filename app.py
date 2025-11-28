@@ -30,7 +30,9 @@ def handle_lists():
         db.session.commit()
         return jsonify(new_list.to_dict()), 201
     
-    lists = TodoList.query.all()
+    # Filter out lists that are children (linked to an item)
+    # We want lists where NO TodoItem has this list as its linked_list_id
+    lists = TodoList.query.outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None).all()
     return jsonify([l.to_dict() for l in lists])
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])

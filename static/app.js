@@ -6,35 +6,62 @@ const addItemModal = document.getElementById('add-item-modal');
 // --- Dashboard Functions ---
 
 async function loadDashboard() {
-    if (!listsGrid) return; // Not on dashboard
-    
+    const hubsGrid = document.getElementById('hubs-grid');
+    const listsGrid = document.getElementById('lists-grid');
+    const hubsContainer = document.getElementById('hubs-container');
+    const listsContainer = document.getElementById('lists-container');
+
+    if (!hubsGrid || !listsGrid) return; // Not on dashboard
+
     try {
         const res = await fetch('/api/lists');
         const lists = await res.json();
-        
-        listsGrid.innerHTML = lists.map(list => `
-            <a href="/list/${list.id}" class="card">
-                <div class="card-header">
-                    <span class="card-title">${list.title}</span>
-                    <span class="card-type">${list.type === 'hub' ? 'Project Hub' : 'List'}</span>
-                </div>
-                ${list.type === 'hub' ? `
-                <div class="progress-container">
-                    <div class="progress-bar" style="width: ${list.progress}%"></div>
-                </div>
-                <div class="progress-text">
-                    <span>${list.progress}% Complete</span>
-                </div>
-                ` : `
-                <div class="progress-text">
-                    <span>${list.items.length} Tasks</span>
-                </div>
-                `}
-            </a>
-        `).join('');
+
+        const hubs = lists.filter(l => l.type === 'hub');
+        const simpleLists = lists.filter(l => l.type === 'list');
+
+        // Render Hubs
+        if (hubs.length > 0) {
+            hubsContainer.style.display = 'block';
+            hubsGrid.innerHTML = hubs.map(list => renderListCard(list)).join('');
+        } else {
+            hubsContainer.style.display = 'none';
+        }
+
+        // Render Simple Lists
+        if (simpleLists.length > 0) {
+            listsContainer.style.display = 'block';
+            listsGrid.innerHTML = simpleLists.map(list => renderListCard(list)).join('');
+        } else {
+            listsContainer.style.display = 'none';
+        }
+
     } catch (e) {
         console.error('Error loading lists:', e);
     }
+}
+
+function renderListCard(list) {
+    return `
+        <a href="/list/${list.id}" class="card">
+            <div class="card-header">
+                <span class="card-title">${list.title}</span>
+                <span class="card-type">${list.type === 'hub' ? 'Project Hub' : 'List'}</span>
+            </div>
+            ${list.type === 'hub' ? `
+            <div class="progress-container">
+                <div class="progress-bar" style="width: ${list.progress}%"></div>
+            </div>
+            <div class="progress-text">
+                <span>${list.progress}% Complete</span>
+            </div>
+            ` : `
+            <div class="progress-text">
+                <span>${list.items.length} Tasks</span>
+            </div>
+            `}
+        </a>
+    `;
 }
 
 // --- List View Functions ---
@@ -43,56 +70,36 @@ async function createItem(listId, listType) {
     const input = document.getElementById('item-content');
     const content = input.value.trim();
     if (!content) return;
-    
+
     try {
         const res = await fetch(`/api/lists/${listId}/items`, {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 content,
                 is_project: listType === 'hub'
             })
         });
-        
+
         if (res.ok) {
+            const newItem = await res.json();
             closeAddItemModal();
-            window.location.reload(); // Simple reload to refresh state
+
+            if (newItem.linked_list_id) {
+                // It's a project, open it
+                window.location.href = `/list/${newItem.linked_list_id}`;
+            } else {
+                window.location.reload(); // Simple reload to refresh state
+            }
         }
     } catch (e) {
         console.error('Error creating item:', e);
     }
 }
 
-async function toggleItemStatus(itemId, currentStatus) {
-    const newStatus = currentStatus === 'done' ? 'pending' : 'done';
-    updateItemStatus(itemId, newStatus);
-}
-
-async function cycleStatus(itemId, currentStatus) {
-    const states = ['pending', 'in_progress', 'done'];
-    const nextIndex = (states.indexOf(currentStatus) + 1) % states.length;
-    updateItemStatus(itemId, states[nextIndex]);
-}
-
-async function updateItemStatus(itemId, status) {
-    try {
-        const res = await fetch(`/api/items/${itemId}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ status })
-        });
-        
-        if (res.ok) {
-            window.location.reload();
-        }
-    } catch (e) {
-        console.error('Error updating item:', e);
-    }
-}
-
 async function deleteItem(itemId) {
     if (!confirm('Are you sure?')) return;
-    
+
     try {
         const res = await fetch(`/api/items/${itemId}`, { method: 'DELETE' });
         if (res.ok) {
@@ -105,7 +112,7 @@ async function deleteItem(itemId) {
 
 async function deleteList(listId) {
     if (!confirm('Delete this list and all its contents?')) return;
-    
+
     try {
         const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
         if (res.ok) {
@@ -140,19 +147,21 @@ function closeAddItemModal() {
 async function createList() {
     const title = document.getElementById('list-title').value.trim();
     const type = document.getElementById('list-type').value;
-    
+
     if (!title) return;
-    
+
     try {
         const res = await fetch('/api/lists', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, type })
         });
-        
+
         if (res.ok) {
+            const newList = await res.json();
             closeCreateModal();
-            loadDashboard();
+            // Redirect to the new list
+            window.location.href = `/list/${newList.id}`;
         }
     } catch (e) {
         console.error('Error creating list:', e);
@@ -170,9 +179,9 @@ function calculateHubProgress() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
-    
+
     // Close modals on outside click
-    window.onclick = function(event) {
+    window.onclick = function (event) {
         if (event.target == createModal) closeCreateModal();
         if (event.target == addItemModal) closeAddItemModal();
     }

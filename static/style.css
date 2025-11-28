@@ -373,6 +373,48 @@ h1 {
     border-color: rgba(16, 185, 129, 0.2);
 }
 
+/* Status Dropdown */
+.status-dropdown-container {
+    position: relative;
+    display: inline-block;
+}
+
+.status-dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.5rem;
+    background: #1e293b;
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 0.5rem;
+    display: none;
+    flex-direction: column;
+    gap: 0.5rem;
+    z-index: 100;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    min-width: 140px;
+}
+
+.status-dropdown-menu.active {
+    display: flex;
+}
+
+.status-option {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.status-option:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
 /* Modal */
 .modal {
     position: fixed;

@@ -59,51 +59,34 @@
 
         <div class="task-actions">
             {% if todo_list.type == 'hub' and item.linked_list_id %}
-            <a href="/list/{{ item.linked_list_id }}" class="btn btn-primary"
-                style="padding: 0.5rem 1rem; font-size: 0.8rem;">
-                Open Project
-            </a>
-            {% endif %}
+            <a href="/list/{{ item.linked_list_id }}" class="btn btn-primary" </div>
 
-            {% if todo_list.type == 'list' %}
-            <button class="btn-status {{ 'status-' + item.status }}"
-                onclick="cycleStatus({{ item.id }}, '{{ item.status }}')">
-                {{ item.status.replace('_', ' ').title() }}
-            </button>
-            {% endif %}
+                <!-- Add Item Modal -->
+                <div class="modal" id="add-item-modal">
+                    <div class="modal-content">
+                        <h2>Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}</h2>
+                        <br>
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" id="item-content" class="form-control" placeholder="Enter name...">
+                        </div>
+                        <div class="modal-actions">
+                            <button class="btn" onclick="closeAddItemModal()">Cancel</button>
+                            <button class="btn btn-primary"
+                                onclick="createItem({{ todo_list.id }}, '{{ todo_list.type }}')">Add</button>
+                        </div>
+                    </div>
+                </div>
 
-            <button class="btn-icon" onclick="deleteItem({{ item.id }})"><i class="fa-solid fa-trash"></i></button>
-        </div>
-    </div>
-    {% endfor %}
-</div>
+                <script>
+                    const CURRENT_LIST_ID = {{ todo_list.id }};
+                    const CURRENT_LIST_TYPE = '{{ todo_list.type }}';
 
-<!-- Add Item Modal -->
-<div class="modal" id="add-item-modal">
-    <div class="modal-content">
-        <h2>Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}</h2>
-        <br>
-        <div class="form-group">
-            <label>Name</label>
-            <input type="text" id="item-content" class="form-control" placeholder="Enter name...">
-        </div>
-        <div class="modal-actions">
-            <button class="btn" onclick="closeAddItemModal()">Cancel</button>
-            <button class="btn btn-primary"
-                onclick="createItem({{ todo_list.id }}, '{{ todo_list.type }}')">Add</button>
-        </div>
-    </div>
-</div>
-
-<script>
-    const CURRENT_LIST_ID = {{ todo_list.id }};
-    const CURRENT_LIST_TYPE = '{{ todo_list.type }}';
-
-    // Initial progress calculation for Hub
-    {% if todo_list.type == 'hub' %}
-    document.addEventListener('DOMContentLoaded', () => {
-        calculateHubProgress();
-    });
-    {% endif %}
-</script>
-{% endblock %}
+                    // Initial progress calculation for Hub
+                    {% if todo_list.type == 'hub' %}
+                    document.addEventListener('DOMContentLoaded', () => {
+                        calculateHubProgress();
+                    });
+                    {% endif %}
+                </script>
+                {% endblock %}
