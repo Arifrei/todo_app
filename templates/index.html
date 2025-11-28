@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<header>
+    <div>
+        <h1>Dashboard</h1>
+        <p style="color: var(--text-muted);">Manage your projects and tasks</p>
+    </div>
+    <button class="btn btn-primary" onclick="openCreateModal()">
+        <i class="fa-solid fa-plus"></i> New List
+    </button>
+</header>
+
+<div class="grid" id="lists-grid">
+    <!-- Lists will be populated here via JS -->
+</div>
+
+<!-- Create List Modal -->
+<div class="modal" id="create-modal">
+    <div class="modal-content">
+        <h2>Create New List</h2>
+        <br>
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="list-title" class="form-control" placeholder="e.g., Work Projects">
+        </div>
+        <div class="form-group">
+            <label>Type</label>
+            <select id="list-type" class="form-control">
+                <option value="hub">Project Hub (Parent List)</option>
+                <option value="list">Simple Task List</option>
+            </select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeCreateModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createList()">Create</button>
+        </div>
+    </div>
+</div>
+{% endblock %}

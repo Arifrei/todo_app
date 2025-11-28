@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<a href="/" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to Dashboard</a>
+
+<div class="list-header">
+    <div class="card-header">
+        <div>
+            <h1 id="list-title-display">{{ todo_list.title }}</h1>
+            <span class="card-type">{{ todo_list.type }}</span>
+        </div>
+        <div class="task-actions">
+            <button class="btn-icon" onclick="openEditListModal()"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn-icon" style="color: var(--danger-color);" onclick="deleteList({{ todo_list.id }})"><i
+                    class="fa-solid fa-trash"></i></button>
+        </div>
+    </div>
+
+    {% if todo_list.type == 'hub' %}
+    <div class="progress-container" style="margin-top: 1.5rem;">
+        <div class="progress-bar" id="main-progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="progress-text">
+        <span id="progress-percent">0% Complete</span>
+        <span id="progress-count">0/0 Projects</span>
+    </div>
+    {% endif %}
+</div>
+
+<div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center;">
+    <h2>{{ 'Projects' if todo_list.type == 'hub' else 'Tasks' }}</h2>
+    <button class="btn btn-primary" onclick="openAddItemModal()">
+        <i class="fa-solid fa-plus"></i> Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}
+    </button>
+</div>
+
+<div class="task-list" id="items-container">
+    {% for item in todo_list.items %}
+    <div class="task-item {{ 'done' if item.status == 'done' else '' }}" id="item-{{ item.id }}">
+        <div class="task-content">
+            {% if todo_list.type == 'list' %}
+            <div class="task-checkbox" onclick="toggleItemStatus({{ item.id }}, '{{ item.status }}')">
+                <i class="fa-solid fa-check"></i>
+            </div>
+            {% endif %}
+
+            <div style="flex: 1;">
+                <div class="task-text">{{ item.content }}</div>
+                {% if todo_list.type == 'hub' and item.linked_list %}
+                <div class="progress-container" style="height: 6px; margin-top: 0.5rem; width: 150px;">
+                    <div class="progress-bar" style="width: {{ item.linked_list.get_progress() }}%"></div>
+                </div>
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
+                    {{ item.linked_list.get_progress() }}% Done
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="task-actions">
+            {% if todo_list.type == 'hub' and item.linked_list_id %}
+            <a href="/list/{{ item.linked_list_id }}" class="btn btn-primary"
+                style="padding: 0.5rem 1rem; font-size: 0.8rem;">
+                Open Project
+            </a>
+            {% endif %}
+
+            {% if todo_list.type == 'list' %}
+            <button class="btn-status {{ 'status-' + item.status }}"
+                onclick="cycleStatus({{ item.id }}, '{{ item.status }}')">
+                {{ item.status.replace('_', ' ').title() }}
+            </button>
+            {% endif %}
+
+            <button class="btn-icon" onclick="deleteItem({{ item.id }})"><i class="fa-solid fa-trash"></i></button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Add Item Modal -->
+<div class="modal" id="add-item-modal">
+    <div class="modal-content">
+        <h2>Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}</h2>
+        <br>
+        <div class="form-group">
+            <label>Name</label>
+            <input type="text" id="item-content" class="form-control" placeholder="Enter name...">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeAddItemModal()">Cancel</button>
+            <button class="btn btn-primary"
+                onclick="createItem({{ todo_list.id }}, '{{ todo_list.type }}')">Add</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CURRENT_LIST_ID = {{ todo_list.id }};
+    const CURRENT_LIST_TYPE = '{{ todo_list.type }}';
+
+    // Initial progress calculation for Hub
+    {% if todo_list.type == 'hub' %}
+    document.addEventListener('DOMContentLoaded', () => {
+        calculateHubProgress();
+    });
+    {% endif %}
+</script>
+{% endblock %}
