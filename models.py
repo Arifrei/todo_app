@@ -33,7 +33,9 @@ class TodoItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=False)
     content = db.Column(db.String(200), nullable=False)
-    status = db.Column(db.String(20), default='pending') # 'pending', 'in_progress', 'done'
+    description = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done'
     
     # If this item represents a child project, this links to that list
     linked_list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=True)

@@ -68,6 +68,8 @@ function renderListCard(list) {
 
 async function createItem(listId, listType) {
     const input = document.getElementById('item-content');
+    const descriptionInput = document.getElementById('item-description');
+    const notesInput = document.getElementById('item-notes');
     const content = input.value.trim();
     if (!content) return;
 
@@ -77,6 +79,8 @@ async function createItem(listId, listType) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 content,
+                description: descriptionInput ? descriptionInput.value.trim() : '',
+                notes: notesInput ? notesInput.value.trim() : '',
                 is_project: listType === 'hub'
             })
         });
@@ -123,6 +127,42 @@ async function deleteList(listId) {
     }
 }
 
+// --- Status Functions ---
+
+async function updateItemStatus(itemId, status) {
+    try {
+        const res = await fetch(`/api/items/${itemId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+
+        if (res.ok) {
+            window.location.reload();
+        }
+    } catch (e) {
+        console.error('Error updating item:', e);
+    }
+}
+
+function toggleStatusDropdown(itemId) {
+    const menu = document.getElementById(`status-menu-${itemId}`);
+    // Close all other menus
+    document.querySelectorAll('.status-dropdown-menu').forEach(el => {
+        if (el !== menu) el.classList.remove('active');
+    });
+    menu.classList.toggle('active');
+}
+
+// Close dropdowns when clicking outside
+window.addEventListener('click', function (e) {
+    if (!e.target.closest('.status-dropdown-container')) {
+        document.querySelectorAll('.status-dropdown-menu').forEach(el => {
+            el.classList.remove('active');
+        });
+    }
+});
+
 // --- Modal Functions ---
 
 function openCreateModal() {
@@ -142,29 +182,46 @@ function openAddItemModal() {
 function closeAddItemModal() {
     addItemModal.classList.remove('active');
     document.getElementById('item-content').value = '';
+    const descriptionInput = document.getElementById('item-description');
+    if (descriptionInput) descriptionInput.value = '';
+    const notesInput = document.getElementById('item-notes');
+    if (notesInput) notesInput.value = '';
 }
 
-async function createList() {
-    const title = document.getElementById('list-title').value.trim();
-    const type = document.getElementById('list-type').value;
+function openEditItemModal(itemId, content, description, notes) {
+    const modal = document.getElementById('edit-item-modal');
+    document.getElementById('edit-item-id').value = itemId;
+    document.getElementById('edit-item-content').value = content;
+    document.getElementById('edit-item-description').value = description || '';
+    document.getElementById('edit-item-notes').value = notes || '';
+    modal.classList.add('active');
+}
 
-    if (!title) return;
+function closeEditItemModal() {
+    const modal = document.getElementById('edit-item-modal');
+    modal.classList.remove('active');
+}
+
+async function saveItemChanges() {
+    const itemId = document.getElementById('edit-item-id').value;
+    const content = document.getElementById('edit-item-content').value.trim();
+    const description = document.getElementById('edit-item-description').value.trim();
+    const notes = document.getElementById('edit-item-notes').value.trim();
+
+    if (!content) return;
 
     try {
-        const res = await fetch('/api/lists', {
-            method: 'POST',
+        const res = await fetch(`/api/items/${itemId}`, {
+            method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, type })
+            body: JSON.stringify({ content, description, notes })
         });
 
         if (res.ok) {
-            const newList = await res.json();
-            closeCreateModal();
-            // Redirect to the new list
-            window.location.href = `/list/${newList.id}`;
+            window.location.reload();
         }
     } catch (e) {
-        console.error('Error creating list:', e);
+        console.error('Error updating item:', e);
     }
 }
 
@@ -184,5 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.onclick = function (event) {
         if (event.target == createModal) closeCreateModal();
         if (event.target == addItemModal) closeAddItemModal();
+        const editModal = document.getElementById('edit-item-modal');
+        if (event.target == editModal) closeEditItemModal();
     }
 });

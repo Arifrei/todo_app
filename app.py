@@ -18,7 +18,12 @@ def index():
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
     todo_list = TodoList.query.get_or_404(list_id)
-    return render_template('list_view.html', todo_list=todo_list)
+    
+    # Find parent if exists (if this list is linked by an item)
+    parent_item = TodoItem.query.filter_by(linked_list_id=list_id).first()
+    parent_list = parent_item.list if parent_item else None
+    
+    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list)
 
 # API Routes
 @app.route('/api/lists', methods=['GET', 'POST'])
@@ -56,9 +61,11 @@ def handle_list(list_id):
 def create_item(list_id):
     data = request.json
     content = data['content']
+    description = data.get('description', '')
+    notes = data.get('notes', '')
     is_project = data.get('is_project', False)
     
-    new_item = TodoItem(list_id=list_id, content=content)
+    new_item = TodoItem(list_id=list_id, content=content, description=description, notes=notes)
     
     if is_project:
         # Automatically create a child list
@@ -92,6 +99,8 @@ def handle_item(item_id):
         data = request.json
         item.status = data.get('status', item.status)
         item.content = data.get('content', item.content)
+        item.description = data.get('description', item.description)
+        item.notes = data.get('notes', item.notes)
         db.session.commit()
         return jsonify(item.to_dict())
 
