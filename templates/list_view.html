@@ -237,6 +237,22 @@
     </div>
 </div>
 
+<!-- Edit List Modal -->
+<div class="modal" id="edit-list-modal">
+    <div class="modal-content">
+        <h2>Rename List</h2>
+        <br>
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="edit-list-title" class="form-control">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeEditListModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveListTitle()">Save</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const CURRENT_LIST_ID = {{ todo_list.id }};
     const CURRENT_LIST_TYPE = '{{ todo_list.type }}';

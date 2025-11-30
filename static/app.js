@@ -108,6 +108,42 @@ async function createList() {
 
 // --- List View Functions ---
 
+function openEditListModal() {
+    const modal = document.getElementById('edit-list-modal');
+    const input = document.getElementById('edit-list-title');
+    const display = document.getElementById('list-title-display');
+    if (!modal || !input || !display) return;
+    input.value = display.textContent.trim();
+    modal.classList.add('active');
+    input.focus();
+}
+
+function closeEditListModal() {
+    const modal = document.getElementById('edit-list-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function saveListTitle() {
+    const input = document.getElementById('edit-list-title');
+    if (!input) return;
+    const title = input.value.trim();
+    if (!title) return;
+
+    try {
+        const res = await fetch(`/api/lists/${CURRENT_LIST_ID}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title })
+        });
+        if (res.ok) {
+            document.getElementById('list-title-display').textContent = title;
+            closeEditListModal();
+        }
+    } catch (e) {
+        console.error('Error updating list title:', e);
+    }
+}
+
 async function createItem(listId, listType) {
     const input = document.getElementById('item-content');
     const descriptionInput = document.getElementById('item-description');
@@ -550,6 +586,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const editModal = document.getElementById('edit-item-modal');
         if (event.target == editModal) closeEditItemModal();
         if (event.target == confirmModal) closeConfirmModal();
+        const editListModal = document.getElementById('edit-list-modal');
+        if (event.target == editListModal) closeEditListModal();
     }
 
     if (confirmYesButton) {
