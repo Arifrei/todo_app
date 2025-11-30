@@ -6,20 +6,20 @@
         <h1>Dashboard</h1>
         <p style="color: var(--text-muted);">Manage your projects and tasks</p>
     </div>
-    <button class="btn btn-primary" onclick="openCreateModal()">
+    <button class="btn btn-primary btn-secondary" onclick="openCreateModal()">
         <i class="fa-solid fa-plus"></i> New List
     </button>
 </header>
 
 <div id="hubs-container" style="display: none; margin-bottom: 2rem;">
-    <h2 style="margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-muted);">Project Hubs</h2>
+    <h2 class="section-title">Project Hubs</h2>
     <div class="grid" id="hubs-grid">
         <!-- Hubs will be populated here via JS -->
     </div>
 </div>
 
 <div id="lists-container" style="display: none;">
-    <h2 style="margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-muted);">Task Lists</h2>
+    <h2 class="section-title">Task Lists</h2>
     <div class="grid" id="lists-grid">
         <!-- Lists will be populated here via JS -->
     </div>

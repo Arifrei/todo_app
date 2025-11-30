@@ -23,28 +23,66 @@
     </div>
 
     {% if todo_list.type == 'hub' %}
+    {# Compute counts: treat a project as complete when the linked list is 100% or a simple item is 'done' #}
+    {% set total = todo_list.items|length %}
+    {% set done_count = 0 %}
+    {% for item in todo_list.items %}
+        {% if item.linked_list %}
+            {% if item.linked_list.get_progress() == 100 %}
+                {% set done_count = done_count + 1 %}
+            {% endif %}
+        {% else %}
+            {% if item.status == 'done' %}
+                {% set done_count = done_count + 1 %}
+            {% endif %}
+        {% endif %}
+    {% endfor %}
+
     <div class="progress-container" style="margin-top: 1.5rem;">
-        <div class="progress-bar" id="main-progress-bar" style="width: 0%"></div>
+        <div class="progress-bar" id="main-progress-bar" style="width: {{ todo_list.get_progress() }}%"></div>
     </div>
     <div class="progress-text">
-        <span id="progress-percent">0% Complete</span>
-        <span id="progress-count">0/0 Projects</span>
+        <span id="progress-percent">{{ todo_list.get_progress() }}% Complete</span>
+        <span id="progress-count">{{ done_count }}/{{ total }} Projects</span>
     </div>
     {% endif %}
 </div>
 
 <div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center;">
     <h2>{{ 'Projects' if todo_list.type == 'hub' else 'Tasks' }}</h2>
-    <button class="btn btn-primary" onclick="openAddItemModal()">
-        <i class="fa-solid fa-plus"></i> Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}
-    </button>
+    <div style="display: flex; gap: 0.5rem;">
+        <button class="btn" onclick="openBulkImportModal()">
+            <i class="fa-solid fa-list-check"></i> Bulk Import
+        </button>
+        <button class="btn btn-primary btn-secondary" onclick="openAddItemModal()">
+            <i class="fa-solid fa-plus"></i> Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}
+        </button>
+    </div>
+</div>
+
+<div class="bulk-actions" id="bulk-actions" style="display: none;">
+    <div class="bulk-left">
+        <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
+        <label for="select-all" style="cursor: pointer;">Select all</label>
+        <span id="bulk-count" style="color: var(--text-muted); margin-left: 0.5rem;"></span>
+    </div>
+    <div class="bulk-buttons">
+        <button class="btn-status status-pending" onclick="bulkUpdateStatus('not_started')">Not Started</button>
+        <button class="btn-status status-in_progress" onclick="bulkUpdateStatus('in_progress')">In Progress</button>
+        <button class="btn-status status-done" onclick="bulkUpdateStatus('done')">Done</button>
+        <button class="btn-icon delete" onclick="bulkDelete()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
+    </div>
 </div>
 
 <div class="task-list" id="items-container">
     {% for item in todo_list.items %}
-    <div class="task-item {{ 'done' if item.status == 'done' else '' }}" id="item-{{ item.id }}">
+    <div class="task-item {{ 'done' if item.status == 'done' else '' }} {{ 'phase' if item.status == 'phase' else '' }}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
         <div class="task-content">
-            {% if todo_list.type == 'list' %}
+            <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
+                <i class="fa-solid fa-grip-lines"></i>
+            </div>
+            <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
+            {% if todo_list.type == 'list' and item.status != 'phase' %}
             <div class="task-checkbox" onclick="toggleItemStatus({{ item.id }}, '{{ item.status }}')">
                 <i class="fa-solid fa-check"></i>
             </div>
@@ -52,6 +90,9 @@
 
             <div style="flex: 1;">
                 <div class="task-text">{{ item.content }}</div>
+                {% if item.status == 'phase' %}
+                <div class="phase-pill">Phase</div>
+                {% endif %}
                 {% if item.description %}
                 <div class="task-description" style="font-size: 0.9rem; color: var(--text-color); margin-top: 4px;">{{
                     item.description }}</div>
@@ -75,13 +116,19 @@
 
         <div class="task-actions">
             {% if todo_list.type == 'hub' and item.linked_list_id %}
-            <a href="/list/{{ item.linked_list_id }}" class="btn btn-primary"
-                style="padding: 0.5rem 1rem; font-size: 0.8rem;">
+            <a href="/list/{{ item.linked_list_id }}" class="btn btn-secondary" role="button" aria-label="Open Project {{ item.content }}">
                 Open Project
             </a>
             {% endif %}
 
-            {% if todo_list.type == 'list' %}
+            {% if item.status == 'phase' %}
+            <button class="btn-icon"
+                onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
+                <i class="fa-solid fa-pen"></i>
+            </button>
+            {% endif %}
+
+            {% if todo_list.type == 'list' and item.status != 'phase' %}
             <div class="status-dropdown-container">
                 <button class="btn-status {{ 'status-' + item.status }}" onclick="toggleStatusDropdown({{ item.id }})">
                     {{ item.status.replace('_', ' ').title() }} <i class="fa-solid fa-chevron-down"
@@ -160,6 +207,32 @@
         <div class="modal-actions">
             <button class="btn" onclick="closeEditItemModal()">Cancel</button>
             <button class="btn btn-primary" onclick="saveItemChanges()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Import Modal -->
+<div class="modal" id="bulk-import-modal">
+    <div class="modal-content">
+        <h2>Bulk Import</h2>
+        <p style="color: var(--text-muted); margin: 0.25rem 0 1rem 0;">Paste an outline to create phases and tasks instantly.</p>
+        <div class="form-group">
+            <label>Outline (use # for phases, - [ ] for tasks)</label>
+            <textarea id="bulk-import-text" class="form-control" rows="8" placeholder="# Phase One
+- [ ] Kickoff :: with description ::: and notes
+- [>] WIP task
+- [x] Completed task
+# Next Phase:
+- Task without checkbox"></textarea>
+        </div>
+        <div class="form-group" style="color: var(--text-muted); font-size: 0.9rem;">
+            <div><strong>Phases:</strong> Lines starting with <code>#</code> or ending with <code>:</code></div>
+            <div><strong>Tasks:</strong> <code>- [ ]</code> not started, <code>- [>]</code>/<code>- [~]</code> in progress, <code>- [x]</code> done, or simple <code>- Task</code>.</div>
+            <div><strong>Description/Notes:</strong> append <code>:: description</code> and/or <code>::: notes</code> to any line.</div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeBulkImportModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="bulkImportItems({{ todo_list.id }})">Import</button>
         </div>
     </div>
 </div>

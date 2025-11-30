@@ -7,10 +7,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='2') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
 <body>
+    <div class="gradient-bg"></div>
     <div class="background-blobs">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
@@ -32,6 +34,18 @@
         <main class="content">
             {% block content %}{% endblock %}
         </main>
+    </div>
+
+    <!-- Global Confirm Modal -->
+    <div class="modal" id="confirm-modal">
+        <div class="modal-content">
+            <h2>Are you sure?</h2>
+            <p id="confirm-message" style="color: var(--text-muted); margin: 0.5rem 0 1rem 0;">This action cannot be undone.</p>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeConfirmModal()">Cancel</button>
+                <button class="btn btn-danger" id="confirm-yes-button">Confirm</button>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
