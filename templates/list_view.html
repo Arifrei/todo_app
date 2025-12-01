@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
+{% set phases = items|selectattr('status', 'equalto', 'phase')|list %}
 <div class="nav-links" style="margin-bottom: 1rem; display: flex; align-items: center;">
     {% if parent_list %}
     <a href="/list/{{ parent_list.id }}" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to {{
@@ -54,9 +55,32 @@
         <button class="btn" onclick="openBulkImportModal()">
             <i class="fa-solid fa-list-check"></i> Bulk Import
         </button>
+        {% if todo_list.type == 'list' %}
+        <button class="btn btn-secondary" onclick="openAddItemModal(null, 'phase')">
+            <i class="fa-solid fa-layer-group"></i> Add Phase
+        </button>
+        {% endif %}
+        {% if todo_list.type == 'list' and phases %}
+        <div class="phase-add-dropdown">
+            <button class="btn btn-primary btn-secondary" type="button" onclick="togglePhaseMenu(event)">
+                <i class="fa-solid fa-plus"></i> Add Task
+            </button>
+            <div class="phase-menu" id="phase-menu">
+                <button class="phase-menu-item" onclick="openAddItemModal(); togglePhaseMenu(event, true);">
+                    Add task (no phase)
+                </button>
+                {% for phase in phases %}
+                <button class="phase-menu-item" onclick="openAddItemModal({{ phase.id }}, 'task'); togglePhaseMenu(event, true);">
+                    Add to "{{ phase.content }}"
+                </button>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
         <button class="btn btn-primary btn-secondary" onclick="openAddItemModal()">
             <i class="fa-solid fa-plus"></i> Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}
         </button>
+        {% endif %}
     </div>
 </div>
 
@@ -68,7 +92,7 @@
     </div>
     <div class="bulk-buttons">
         <button class="btn-status status-pending" onclick="bulkUpdateStatus('not_started')">Not Started</button>
-        <button class="btn-status status-in_progress" onclick="bulkUpdateStatus('in_progress')">In Progress</button>
+        <button class="btn-status status-in_progress" onclick="bulkUpdateStatus('in_progress')">Started</button>
         <button class="btn-status status-done" onclick="bulkUpdateStatus('done')">Done</button>
         <button class="btn-icon delete" onclick="bulkDelete()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
     </div>
@@ -82,14 +106,16 @@
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
             </div>
-            {% if todo_list.type == 'list' and item.status != 'phase' %}
-            <div class="task-checkbox" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">
-                <i class="fa-solid fa-check"></i>
-            </div>
-            {% endif %}
 
-            <div style="flex: 1;">
-                <div class="task-text">{{ item.content }}</div>
+            <div class="task-body" style="flex: 1;">
+                <div class="task-title-row">
+                    <div class="task-text">{{ item.content }}</div>
+                    {% if item.status == 'phase' %}
+                    <button class="btn btn-secondary phase-inline-add" onclick="openAddItemModal({{ item.id }}, 'task')">
+                        <i class="fa-solid fa-plus"></i> Add Task
+                    </button>
+                    {% endif %}
+                </div>
                 {% if item.status == 'phase' %}
                 <div class="phase-pill">Phase</div>
                 {% endif %}
@@ -114,33 +140,41 @@
             </div>
         </div>
 
-        <div class="task-actions">
-            {% if todo_list.type == 'hub' and item.linked_list_id %}
-            <a href="/list/{{ item.linked_list_id }}" class="btn btn-secondary" role="button" aria-label="Open Project {{ item.content }}">
-                Open Project
-            </a>
-            {% endif %}
-
-            {% if item.status == 'phase' %}
-            <button class="btn-icon"
-                onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
-                <i class="fa-solid fa-pen"></i>
-            </button>
-            {% endif %}
-
+        <div class="task-footer">
             {% if todo_list.type == 'list' and item.status != 'phase' %}
-            <div class="status-buttons">
-                <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">In Progress</button>
-                <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
+            <div class="task-checkbox" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">
+                <i class="fa-solid fa-check"></i>
             </div>
-
-            <button class="btn-icon"
-                onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
-                <i class="fa-solid fa-pen"></i>
-            </button>
             {% endif %}
 
-            <button class="btn-icon" onclick="deleteItem({{ item.id }})"><i class="fa-solid fa-trash"></i></button>
+            <div class="task-actions">
+                {% if todo_list.type == 'hub' and item.linked_list_id %}
+                <a href="/list/{{ item.linked_list_id }}" class="btn btn-secondary" role="button" aria-label="Open Project {{ item.content }}">
+                    Open Project
+                </a>
+                {% endif %}
+
+                {% if item.status == 'phase' %}
+                <button class="btn-icon"
+                    onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
+                    <i class="fa-solid fa-pen"></i>
+                </button>
+                {% endif %}
+
+                {% if todo_list.type == 'list' and item.status != 'phase' %}
+                <div class="status-buttons">
+                <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
+                    <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
+                </div>
+
+                <button class="btn-icon"
+                    onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
+                    <i class="fa-solid fa-pen"></i>
+                </button>
+                {% endif %}
+
+                <button class="btn-icon" onclick="deleteItem({{ item.id }})"><i class="fa-solid fa-trash"></i></button>
+            </div>
         </div>
     </div>
     {% endfor %}
@@ -149,13 +183,22 @@
 <!-- Add Item Modal -->
 <div class="modal" id="add-item-modal">
     <div class="modal-content">
-        <h2>Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}</h2>
+        <h2 id="add-item-title">Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}</h2>
         <br>
         <div class="form-group">
             <label>Name</label>
             <input type="text" id="item-content" class="form-control" placeholder="Enter name...">
         </div>
         {% if todo_list.type == 'list' %}
+        <div class="form-group" id="phase-select-group">
+            <label>Assign to phase (optional)</label>
+            <select id="item-phase-select" class="form-control">
+                <option value="">No phase</option>
+                {% for phase in phases %}
+                <option value="{{ phase.id }}">{{ phase.content }}</option>
+                {% endfor %}
+            </select>
+        </div>
         <div class="form-group">
             <label>Description</label>
             <textarea id="item-description" class="form-control" placeholder="Brief description..." rows="2"></textarea>
@@ -165,6 +208,8 @@
             <textarea id="item-notes" class="form-control" placeholder="Additional notes..." rows="3"></textarea>
         </div>
         {% endif %}
+        <input type="hidden" id="item-phase-id">
+        <input type="hidden" id="item-mode" value="task">
         <div class="modal-actions">
             <button class="btn" onclick="closeAddItemModal()">Cancel</button>
             <button class="btn btn-primary"

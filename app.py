@@ -84,6 +84,29 @@ def parse_outline(outline_text):
 
     return items
 
+def insert_item_in_order(todo_list, new_item, phase_id=None):
+    """Place a new item in the ordering, optionally directly under a phase."""
+    ordered = list(todo_list.items)
+    if new_item not in ordered:
+        ordered.append(new_item)
+
+    if phase_id:
+        phase = next((i for i in ordered if i.id == phase_id and i.status == 'phase'), None)
+        if phase:
+            try:
+                phase_idx = ordered.index(phase)
+            except ValueError:
+                phase_idx = -1
+            insert_idx = phase_idx + 1
+            while insert_idx < len(ordered) and ordered[insert_idx].status != 'phase':
+                insert_idx += 1
+            # Remove and reinsert in the right spot
+            ordered = [i for i in ordered if i.id != new_item.id]
+            ordered.insert(insert_idx, new_item)
+
+    for idx, item in enumerate(ordered, start=1):
+        item.order_index = idx
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -161,17 +184,25 @@ def handle_list(list_id):
 
 @app.route('/api/lists/<int:list_id>/items', methods=['POST'])
 def create_item(list_id):
+    todo_list = TodoList.query.get_or_404(list_id)
     data = request.json
     content = data['content']
     description = data.get('description', '')
     notes = data.get('notes', '')
     is_project = data.get('is_project', False)
+    phase_id = data.get('phase_id')
+    status = data.get('status', 'not_started')
+    if status not in ['not_started', 'in_progress', 'done', 'phase']:
+        status = 'not_started'
+    if is_project:
+        status = 'not_started'
     next_order = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=list_id).scalar() + 1
     new_item = TodoItem(
         list_id=list_id,
         content=content,
         description=description,
         notes=notes,
+        status=status,
         order_index=next_order
     )
     
@@ -181,8 +212,20 @@ def create_item(list_id):
         db.session.add(child_list)
         db.session.flush() # Get ID
         new_item.linked_list_id = child_list.id
-        
+    
     db.session.add(new_item)
+    db.session.flush()
+
+    # If adding to a specific phase within a list, place it underneath that phase
+    if not is_project and phase_id and todo_list.type == 'list':
+        try:
+            phase_id_int = int(phase_id)
+        except (TypeError, ValueError):
+            phase_id_int = None
+        insert_item_in_order(todo_list, new_item, phase_id=phase_id_int)
+    else:
+        insert_item_in_order(todo_list, new_item)
+
     db.session.commit()
     return jsonify(new_item.to_dict()), 201
 

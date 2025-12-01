@@ -3,6 +3,7 @@ const listsGrid = document.getElementById('lists-grid');
 const createModal = document.getElementById('create-modal');
 const addItemModal = document.getElementById('add-item-modal');
 const bulkImportModal = document.getElementById('bulk-import-modal');
+const phaseMenu = document.getElementById('phase-menu');
 const selectedItems = new Set();
 const confirmModal = document.getElementById('confirm-modal');
 const confirmMessage = document.getElementById('confirm-message');
@@ -149,8 +150,14 @@ async function createItem(listId, listType) {
     const input = document.getElementById('item-content');
     const descriptionInput = document.getElementById('item-description');
     const notesInput = document.getElementById('item-notes');
+    const phaseSelect = document.getElementById('item-phase-select');
+    const hiddenPhase = document.getElementById('item-phase-id');
+    const modeInput = document.getElementById('item-mode');
     const content = input.value.trim();
     if (!content) return;
+
+    const isPhase = modeInput && modeInput.value === 'phase';
+    const phaseId = isPhase ? null : (phaseSelect && phaseSelect.value ? parseInt(phaseSelect.value, 10) : (hiddenPhase && hiddenPhase.value ? parseInt(hiddenPhase.value, 10) : null));
 
     try {
         const res = await fetch(`/api/lists/${listId}/items`, {
@@ -160,7 +167,9 @@ async function createItem(listId, listType) {
                 content,
                 description: descriptionInput ? descriptionInput.value.trim() : '',
                 notes: notesInput ? notesInput.value.trim() : '',
-                is_project: listType === 'hub'
+                is_project: listType === 'hub',
+                phase_id: phaseId,
+                status: isPhase ? 'phase' : 'not_started'
             })
         });
 
@@ -259,18 +268,51 @@ function closeCreateModal() {
     document.getElementById('list-title').value = '';
 }
 
-function openAddItemModal() {
+function openAddItemModal(phaseId = null, mode = 'task') {
+    if (!addItemModal) return;
     addItemModal.classList.add('active');
-    document.getElementById('item-content').focus();
+    const contentInput = document.getElementById('item-content');
+    if (contentInput) contentInput.focus();
+
+    const phaseSelect = document.getElementById('item-phase-select');
+    const hiddenPhase = document.getElementById('item-phase-id');
+    const modeInput = document.getElementById('item-mode');
+    const titleEl = document.getElementById('add-item-title');
+    const phaseSelectGroup = document.getElementById('phase-select-group');
+
+    if (modeInput) modeInput.value = mode || 'task';
+    if (titleEl) titleEl.textContent = mode === 'phase' ? 'Add Phase' : (typeof CURRENT_LIST_TYPE !== 'undefined' && CURRENT_LIST_TYPE === 'hub' ? 'Add Project' : 'Add Task');
+
+    if (hiddenPhase) hiddenPhase.value = phaseId ? String(phaseId) : '';
+    if (phaseSelect) {
+        if (phaseId) {
+            phaseSelect.value = String(phaseId);
+        } else {
+            phaseSelect.value = '';
+        }
+    }
+    if (phaseSelectGroup) phaseSelectGroup.style.display = mode === 'phase' ? 'none' : 'block';
 }
 
 function closeAddItemModal() {
+    if (!addItemModal) return;
     addItemModal.classList.remove('active');
-    document.getElementById('item-content').value = '';
+    const contentInput = document.getElementById('item-content');
+    if (contentInput) contentInput.value = '';
     const descriptionInput = document.getElementById('item-description');
     if (descriptionInput) descriptionInput.value = '';
     const notesInput = document.getElementById('item-notes');
     if (notesInput) notesInput.value = '';
+    const phaseSelect = document.getElementById('item-phase-select');
+    if (phaseSelect) phaseSelect.value = '';
+    const hiddenPhase = document.getElementById('item-phase-id');
+    if (hiddenPhase) hiddenPhase.value = '';
+    const modeInput = document.getElementById('item-mode');
+    if (modeInput) modeInput.value = 'task';
+    const titleEl = document.getElementById('add-item-title');
+    if (titleEl) titleEl.textContent = (typeof CURRENT_LIST_TYPE !== 'undefined' && CURRENT_LIST_TYPE === 'hub') ? 'Add Project' : 'Add Task';
+    const phaseSelectGroup = document.getElementById('phase-select-group');
+    if (phaseSelectGroup) phaseSelectGroup.style.display = 'block';
 }
 
 function openBulkImportModal() {
@@ -287,6 +329,16 @@ function closeBulkImportModal() {
         const textarea = document.getElementById('bulk-import-text');
         if (textarea) textarea.value = '';
     }
+}
+
+function togglePhaseMenu(event, forceHide = false) {
+    if (!phaseMenu) return;
+    if (event) event.stopPropagation();
+    if (forceHide) {
+        phaseMenu.classList.remove('show');
+        return;
+    }
+    phaseMenu.classList.toggle('show');
 }
 
 async function bulkImportItems(listId) {
@@ -665,6 +717,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target == confirmModal) closeConfirmModal();
         const editListModal = document.getElementById('edit-list-modal');
         if (event.target == editListModal) closeEditListModal();
+        if (!event.target.closest('.phase-add-dropdown') && phaseMenu && phaseMenu.classList.contains('show')) {
+            phaseMenu.classList.remove('show');
+        }
     }
 
     if (confirmYesButton) {
