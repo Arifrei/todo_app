@@ -10,6 +10,7 @@ const confirmYesButton = document.getElementById('confirm-yes-button');
 let pendingConfirm = null;
 let currentDragId = null;
 let currentDragBlock = [];
+let longPressTimer = null;
 
 // --- Dashboard Functions ---
 
@@ -216,14 +217,15 @@ async function updateItemStatus(itemId, status) {
         });
 
         if (res.ok) {
-            window.location.reload();
+            // Instead of reload, just refresh the list content
+            await refreshListView();
         }
     } catch (e) {
         console.error('Error updating item:', e);
     }
 }
 
-function inlineToggleStatus(itemId, currentStatus, targetStatus) {
+async function inlineToggleStatus(itemId, currentStatus, targetStatus) {
     const nextStatus = currentStatus === targetStatus ? 'not_started' : targetStatus;
     updateItemStatus(itemId, nextStatus);
 }
@@ -377,6 +379,12 @@ function updateBulkBar() {
         if (countSpan) countSpan.textContent = '';
     }
 
+  if (selectedItems.size === 0 && document.body.classList.contains('selection-mode-active')) {
+    document.body.classList.remove('selection-mode-active');
+  } else if (selectedItems.size > 0 && !document.body.classList.contains('selection-mode-active')) {
+    document.body.classList.add('selection-mode-active');
+  }
+
     if (selectAll) {
         selectAll.checked = totalCheckboxes > 0 && selectedItems.size === totalCheckboxes;
         selectAll.indeterminate = selectedItems.size > 0 && selectedItems.size < totalCheckboxes;
@@ -385,6 +393,7 @@ function updateBulkBar() {
 
 function cascadePhaseSelection(phaseElement, isChecked) {
     const items = Array.from(document.querySelectorAll('.task-item'));
+    // Find the index of the phase element that was clicked
     const startIdx = items.indexOf(phaseElement);
     if (startIdx === -1) return;
 
@@ -392,10 +401,13 @@ function cascadePhaseSelection(phaseElement, isChecked) {
         const el = items[i];
         if (el.classList.contains('phase')) break;
         const cb = el.querySelector('.select-item');
+        // This function is only for cascading changes, so we directly manipulate
+        // the checkbox state and the underlying selectedItems set.
         if (cb) {
             cb.checked = isChecked;
             const id = parseInt(cb.getAttribute('data-item-id'), 10);
-            toggleSelectItem(id, isChecked, true);
+            if (isChecked) selectedItems.add(id);
+            else selectedItems.delete(id);
         }
     }
 }
@@ -405,14 +417,17 @@ function toggleSelectItem(itemId, isChecked, skipPhaseCascade = false) {
     const isPhase = row && row.classList.contains('phase');
 
     if (isPhase && !skipPhaseCascade) {
+        // If a phase is clicked directly, also select/deselect its children
         cascadePhaseSelection(row, isChecked);
     }
 
+    // Add or remove the main item (or phase item) itself
     if (isChecked) {
         selectedItems.add(itemId);
     } else {
         selectedItems.delete(itemId);
     }
+
     updateBulkBar();
 }
 
@@ -422,7 +437,7 @@ function toggleSelectAll(checkbox) {
     checkboxes.forEach(cb => {
         cb.checked = checkbox.checked;
         const id = parseInt(cb.getAttribute('data-item-id'), 10);
-        toggleSelectItem(id, checkbox.checked, true); // skip phase cascade; select individually
+        if (checkbox.checked) selectedItems.add(id); else selectedItems.delete(id);
     });
     updateBulkBar();
 }
@@ -441,7 +456,8 @@ async function bulkUpdateStatus(status) {
             })
         });
         if (res.ok) {
-            window.location.reload();
+            selectedItems.clear();
+            await refreshListView();
         }
     } catch (e) {
         console.error('Error bulk updating status:', e);
@@ -560,6 +576,23 @@ async function handleDrop(e) {
     }
 }
 
+async function refreshListView() {
+    try {
+        const res = await fetch(window.location.href, {
+            headers: { 'Accept': 'text/html' }
+        });
+        const html = await res.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newContainer = doc.getElementById('items-container');
+        document.getElementById('items-container').innerHTML = newContainer.innerHTML;
+        updateBulkBar();
+        initDragAndDrop(); // Re-initialize drag and drop on new elements
+    } catch (e) {
+        console.error('Error refreshing list view:', e);
+    }
+}
+
 function initDragAndDrop() {
     const container = document.getElementById('items-container');
     if (!container) return;
@@ -573,6 +606,43 @@ function initDragAndDrop() {
     });
 }
 
+function handleTouchStart(e) {
+    const item = e.currentTarget;
+    // Don't trigger long press if dragging
+    if (e.target.closest('.drag-handle')) return;
+
+    longPressTimer = setTimeout(() => {
+        longPressTimer = null; // Prevent multiple triggers
+        const itemId = parseInt(item.dataset.itemId, 10);
+        const checkbox = item.querySelector('.select-item');
+        
+        // Enter selection mode and select the item
+        document.body.classList.add('selection-mode-active');
+        if (checkbox && !checkbox.checked) {
+            checkbox.checked = true;
+            toggleSelectItem(itemId, true);
+        }
+    }, 500); // 500ms for a long press
+}
+
+function handleTouchMove() {
+    // If user moves finger, it's a scroll, not a long press
+    clearTimeout(longPressTimer);
+}
+
+function handleTouchEnd(e) {
+    clearTimeout(longPressTimer);
+    // If we are in selection mode, a short tap should toggle selection
+    if (document.body.classList.contains('selection-mode-active')) {
+        // Prevent click event from also firing and toggling again
+        e.preventDefault();
+        const item = e.currentTarget;
+        const checkbox = item.querySelector('.select-item');
+        if (checkbox) {
+            checkbox.click(); // Programmatically click the checkbox to trigger its onchange
+        }
+    }
+}
 // --- Hub Calculation ---
 function calculateHubProgress() {
     // This is handled by the backend now and rendered in template/API
@@ -613,4 +683,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     initDragAndDrop();
+
+    // Add long-press listeners for mobile selection
+    document.querySelectorAll('.task-item').forEach(item => {
+        item.addEventListener('touchstart', handleTouchStart, { passive: true });
+        item.addEventListener('touchend', handleTouchEnd);
+        item.addEventListener('touchmove', handleTouchMove, { passive: true });
+    });
 });

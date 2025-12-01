@@ -399,6 +399,32 @@ header {
     .sidebar { display: none; }
     .content { padding: 1rem; max-width: 100%; }
     .grid { grid-template-columns: 1fr; }
+
+    /* Make list header stack vertically */
+    .list-header .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    /* Make task items stack vertically */
+    .task-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .task-actions {
+        width: 100%;
+        justify-content: flex-end; /* Align buttons to the right */
+    }
+
+    /* Make bulk action bar stack */
+    .bulk-actions {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
 }
 
 /* List View */
@@ -440,6 +466,7 @@ header {
     align-items: center;
     justify-content: space-between;
     transition: var(--transition);
+    position: relative; /* For positioning the select checkbox */
     box-shadow: 0 2px 4px rgba(0,0,0,0.02);
 }
 
@@ -450,8 +477,11 @@ header {
 .task-content {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 1rem; /* This will now correctly space the drag handle and done checkbox */
     flex: 1;
+    transition: padding-left 0.2s ease-in-out;
+    /* Create a "slot" for the checkbox, but it's hidden for now */
+    padding-left: 28px;
 }
 
 .task-checkbox {
@@ -469,8 +499,8 @@ header {
 }
 
 .task-item.phase {
-    background: #d1fae5;
-    border-color: #0f766e;
+    background: #eef2ff; /* Light indigo background */
+    border-color: #4338ca; /* Indigo border */
 }
 
 .task-item.phase .drag-handle {
@@ -479,12 +509,29 @@ header {
 }
 
 .select-item {
-    margin-right: 0.75rem;
-    width: 18px;
-    height: 18px;
+    position: absolute;
+    top: 50%;
+    left: 1.5rem;
+    width: 18px; /* Made smaller */
+    height: 18px; /* Made smaller */
     cursor: pointer;
     accent-color: #0ea5e9;
+    z-index: 2;
+    transform: translateY(-50%);
+
+    /* Hide it by default */
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.2s ease-in-out;
 }
+
+.task-item:hover .select-item,
+body.selection-mode-active .select-item,
+.select-item:checked { /* Keep it visible if checked */
+    opacity: 1;
+    pointer-events: all;
+}
+
 /* Custom Checkbox for Selection */
 .select-item {
     appearance: none;
@@ -492,8 +539,6 @@ header {
     background-color: #fff;
     border: 2px solid #d8e1eb;
     border-radius: 6px;
-    transition: all 0.15s ease-in-out;
-    position: relative;
     display: inline-block;
     vertical-align: middle;
 }
@@ -505,10 +550,10 @@ header {
 .select-item:checked::after {
     content: '';
     position: absolute;
-    left: 5px;
-    top: 1px;
-    width: 4px;
-    height: 8px;
+    left: 6px; /* Adjusted for smaller box */
+    top: 2px;  /* Adjusted for smaller box */
+    width: 3px;
+    height: 7px;
     border: solid white;
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
@@ -517,11 +562,15 @@ header {
 .drag-handle {
     cursor: grab;
     color: var(--text-muted);
-    margin-right: 0.75rem;
     font-size: 1rem;
     display: flex;
     align-items: center;
     user-select: none;
+}
+
+.task-item:not(:hover):not(.selection-mode-active) .task-content {
+    /* When checkbox is hidden, pull content left to fill the space */
+    padding-left: 0;
 }
 
 .task-item.dragging {
@@ -564,15 +613,15 @@ header {
 
 .task-item.phase .task-text {
     font-weight: 700;
-    color: #0f766e;
+    color: #3730a3; /* Darker indigo text */
 }
 
 .phase-pill {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    background: rgba(16, 185, 129, 0.16);
-    color: #0f766e;
+    background: rgba(67, 56, 202, 0.1); /* Indigo background */
+    color: #4338ca; /* Indigo text */
     border-radius: 999px;
     padding: 0.2rem 0.65rem;
     font-size: 0.8rem;
@@ -598,6 +647,7 @@ header {
     border: 1px solid #dfe8ff;
     border-radius: 12px;
     padding: 0.75rem 1rem;
+    flex-wrap: wrap;
     margin-bottom: 1rem;
     gap: 1rem;
 }

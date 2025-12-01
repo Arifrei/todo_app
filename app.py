@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from models import db, TodoList, TodoItem
+from datetime import datetime
 import os
 import re
 
@@ -90,12 +91,37 @@ def index():
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
     todo_list = TodoList.query.get_or_404(list_id)
-    
+
     # Find parent if exists (if this list is linked by an item)
     parent_item = TodoItem.query.filter_by(linked_list_id=list_id).first()
     parent_list = parent_item.list if parent_item else None
-    
-    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list)
+
+    # Custom sorting: group by phase, then sort incomplete by order_index and complete by completed_at
+    sorted_items = []
+    phase_groups = []
+    current_phase_items = []
+
+    # The relationship is already ordered by order_index
+    for item in todo_list.items:
+        if item.status == 'phase':
+            if current_phase_items:
+                phase_groups.append(current_phase_items)
+            phase_groups.append([item]) # The phase header itself
+            current_phase_items = []
+        else:
+            current_phase_items.append(item)
+    if current_phase_items:
+        phase_groups.append(current_phase_items)
+
+    for group in phase_groups:
+        if len(group) == 1 and group[0].status == 'phase':
+            sorted_items.extend(group)
+        else:
+            incomplete = sorted([i for i in group if i.status != 'done'], key=lambda x: x.order_index)
+            complete = sorted([i for i in group if i.status == 'done'], key=lambda x: x.order_index)
+            sorted_items.extend(incomplete + complete)
+
+    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list, items=sorted_items)
 
 # API Routes
 @app.route('/api/lists', methods=['GET', 'POST'])
@@ -179,6 +205,12 @@ def handle_item(item_id):
         
     if request.method == 'PUT':
         data = request.json
+        new_status = data.get('status', item.status)
+        if new_status == 'done' and item.status != 'done':
+            item.completed_at = datetime.utcnow()
+        elif new_status != 'done':
+            item.completed_at = None
+        item.status = new_status
         item.status = data.get('status', item.status)
         item.content = data.get('content', item.content)
         item.description = data.get('description', item.description)
@@ -287,4 +319,4 @@ def reorder_items(list_id):
     return jsonify({'updated': len(ordered_ids)})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)

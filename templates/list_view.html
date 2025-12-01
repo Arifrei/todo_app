@@ -75,13 +75,13 @@
 </div>
 
 <div class="task-list" id="items-container">
-    {% for item in todo_list.items %}
+    {% for item in items %}
     <div class="task-item {{ 'phase' if item.status == 'phase' else '' }} status-{{ item.status }}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
         <div class="task-content">
+            <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
             </div>
-            <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
             {% if todo_list.type == 'list' and item.status != 'phase' %}
             <div class="task-checkbox" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">
                 <i class="fa-solid fa-check"></i>
