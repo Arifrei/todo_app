@@ -1,5 +1,13 @@
-instance
+# Environments & secrets
 .env
 venv/
+
+# App data
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python cache
 __pycache__/
 *.pyc

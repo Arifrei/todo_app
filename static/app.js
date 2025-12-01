@@ -223,6 +223,11 @@ async function updateItemStatus(itemId, status) {
     }
 }
 
+function inlineToggleStatus(itemId, currentStatus, targetStatus) {
+    const nextStatus = currentStatus === targetStatus ? 'not_started' : targetStatus;
+    updateItemStatus(itemId, nextStatus);
+}
+
 function toggleStatusDropdown(itemId) {
     const menu = document.getElementById(`status-menu-${itemId}`);
     // Close all other menus
@@ -412,12 +417,14 @@ function toggleSelectItem(itemId, isChecked, skipPhaseCascade = false) {
 }
 
 function toggleSelectAll(checkbox) {
+    selectedItems.clear();
     const checkboxes = document.querySelectorAll('.select-item');
     checkboxes.forEach(cb => {
         cb.checked = checkbox.checked;
         const id = parseInt(cb.getAttribute('data-item-id'), 10);
-        toggleSelectItem(id, checkbox.checked);
+        toggleSelectItem(id, checkbox.checked, true); // skip phase cascade; select individually
     });
+    updateBulkBar();
 }
 
 async function bulkUpdateStatus(status) {

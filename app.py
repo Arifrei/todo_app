@@ -117,6 +117,10 @@ def handle_list(list_id):
     todo_list = TodoList.query.get_or_404(list_id)
     
     if request.method == 'DELETE':
+        # Delete any child lists linked from this list (for hubs)
+        for item in todo_list.items:
+            if item.linked_list:
+                db.session.delete(item.linked_list)
         db.session.delete(todo_list)
         db.session.commit()
         return '', 204

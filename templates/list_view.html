@@ -76,14 +76,14 @@
 
 <div class="task-list" id="items-container">
     {% for item in todo_list.items %}
-    <div class="task-item {{ 'done' if item.status == 'done' else '' }} {{ 'phase' if item.status == 'phase' else '' }}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
+    <div class="task-item {{ 'phase' if item.status == 'phase' else '' }} status-{{ item.status }}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
         <div class="task-content">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
             </div>
             <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
             {% if todo_list.type == 'list' and item.status != 'phase' %}
-            <div class="task-checkbox" onclick="toggleItemStatus({{ item.id }}, '{{ item.status }}')">
+            <div class="task-checkbox" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">
                 <i class="fa-solid fa-check"></i>
             </div>
             {% endif %}
@@ -129,22 +129,9 @@
             {% endif %}
 
             {% if todo_list.type == 'list' and item.status != 'phase' %}
-            <div class="status-dropdown-container">
-                <button class="btn-status {{ 'status-' + item.status }}" onclick="toggleStatusDropdown({{ item.id }})">
-                    {{ item.status.replace('_', ' ').title() }} <i class="fa-solid fa-chevron-down"
-                        style="font-size: 0.7rem; margin-left: 4px;"></i>
-                </button>
-                <div class="status-dropdown-menu" id="status-menu-{{ item.id }}">
-                    <div class="status-option" onclick="updateItemStatus({{ item.id }}, 'not_started')">
-                        <div class="status-bubble bubble-not_started"></div> Not Started
-                    </div>
-                    <div class="status-option" onclick="updateItemStatus({{ item.id }}, 'in_progress')">
-                        <div class="status-bubble bubble-in_progress"></div> In Progress
-                    </div>
-                    <div class="status-option" onclick="updateItemStatus({{ item.id }}, 'done')">
-                        <div class="status-bubble bubble-done"></div> Done
-                    </div>
-                </div>
+            <div class="status-buttons">
+                <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">In Progress</button>
+                <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
             </div>
 
             <button class="btn-icon"
