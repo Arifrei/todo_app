@@ -14,7 +14,7 @@ with app.app_context():
     db.create_all()
 
 
-def parse_outline(outline_text):
+def parse_outline(outline_text, list_type='list'):
     """Parse a pasted outline into item dicts with content/status/description/notes."""
 
     def split_fields(text):
@@ -30,6 +30,10 @@ def parse_outline(outline_text):
             description = description.strip() or None
         return main.strip(), description, notes
 
+    if list_type == 'hub':
+        return parse_hub_outline(outline_text) # This was missing the return
+
+    # --- Default parsing for simple lists ---
     items = []
     for raw_line in outline_text.splitlines():
         line = raw_line.rstrip()
@@ -83,6 +87,72 @@ def parse_outline(outline_text):
             items.append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes})
 
     return items
+
+def parse_hub_outline(outline_text):
+    """Parse a hierarchical outline for a Project Hub."""
+    projects = []
+    current_project = None
+
+    def split_fields(text):
+        notes, description, main = None, None, text
+        if ':::' in main: main, notes = main.split(':::', 1)
+        if '::' in main: main, description = main.split('::', 1)
+        return main.strip(), (description or '').strip() or None, (notes or '').strip() or None
+
+    for raw_line in outline_text.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+
+        stripped = line.strip()
+        indent_level = len(raw_line) - len(raw_line.lstrip(' '))
+
+        # Project: Top-level heading
+        if stripped.startswith('# ') and indent_level == 0:
+            body = stripped.lstrip('# ').strip()
+            project_type = 'list'
+            if body.lower().endswith('[hub]'):
+                body = body[:-5].strip()
+                project_type = 'hub'
+            title, description, notes = split_fields(body)
+            if title:
+                current_project = {
+                    'content': title, 'description': description, 'notes': notes, 'project_type': project_type, 'items': []
+                }
+                projects.append(current_project)
+            continue
+
+        if not current_project:
+            continue # Skip lines until the first project is defined
+
+        # Phase: Indented heading
+        if stripped.startswith('## '):
+            title, description, notes = split_fields(stripped.lstrip('## ').strip())
+            if title:
+                current_project['items'].append({'content': title, 'status': 'phase', 'description': description, 'notes': notes})
+            continue
+
+        # Task: Indented list item
+        checkbox_match = re.match(r"^[-*]\s*\[(?P<mark>[ xX>~])\]\s*(?P<body>.+)$", stripped)
+        if checkbox_match:
+            mark = checkbox_match.group('mark').lower()
+            body = checkbox_match.group('body').strip()
+            status = {'x': 'done', '>': 'in_progress', '~': 'in_progress', ' ': 'not_started'}.get(mark, 'not_started')
+            content, description, notes = split_fields(body)
+            if content:
+                current_project['items'].append({'content': content, 'status': status, 'description': description, 'notes': notes})
+            continue
+
+        bullet_match = re.match(r"^[-*]\s+(?P<body>.+)$", stripped)
+        if bullet_match:
+            body = bullet_match.group('body').strip()
+            content, description, notes = split_fields(body)
+            if content:
+                current_project['items'].append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes})
+            continue
+
+    return projects
+
 
 def insert_item_in_order(todo_list, new_item, phase_id=None):
     """Place a new item in the ordering, optionally directly under a phase."""
@@ -158,7 +228,11 @@ def handle_lists():
     
     # Filter out lists that are children (linked to an item)
     # We want lists where NO TodoItem has this list as its linked_list_id
-    lists = TodoList.query.outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None).all()
+    query = TodoList.query.outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None)
+    list_type = request.args.get('type')
+    if list_type:
+        query = query.filter(TodoList.type == list_type)
+    lists = query.all()
     return jsonify([l.to_dict() for l in lists])
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -190,6 +264,7 @@ def create_item(list_id):
     description = data.get('description', '')
     notes = data.get('notes', '')
     is_project = data.get('is_project', False)
+    project_type = data.get('project_type', 'list') # Default to 'list'
     phase_id = data.get('phase_id')
     status = data.get('status', 'not_started')
     if status not in ['not_started', 'in_progress', 'done', 'phase']:
@@ -208,7 +283,7 @@ def create_item(list_id):
     
     if is_project:
         # Automatically create a child list
-        child_list = TodoList(title=content, type='list')
+        child_list = TodoList(title=content, type=project_type)
         db.session.add(child_list)
         db.session.flush() # Get ID
         new_item.linked_list_id = child_list.id
@@ -261,6 +336,44 @@ def handle_item(item_id):
         db.session.commit()
         return jsonify(item.to_dict())
 
+@app.route('/api/items/<int:item_id>/move', methods=['POST'])
+def move_item(item_id):
+    item = TodoItem.query.get_or_404(item_id)
+    data = request.json or {}
+    dest_id_str = data.get('destination_id')
+
+    if not dest_id_str:
+        return jsonify({'error': 'Destination ID is required'}), 400
+
+    # --- Moving a Project to another Hub ---
+    if item.linked_list_id:
+        try:
+            dest_hub_id = int(dest_id_str)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid destination hub ID'}), 400
+        
+        dest_hub = TodoList.query.get(dest_hub_id)
+        if not dest_hub or dest_hub.type != 'hub':
+            return jsonify({'error': 'Destination is not a valid hub'}), 404
+        
+        item.list_id = dest_hub_id
+        insert_item_in_order(dest_hub, item)
+        db.session.commit()
+        return jsonify({'message': f'Moved to {dest_hub.title}'})
+
+    # --- Moving a Task to another Phase (or no phase) ---
+    else:
+        if dest_id_str == 'null':
+            phase_id = None
+        else:
+            try:
+                phase_id = int(dest_id_str)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Invalid destination phase ID'}), 400
+        
+        insert_item_in_order(item.list, item, phase_id=phase_id)
+        db.session.commit()
+        return jsonify({'message': 'Task moved successfully'})
 
 @app.route('/api/lists/<int:list_id>/bulk_import', methods=['POST'])
 def bulk_import(list_id):
@@ -271,29 +384,55 @@ def bulk_import(list_id):
     if not outline.strip():
         return jsonify({'error': 'Outline text is required'}), 400
 
-    parsed_items = parse_outline(outline)
+    parsed_items = parse_outline(outline, list_type=todo_list.type)
     created_items = []
 
-    for entry in parsed_items:
-        content = entry.get('content', '').strip()
-        status = entry.get('status', 'not_started')
-        description = entry.get('description')
-        notes = entry.get('notes')
-        if not content:
-            continue
-        new_item = TodoItem(
-            list_id=todo_list.id,
-            content=content,
-            status=status,
-            description=description,
-            notes=notes
-        )
-        db.session.add(new_item)
-        created_items.append(new_item)
+    if todo_list.type == 'hub':
+        # For hubs, parsed_items is a list of projects
+        for project_data in parsed_items:
+            # Create the main project item in the hub
+            project_item = TodoItem(
+                list_id=todo_list.id,
+                content=project_data['content'],
+                description=project_data.get('description'),
+                notes=project_data.get('notes'),
+                status='not_started'
+            )
+            # Create the child list for this project
+            child_list = TodoList(title=project_data['content'], type=project_data.get('project_type', 'list'))
+            db.session.add(child_list)
+            db.session.flush() # Get ID for child_list
+            project_item.linked_list_id = child_list.id
+            db.session.add(project_item)
+            created_items.append(project_item)
+
+            # Add phases and tasks to the child list
+            for item_data in project_data.get('items', []):
+                child_item = TodoItem(list_id=child_list.id, **item_data)
+                db.session.add(child_item)
+    else:
+        # For simple lists, parsed_items is a flat list of tasks/phases
+        for entry in parsed_items:
+            content = entry.get('content', '').strip()
+            if not content:
+                continue
+            new_item = TodoItem(
+                list_id=todo_list.id,
+                content=content,
+                status=entry.get('status', 'not_started'),
+                description=entry.get('description'),
+                notes=entry.get('notes')
+            )
+            db.session.add(new_item)
+            created_items.append(new_item)
 
     if not created_items:
         return jsonify({'error': 'No items were parsed from the outline'}), 400
 
+    db.session.commit()
+    # Re-order all items after bulk creation
+    for item in created_items:
+        insert_item_in_order(item.list, item)
     db.session.commit()
     return jsonify([item.to_dict() for item in created_items]), 201
 

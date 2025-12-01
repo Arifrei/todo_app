@@ -3,6 +3,7 @@ const listsGrid = document.getElementById('lists-grid');
 const createModal = document.getElementById('create-modal');
 const addItemModal = document.getElementById('add-item-modal');
 const bulkImportModal = document.getElementById('bulk-import-modal');
+const moveItemModal = document.getElementById('move-item-modal');
 const phaseMenu = document.getElementById('phase-menu');
 const selectedItems = new Set();
 const confirmModal = document.getElementById('confirm-modal');
@@ -151,6 +152,7 @@ async function createItem(listId, listType) {
     const descriptionInput = document.getElementById('item-description');
     const notesInput = document.getElementById('item-notes');
     const phaseSelect = document.getElementById('item-phase-select');
+    const projectTypeSelect = document.getElementById('project-type-select');
     const hiddenPhase = document.getElementById('item-phase-id');
     const modeInput = document.getElementById('item-mode');
     const content = input.value.trim();
@@ -158,6 +160,7 @@ async function createItem(listId, listType) {
 
     const isPhase = modeInput && modeInput.value === 'phase';
     const phaseId = isPhase ? null : (phaseSelect && phaseSelect.value ? parseInt(phaseSelect.value, 10) : (hiddenPhase && hiddenPhase.value ? parseInt(hiddenPhase.value, 10) : null));
+    const projectType = projectTypeSelect ? projectTypeSelect.value : 'list';
 
     try {
         const res = await fetch(`/api/lists/${listId}/items`, {
@@ -168,6 +171,7 @@ async function createItem(listId, listType) {
                 description: descriptionInput ? descriptionInput.value.trim() : '',
                 notes: notesInput ? notesInput.value.trim() : '',
                 is_project: listType === 'hub',
+                project_type: projectType, // Pass the selected type
                 phase_id: phaseId,
                 status: isPhase ? 'phase' : 'not_started'
             })
@@ -279,10 +283,23 @@ function openAddItemModal(phaseId = null, mode = 'task') {
     const modeInput = document.getElementById('item-mode');
     const titleEl = document.getElementById('add-item-title');
     const phaseSelectGroup = document.getElementById('phase-select-group');
+    const projectTypeGroup = document.getElementById('project-type-select-group');
+    const projectTypeSelect = document.getElementById('project-type-select');
 
     if (modeInput) modeInput.value = mode || 'task';
-    if (titleEl) titleEl.textContent = mode === 'phase' ? 'Add Phase' : (typeof CURRENT_LIST_TYPE !== 'undefined' && CURRENT_LIST_TYPE === 'hub' ? 'Add Project' : 'Add Task');
 
+    if (titleEl) {
+        if (mode === 'phase') titleEl.textContent = 'Add Phase';
+        else if (mode === 'project_list' || mode === 'project_hub') titleEl.textContent = 'Add Project';
+        else titleEl.textContent = 'Add Task';
+    }
+
+    if (projectTypeGroup) projectTypeGroup.style.display = (mode === 'project_list' || mode === 'project_hub') ? 'block' : 'none';
+    if (projectTypeSelect) {
+        if (mode === 'project_hub') projectTypeSelect.value = 'hub';
+        else projectTypeSelect.value = 'list';
+    }
+    
     if (hiddenPhase) hiddenPhase.value = phaseId ? String(phaseId) : '';
     if (phaseSelect) {
         if (phaseId) {
@@ -309,8 +326,12 @@ function closeAddItemModal() {
     if (hiddenPhase) hiddenPhase.value = '';
     const modeInput = document.getElementById('item-mode');
     if (modeInput) modeInput.value = 'task';
+    const projectTypeGroup = document.getElementById('project-type-select-group');
+    if (projectTypeGroup) projectTypeGroup.style.display = 'none';
+
     const titleEl = document.getElementById('add-item-title');
     if (titleEl) titleEl.textContent = (typeof CURRENT_LIST_TYPE !== 'undefined' && CURRENT_LIST_TYPE === 'hub') ? 'Add Project' : 'Add Task';
+    
     const phaseSelectGroup = document.getElementById('phase-select-group');
     if (phaseSelectGroup) phaseSelectGroup.style.display = 'block';
 }
@@ -332,13 +353,15 @@ function closeBulkImportModal() {
 }
 
 function togglePhaseMenu(event, forceHide = false) {
-    if (!phaseMenu) return;
+    const menu = document.getElementById('phase-menu-main');
+    if (!menu) return;
     if (event) event.stopPropagation();
+    
     if (forceHide) {
-        phaseMenu.classList.remove('show');
+        menu.classList.remove('show');
         return;
     }
-    phaseMenu.classList.toggle('show');
+    menu.classList.toggle('show');
 }
 
 async function bulkImportItems(listId) {
@@ -362,6 +385,96 @@ async function bulkImportItems(listId) {
         }
     } catch (e) {
         console.error('Error importing outline:', e);
+    }
+}
+
+async function openMoveModal(itemId, itemType, itemName) {
+    if (!moveItemModal) return;
+
+    document.getElementById('move-item-id').value = itemId;
+    document.getElementById('move-item-title').textContent = `Move "${itemName}"`;
+    const select = document.getElementById('move-destination-select');
+    const label = document.getElementById('move-destination-label');
+    select.innerHTML = '<option>Loading...</option>';
+    moveItemModal.classList.add('active');
+
+    if (itemType === 'task') {
+        label.textContent = 'Move to Phase';
+        // Fetch phases for the current list
+        const res = await fetch(`/api/lists/${CURRENT_LIST_ID}`);
+        const list = await res.json();
+        const phases = list.items.filter(i => i.status === 'phase');
+        label.textContent = 'Move to...';
+        // Fetch all possible destinations (other lists, hubs, and their phases)
+        const res = await fetch(`/api/move-destinations/${CURRENT_LIST_ID}`);
+        const destinations = await res.json();
+        
+        let options = '<option value="null">No Phase</option>';
+        phases.forEach(phase => {
+            options += `<option value="${phase.id}">${phase.content}</option>`;
+        let options = '<option value="">Select a destination...</option>';
+        destinations.forEach(dest => {
+            const typeLabel = dest.type === 'hub' ? 'Hub' : 'Project';
+            options += `<optgroup label="${typeLabel}: ${dest.title}">`;
+            // Option to move to the list/hub directly (no phase)
+            options += `<option value="${dest.type}_${dest.id}_phase_null">Move to ${dest.title}</option>`;
+            // Options for each phase within the list
+            if (dest.phases) {
+                dest.phases.forEach(phase => {
+                    options += `<option value="${dest.type}_${dest.id}_phase_${phase.id}">Phase: ${phase.content}</option>`;
+                });
+            }
+            options += `</optgroup>`;
+        });
+        select.innerHTML = options;
+
+    } else if (itemType === 'project') {
+        label.textContent = 'Move to Hub';
+        // Fetch all available hubs, excluding the current one
+        const res = await fetch('/api/lists?type=hub');
+        const hubs = await res.json();
+        
+        let options = '';
+        hubs.filter(hub => hub.id !== CURRENT_LIST_ID).forEach(hub => {
+            options += `<option value="${hub.id}">${hub.title}</option>`;
+        });
+        if (!options) {
+            options = '<option value="">No other hubs available</option>';
+        }
+        select.innerHTML = options;
+    }
+}
+
+function closeMoveModal() {
+    if (moveItemModal) moveItemModal.classList.remove('active');
+}
+
+async function moveItem() {
+    const itemId = document.getElementById('move-item-id').value;
+    const destinationId = document.getElementById('move-destination-select').value;
+
+    if (!itemId || !destinationId) {
+        alert('Please select a destination.');
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/items/${itemId}/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ destination_id: destinationId })
+        });
+
+        if (res.ok) {
+            closeMoveModal();
+            window.location.reload();
+        } else {
+            const err = await res.json();
+            alert(`Error: ${err.error || 'Could not move item.'}`);
+        }
+    } catch (e) {
+        console.error('Error moving item:', e);
+        alert('An unexpected error occurred.');
     }
 }
 
@@ -712,13 +825,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target == createModal) closeCreateModal();
         if (event.target == addItemModal) closeAddItemModal();
         if (event.target == bulkImportModal) closeBulkImportModal();
+        if (event.target == moveItemModal) closeMoveModal();
         const editModal = document.getElementById('edit-item-modal');
         if (event.target == editModal) closeEditItemModal();
         if (event.target == confirmModal) closeConfirmModal();
         const editListModal = document.getElementById('edit-list-modal');
         if (event.target == editListModal) closeEditListModal();
-        if (!event.target.closest('.phase-add-dropdown') && phaseMenu && phaseMenu.classList.contains('show')) {
-            phaseMenu.classList.remove('show');
+
+        const mainMenu = document.getElementById('phase-menu-main');
+        if (!event.target.closest('.phase-add-dropdown')) {
+            if (mainMenu) mainMenu.classList.remove('show');
         }
     }
 
