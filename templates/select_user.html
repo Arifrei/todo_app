@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select User - TaskFlow</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='2') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+    <style>
+        .user-select-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .user-select-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 3rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 100%;
+        }
+
+        .user-select-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .user-select-header i {
+            font-size: 3rem;
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+        }
+
+        .user-select-header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-color);
+            margin: 0 0 0.5rem 0;
+        }
+
+        .user-select-header p {
+            color: var(--text-muted);
+            margin: 0;
+        }
+
+        .user-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+        }
+
+        .user-card {
+            background: rgba(99, 102, 241, 0.05);
+            border: 2px solid rgba(99, 102, 241, 0.2);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-card:hover {
+            background: rgba(99, 102, 241, 0.1);
+            border-color: var(--primary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+        }
+
+        .user-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .user-info {
+            flex: 1;
+        }
+
+        .user-name {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--text-color);
+            margin: 0;
+        }
+
+        .user-id {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .divider {
+            display: flex;
+            align-items: center;
+            text-align: center;
+            margin: 1.5rem 0;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: '';
+            flex: 1;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .divider span {
+            padding: 0 1rem;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .new-user-form {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .new-user-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-family: 'Outfit', sans-serif;
+            transition: border-color 0.2s;
+        }
+
+        .new-user-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        .btn-create {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-create:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        }
+
+        .error-message {
+            color: #c00;
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="gradient-bg"></div>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+
+    <div class="user-select-container">
+        <div class="user-select-card">
+            <div class="user-select-header">
+                <i class="fa-solid fa-layer-group"></i>
+                <h1>TaskFlow</h1>
+                <p>Select or create a user to continue</p>
+            </div>
+
+            <div class="user-list">
+                {% for user in users %}
+                <div class="user-card" onclick="selectUser({{ user.id }}, '{{ user.username }}')">
+                    <div class="user-icon">
+                        {{ user.username[0].upper() }}
+                    </div>
+                    <div class="user-info">
+                        <div class="user-name">{{ user.username }}</div>
+                        <div class="user-id">User #{{ user.id }}</div>
+                    </div>
+                    <i class="fa-solid fa-chevron-right" style="color: var(--text-muted);"></i>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="divider">
+                <span>or create a new user</span>
+            </div>
+
+            <div class="new-user-form">
+                <input type="text" id="new-username" class="new-user-input" placeholder="Enter username"
+                       onkeypress="if(event.key==='Enter') createUser()">
+                <button class="btn-create" onclick="createUser()">
+                    <i class="fa-solid fa-plus"></i> Create
+                </button>
+            </div>
+            <div class="error-message" id="error-message"></div>
+        </div>
+    </div>
+
+    <script>
+        function selectUser(userId, username) {
+            fetch(`/api/set-user/${userId}`, { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.href = '/';
+                    }
+                })
+                .catch(err => {
+                    console.error('Error selecting user:', err);
+                });
+        }
+
+        function createUser() {
+            const input = document.getElementById('new-username');
+            const username = input.value.trim();
+            const errorMsg = document.getElementById('error-message');
+
+            if (!username) {
+                errorMsg.textContent = 'Username is required';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            fetch('/api/create-user', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.href = '/';
+                } else if (data.error) {
+                    errorMsg.textContent = data.error;
+                    errorMsg.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                console.error('Error creating user:', err);
+                errorMsg.textContent = 'An error occurred';
+                errorMsg.style.display = 'block';
+            });
+        }
+    </script>
+</body>
+</html>

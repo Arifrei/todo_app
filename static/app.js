@@ -455,7 +455,7 @@ async function openMoveModal(itemId, itemType, itemName) {
     } else if (itemType === 'project') {
         label.textContent = 'Move to Hub';
         // Fetch all available hubs, excluding the current one
-        const res = await fetch('/api/lists?type=hub');
+        const res = await fetch('/api/lists?type=hub&include_children=true');
         const hubs = await res.json();
         
         let options = '';

@@ -52,6 +52,9 @@
 <div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center;">
     <h2>{{ 'Projects' if todo_list.type == 'hub' else 'Tasks' }}</h2>
     <div style="display: flex; gap: 0.5rem;">
+        <a class="btn btn-secondary" href="/api/lists/{{ todo_list.id }}/export" download>
+            <i class="fa-solid fa-download"></i> Export
+        </a>
         <button class="btn" onclick="openBulkImportModal()">
             <i class="fa-solid fa-list-check"></i> Bulk Import
         </button>

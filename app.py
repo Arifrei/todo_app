@@ -1,5 +1,5 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
-from models import db, TodoList, TodoItem
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from models import db, User, TodoList, TodoItem
 from datetime import datetime
 import os
 import re
@@ -7,8 +7,17 @@ import re
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
 
 db.init_app(app)
+
+def get_current_user():
+    """Get current user from session, or None if not set"""
+    user_id = session.get('user_id')
+    if user_id:
+        return User.query.get(user_id)
+    return None
 
 with app.app_context():
     db.create_all()
@@ -153,6 +162,58 @@ def parse_hub_outline(outline_text):
 
     return projects
 
+# --- Export Helpers ---
+
+def _format_metadata(content, description=None, notes=None):
+    """Append :: description and ::: notes to a content string when present."""
+    text = (content or '').strip()
+    if description:
+        text += f" :: {description.strip()}"
+    if notes:
+        text += f" ::: {notes.strip()}"
+    return text
+
+def _status_mark(status):
+    """Map item status to checkbox mark for export."""
+    return {
+        'done': 'x',
+        'in_progress': '>',
+    }.get(status, ' ')
+
+def export_list_outline(todo_list, indent=0):
+    """Export a TodoList (hub or list) to outline lines using import-compatible syntax."""
+    prefix = ' ' * indent
+    lines = []
+    ordered_items = sorted(todo_list.items, key=lambda i: i.order_index or 0)
+
+    if todo_list.type == 'list':
+        for item in ordered_items:
+            if item.is_phase:
+                lines.append(f"{prefix}## {_format_metadata(item.content, item.description, item.notes)}")
+                continue
+            line_prefix = prefix + ('  ' if item.phase_id else '')
+            lines.append(f"{line_prefix}- [{_status_mark(item.status)}] {_format_metadata(item.content, item.description, item.notes)}")
+        return lines
+
+    # Hub: export each project (linked list) and its children
+    for item in ordered_items:
+        if item.linked_list:
+            child_list = item.linked_list
+            title = item.content + (' [hub]' if child_list.type == 'hub' else '')
+            lines.append(f"{prefix}# {_format_metadata(title, item.description, item.notes)}")
+            lines.extend(export_list_outline(child_list, indent + 2))
+        else:
+            # Fallback: export plain items at hub level as tasks
+            lines.append(f"{prefix}- [{_status_mark(item.status)}] {_format_metadata(item.content, item.description, item.notes)}")
+    return lines
+
+def _slugify_filename(value):
+    """Create a simple, safe filename slug."""
+    value = (value or '').strip().lower()
+    value = re.sub(r'[^a-z0-9]+', '-', value)
+    value = re.sub(r'-{2,}', '-', value).strip('-')
+    return value or 'list'
+
 
 def insert_item_in_order(todo_list, new_item, phase_id=None):
     """Place a new item in the ordering, optionally directly under a phase."""
@@ -183,13 +244,66 @@ def reindex_list(todo_list):
     for idx, item in enumerate(ordered, start=1):
         item.order_index = idx
 
+# User Selection Routes
+@app.route('/select-user')
+def select_user():
+    """Show user selection page"""
+    users = User.query.all()
+    return render_template('select_user.html', users=users)
+
+@app.route('/api/set-user/<int:user_id>', methods=['POST'])
+def set_user(user_id):
+    """Set the current user in session"""
+    user = User.query.get_or_404(user_id)
+    session['user_id'] = user.id
+    session.permanent = True  # Make session persistent across browser restarts
+    return jsonify({'success': True, 'username': user.username})
+
+@app.route('/api/create-user', methods=['POST'])
+def create_user():
+    """Create a new user (simplified - no password)"""
+    data = request.json
+    username = data.get('username', '').strip()
+
+    if not username:
+        return jsonify({'error': 'Username is required'}), 400
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': 'Username already exists'}), 400
+
+    # Create user with a dummy password (not used anymore)
+    user = User(username=username, email=None)
+    user.set_password('dummy')
+    db.session.add(user)
+    db.session.commit()
+
+    # Automatically set as current user
+    session['user_id'] = user.id
+    session.permanent = True
+
+    return jsonify({'success': True, 'user_id': user.id, 'username': user.username})
+
+@app.route('/api/current-user')
+def current_user_info():
+    """Get current user info"""
+    user = get_current_user()
+    if user:
+        return jsonify({'user_id': user.id, 'username': user.username})
+    return jsonify({'user_id': None, 'username': None})
+
 @app.route('/')
 def index():
+    # If no user selected, redirect to user selection
+    if not get_current_user():
+        return redirect(url_for('select_user'))
     return render_template('index.html')
 
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
-    todo_list = TodoList.query.get_or_404(list_id)
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('select_user'))
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
 
     # Find parent if exists (if this list is linked by an item)
     parent_item = TodoItem.query.filter_by(linked_list_id=list_id).first()
@@ -233,16 +347,23 @@ def list_view(list_id):
 # API Routes
 @app.route('/api/lists', methods=['GET', 'POST'])
 def handle_lists():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
     if request.method == 'POST':
         data = request.json
-        new_list = TodoList(title=data['title'], type=data.get('type', 'list'))
+        new_list = TodoList(title=data['title'], type=data.get('type', 'list'), user_id=user.id)
         db.session.add(new_list)
         db.session.commit()
         return jsonify(new_list.to_dict()), 201
-    
+
     # Filter out lists that are children (linked to an item)
     # We want lists where NO TodoItem has this list as its linked_list_id
-    query = TodoList.query.outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None)
+    include_children = (request.args.get('include_children', 'false').lower() in ['1', 'true', 'yes', 'on'])
+    query = TodoList.query.filter_by(user_id=user.id)
+    if not include_children:
+        query = query.outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None)
     list_type = request.args.get('type')
     if list_type:
         query = query.filter(TodoList.type == list_type)
@@ -251,7 +372,10 @@ def handle_lists():
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_list(list_id):
-    todo_list = TodoList.query.get_or_404(list_id)
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
     
     if request.method == 'DELETE':
         # Delete any child lists linked from this list (for hubs)
@@ -272,7 +396,10 @@ def handle_list(list_id):
 
 @app.route('/api/lists/<int:list_id>/items', methods=['POST'])
 def create_item(list_id):
-    todo_list = TodoList.query.get_or_404(list_id)
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
     data = request.json
     content = data['content']
     description = data.get('description', '')
@@ -302,7 +429,7 @@ def create_item(list_id):
     
     if is_project:
         # Automatically create a child list
-        child_list = TodoList(title=content, type=project_type)
+        child_list = TodoList(title=content, type=project_type, user_id=user.id)
         db.session.add(child_list)
         db.session.flush() # Get ID
         new_item.linked_list_id = child_list.id
@@ -330,7 +457,14 @@ def create_item(list_id):
 
 @app.route('/api/items/<int:item_id>', methods=['PUT', 'DELETE'])
 def handle_item(item_id):
-    item = TodoItem.query.get_or_404(item_id)
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    # Verify the item belongs to a list owned by the current user
+    item = TodoItem.query.select_from(TodoItem).join(TodoList, TodoItem.list_id == TodoList.id).filter(
+        TodoItem.id == item_id,
+        TodoList.user_id == user.id
+    ).first_or_404()
     
     if request.method == 'DELETE':
         # If it has a linked list, should we delete it? 
@@ -369,7 +503,14 @@ def handle_item(item_id):
 
 @app.route('/api/items/<int:item_id>/move', methods=['POST'])
 def move_item(item_id):
-    item = TodoItem.query.get_or_404(item_id)
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    # Verify the item belongs to a list owned by the current user
+    item = TodoItem.query.select_from(TodoItem).join(TodoList, TodoItem.list_id == TodoList.id).filter(
+        TodoItem.id == item_id,
+        TodoList.user_id == user.id
+    ).first_or_404()
     data = request.json or {}
     dest_hub_id = data.get('destination_hub_id')
     dest_list_id = data.get('destination_list_id')
@@ -388,8 +529,8 @@ def move_item(item_id):
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid destination hub ID'}), 400
 
-        dest_hub = TodoList.query.get(dest_hub_id)
-        if not dest_hub or dest_hub.type != 'hub':
+        dest_hub = TodoList.query.filter_by(id=dest_hub_id, user_id=user.id, type='hub').first()
+        if not dest_hub:
             return jsonify({'error': 'Destination is not a valid hub'}), 404
 
         item.list_id = dest_hub_id
@@ -407,8 +548,8 @@ def move_item(item_id):
     except (ValueError, TypeError):
         return jsonify({'error': 'Invalid destination list ID'}), 400
 
-    dest_list = TodoList.query.get(dest_list_id)
-    if not dest_list or dest_list.type != 'list':
+    dest_list = TodoList.query.filter_by(id=dest_list_id, user_id=user.id, type='list').first()
+    if not dest_list:
         return jsonify({'error': 'Destination is not a valid project list'}), 404
 
     # Validate destination phase (optional)
@@ -443,7 +584,10 @@ def move_item(item_id):
 @app.route('/api/move-destinations/<int:list_id>', methods=['GET'])
 def move_destinations(list_id):
     """Return possible destinations for moving tasks (all project lists with their phases)."""
-    project_lists = TodoList.query.filter_by(type='list').all()
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    project_lists = TodoList.query.filter_by(user_id=user.id, type='list').all()
     payload = []
     for l in project_lists:
         payload.append({
@@ -453,9 +597,28 @@ def move_destinations(list_id):
         })
     return jsonify(payload)
 
+@app.route('/api/lists/<int:list_id>/export', methods=['GET'])
+def export_list(list_id):
+    """Export a list or hub (with nested hubs) as plain text outline."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
+
+    lines = export_list_outline(todo_list)
+    content = '\n'.join(lines)
+    filename = f"{_slugify_filename(todo_list.title)}-{list_id}.txt"
+
+    response = app.response_class(content, mimetype='text/plain; charset=utf-8')
+    response.headers['Content-Disposition'] = f'attachment; filename=\"{filename}\"'
+    return response
+
 @app.route('/api/lists/<int:list_id>/bulk_import', methods=['POST'])
 def bulk_import(list_id):
-    todo_list = TodoList.query.get_or_404(list_id)
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
     data = request.json or {}
     outline = data.get('outline', '')
 
@@ -477,7 +640,7 @@ def bulk_import(list_id):
                 status='not_started'
             )
             # Create the child list for this project
-            child_list = TodoList(title=project_data['content'], type=project_data.get('project_type', 'list'))
+            child_list = TodoList(title=project_data['content'], type=project_data.get('project_type', 'list'), user_id=user.id)
             db.session.add(child_list)
             db.session.flush() # Get ID for child_list
             project_item.linked_list_id = child_list.id
@@ -517,6 +680,10 @@ def bulk_import(list_id):
 
 @app.route('/api/items/bulk', methods=['POST'])
 def bulk_items():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
     data = request.json or {}
     ids = data.get('ids') or []
     action = data.get('action')
@@ -527,7 +694,11 @@ def bulk_items():
     if action not in ['status', 'delete']:
         return jsonify({'error': 'action must be status or delete'}), 400
 
-    items = TodoItem.query.filter(TodoItem.id.in_(ids)).all()
+    # Filter items by user ownership
+    items = TodoItem.query.select_from(TodoItem).join(TodoList, TodoItem.list_id == TodoList.id).filter(
+        TodoItem.id.in_(ids),
+        TodoList.user_id == user.id
+    ).all()
 
     if list_id is not None:
         items = [i for i in items if i.list_id == list_id]
@@ -569,7 +740,10 @@ def bulk_items():
 
 @app.route('/api/lists/<int:list_id>/reorder', methods=['POST'])
 def reorder_items(list_id):
-    todo_list = TodoList.query.get_or_404(list_id)
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
     data = request.json or {}
     ordered_ids = data.get('ids', [])
     if not isinstance(ordered_ids, list) or not ordered_ids:

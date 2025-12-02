@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python migrate.py:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(dir:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []

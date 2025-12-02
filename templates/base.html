@@ -29,6 +29,23 @@
                 <li><a href="/" class="active"><i class="fa-solid fa-house"></i> Dashboard</a></li>
                 <!-- We could add more links here later -->
             </ul>
+            <div style="margin-top: auto; padding: 1rem;">
+                <div id="current-user-display" style="padding: 0.75rem; background: rgba(99, 102, 241, 0.1); border-radius: 10px; margin-bottom: 0.5rem;">
+                    <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem;">Current User</div>
+                    <div style="font-weight: 600; color: var(--text-color);" id="current-username">Loading...</div>
+                </div>
+                <a href="{{ url_for('select_user') }}" style="display: block; padding: 0.75rem; text-align: center; background: rgba(255, 255, 255, 0.5); border-radius: 10px; text-decoration: none; color: var(--text-color); font-weight: 500; transition: background 0.2s;">
+                    <i class="fa-solid fa-user-group"></i> Switch User
+                </a>
+            </div>
+            <script>
+                // Load current user
+                fetch('/api/current-user')
+                    .then(r => r.json())
+                    .then(data => {
+                        document.getElementById('current-username').textContent = data.username || 'None';
+                    });
+            </script>
         </nav>
 
         <main class="content">
