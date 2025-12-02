@@ -65,12 +65,48 @@ class TodoItem(db.Model):
     content = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
-    status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done'
+    status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done', 'phase'
     order_index = db.Column(db.Integer, default=0)  # For manual ordering
-    
+    is_phase = db.Column(db.Boolean, default=False)  # Track if this is a phase header
+
     # If this item represents a child project, this links to that list
     linked_list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=True)
     linked_list = db.relationship('TodoList', foreign_keys=[linked_list_id], post_update=True)
+
+    # If this task belongs to a phase, track it here
+    phase_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
+    phase = db.relationship('TodoItem', remote_side=[id], backref='phase_tasks', foreign_keys=[phase_id])
+
+    def get_phase_progress(self):
+        """Calculate completion percentage for a phase based on its tasks"""
+        if not self.is_phase:
+            return 0
+
+        tasks = [task for task in self.phase_tasks if not task.is_phase]
+        if not tasks:
+            return 0
+
+        done_tasks = sum(1 for task in tasks if task.status == 'done')
+        return int((done_tasks / len(tasks)) * 100)
+
+    def update_phase_status(self):
+        """Automatically update phase status based on child tasks"""
+        if not self.is_phase:
+            return
+
+        tasks = [task for task in self.phase_tasks if not task.is_phase]
+        if not tasks:
+            return
+
+        all_done = all(task.status == 'done' for task in tasks)
+        any_in_progress = any(task.status == 'in_progress' for task in tasks)
+
+        if all_done:
+            self.status = 'done'
+        elif any_in_progress:
+            self.status = 'in_progress'
+        else:
+            self.status = 'not_started'
 
     def to_dict(self):
         data = {

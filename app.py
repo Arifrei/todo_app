@@ -161,7 +161,7 @@ def insert_item_in_order(todo_list, new_item, phase_id=None):
         ordered.append(new_item)
 
     if phase_id:
-        phase = next((i for i in ordered if i.id == phase_id and i.status == 'phase'), None)
+        phase = next((i for i in ordered if i.id == phase_id and i.is_phase), None)
         if phase:
             try:
                 phase_idx = ordered.index(phase)
@@ -199,21 +199,29 @@ def list_view(list_id):
     sorted_items = []
     phase_groups = []
     current_phase_items = []
+    current_phase = None
 
     # The relationship is already ordered by order_index
     for item in todo_list.items:
-        if item.status == 'phase':
+        if item.is_phase:
             if current_phase_items:
                 phase_groups.append(current_phase_items)
             phase_groups.append([item]) # The phase header itself
+            current_phase = item
             current_phase_items = []
         else:
+            # Backfill phase_id if not set
+            if current_phase and not item.phase_id:
+                item.phase_id = current_phase.id
             current_phase_items.append(item)
     if current_phase_items:
         phase_groups.append(current_phase_items)
 
+    # Commit any backfilled phase_id values
+    db.session.commit()
+
     for group in phase_groups:
-        if len(group) == 1 and group[0].status == 'phase':
+        if len(group) == 1 and group[0].is_phase:
             sorted_items.extend(group)
         else:
             incomplete = sorted([i for i in group if i.status != 'done'], key=lambda x: x.order_index)
@@ -273,8 +281,11 @@ def create_item(list_id):
     project_type = data.get('project_type', 'list') # Default to 'list'
     phase_id = data.get('phase_id')
     status = data.get('status', 'not_started')
+    is_phase_item = (status == 'phase')
     if status not in ['not_started', 'in_progress', 'done', 'phase']:
         status = 'not_started'
+    if status == 'phase':
+        status = 'not_started'  # Phases start as not_started
     if is_project:
         status = 'not_started'
     next_order = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=list_id).scalar() + 1
@@ -284,7 +295,9 @@ def create_item(list_id):
         description=description,
         notes=notes,
         status=status,
-        order_index=next_order
+        order_index=next_order,
+        phase_id=int(phase_id) if phase_id else None,
+        is_phase=is_phase_item
     )
     
     if is_project:
@@ -304,6 +317,11 @@ def create_item(list_id):
         except (TypeError, ValueError):
             phase_id_int = None
         insert_item_in_order(todo_list, new_item, phase_id=phase_id_int)
+        # Update the phase status (mark as incomplete if it was done)
+        if phase_id_int:
+            phase_item = TodoItem.query.get(phase_id_int)
+            if phase_item:
+                phase_item.update_phase_status()
     else:
         insert_item_in_order(todo_list, new_item)
 
@@ -329,16 +347,23 @@ def handle_item(item_id):
         
     if request.method == 'PUT':
         data = request.json
+        old_status = item.status
         new_status = data.get('status', item.status)
         if new_status == 'done' and item.status != 'done':
             item.completed_at = datetime.utcnow()
         elif new_status != 'done':
             item.completed_at = None
         item.status = new_status
-        item.status = data.get('status', item.status)
         item.content = data.get('content', item.content)
         item.description = data.get('description', item.description)
         item.notes = data.get('notes', item.notes)
+
+        # If this task's status changed and it belongs to a phase, update phase status
+        if old_status != new_status and item.phase_id:
+            phase_item = TodoItem.query.get(item.phase_id)
+            if phase_item:
+                phase_item.update_phase_status()
+
         db.session.commit()
         return jsonify(item.to_dict())
 
@@ -351,7 +376,7 @@ def move_item(item_id):
     dest_phase_id = data.get('destination_phase_id')
 
     # Prevent moving phase headers for now
-    if item.status == 'phase':
+    if item.is_phase:
         return jsonify({'error': 'Cannot move a phase header.'}), 400
 
     # --- Moving a Project to another Hub ---
@@ -424,7 +449,7 @@ def move_destinations(list_id):
         payload.append({
             'id': l.id,
             'title': l.title,
-            'phases': [{'id': i.id, 'content': i.content} for i in l.items if i.status == 'phase']
+            'phases': [{'id': i.id, 'content': i.content} for i in l.items if i.is_phase]
         })
     return jsonify(payload)
 
@@ -514,11 +539,22 @@ def bulk_items():
         status = data.get('status')
         if status not in ['not_started', 'in_progress', 'done', 'phase']:
             return jsonify({'error': 'invalid status'}), 400
+
+        affected_phases = set()
         for item in items:
             # Avoid changing phases to task statuses inadvertently
-            if item.status == 'phase' and status != 'phase':
+            if item.is_phase:
                 continue
             item.status = status
+            if item.phase_id:
+                affected_phases.add(item.phase_id)
+
+        # Update all affected phase statuses
+        for phase_id in affected_phases:
+            phase_item = TodoItem.query.get(phase_id)
+            if phase_item:
+                phase_item.update_phase_status()
+
         db.session.commit()
         return jsonify({'updated': len(items)})
 

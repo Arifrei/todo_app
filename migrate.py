@@ -49,6 +49,18 @@ def add_order_index(cur):
     print("[update] backfilled order_index per list")
 
 
+def add_phase_id(cur):
+    add_column(cur, "todo_item", "phase_id", "INTEGER")
+    print("[add] phase_id column added")
+
+
+def add_is_phase(cur):
+    add_column(cur, "todo_item", "is_phase", "BOOLEAN DEFAULT 0")
+    # Backfill: mark items with status='phase' as is_phase=True
+    cur.execute("UPDATE todo_item SET is_phase=1 WHERE status='phase'")
+    print("[update] backfilled is_phase for existing phase items")
+
+
 def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -56,6 +68,8 @@ def main():
         add_description_and_notes(cur)
         normalize_status(cur)
         add_order_index(cur)
+        add_phase_id(cur)
+        add_is_phase(cur)
         conn.commit()
         print("Migration complete.")
     finally:

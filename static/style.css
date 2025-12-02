@@ -514,13 +514,13 @@ header p {
 .task-list {
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
+    gap: 0.5rem;
 }
 
 .task-item {
     background: var(--white);
     border: 2px solid var(--border-color);
-    padding: 1.5rem 2rem;
+    padding: 1.5rem 1rem 1.5rem 0.25rem;
     border-radius: 14px;
     display: flex;
     align-items: center;
@@ -538,14 +538,39 @@ header p {
 }
 
 .task-item.phase {
-    background: linear-gradient(135deg, var(--indigo-light) 0%, var(--secondary-light) 100%);
-    border-color: var(--indigo);
-    border-width: 2px;
+    background: linear-gradient(135deg, var(--indigo-light) 0%, var(--secondary-light) 100%) !important;
+    border-color: var(--indigo) !important;
+    border-width: 3px !important;
+    border-left-width: 6px !important;
     box-shadow: 0 4px 16px -4px rgba(99, 102, 241, 0.2);
+    padding: 1.75rem 1rem 1.75rem 0.25rem;
+    font-size: 1.1rem;
 }
 
 .task-item.phase:hover {
     box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.3);
+}
+
+/* Phase in progress */
+.task-item.phase.status-in_progress {
+    background: linear-gradient(135deg, var(--warning-light) 0%, var(--indigo-light) 100%) !important;
+    border-color: var(--warning-color) !important;
+}
+
+/* Indent tasks that are under a phase */
+.task-item.under-phase {
+    margin-left: 3rem;
+    position: relative;
+}
+
+.task-item.under-phase::before {
+    content: '';
+    position: absolute;
+    left: -1.5rem;
+    top: 50%;
+    width: 0.75rem;
+    height: 2px;
+    background: var(--border-color);
 }
 
 .task-item.status-not_started {
@@ -578,6 +603,11 @@ header p {
     color: var(--text-muted);
 }
 
+/* Override strikethrough for phases */
+.task-item.phase.status-done .task-text {
+    text-decoration: none !important;
+}
+
 .item-is-hub {
     background: linear-gradient(135deg, var(--accent-light) 0%, var(--teal-light) 100%);
     border-color: var(--accent-color);
@@ -591,18 +621,27 @@ header p {
 .task-content {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.25rem;
     flex: 1;
     min-width: 0; /* Allows flex items to shrink */
     position: relative;
 }
 
-/* Checkbox Selection Styling - Positioned absolutely to not take space */
+/* Add space between drag handle and task body */
+.task-content .drag-handle {
+    margin-right: 0.5rem;
+}
+
+/* When checkbox appears, shift content to the right */
+.task-item:hover .task-content,
+body.selection-mode-active .task-content,
+.task-item:has(.select-item:checked) .task-content {
+    margin-left: 0.5rem;
+}
+
+/* Checkbox Selection Styling */
 .select-item {
-    position: absolute;
-    left: -2.5rem;
-    top: 50%;
-    transform: translateY(-50%);
+    position: relative;
     width: 22px;
     height: 22px;
     cursor: pointer;
@@ -689,12 +728,45 @@ body.selection-mode-active .select-item,
 }
 
 .task-item.phase .task-text {
-    font-weight: 700;
-    font-size: 1.2rem;
+    font-weight: 800;
+    font-size: 1.3rem;
     background: linear-gradient(135deg, var(--indigo), var(--secondary-color));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    letter-spacing: 0.5px;
+}
+
+/* Phase with done status - keep it looking like a phase but with celebration colors */
+.task-item.phase.status-done {
+    background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%) !important;
+    border-color: var(--accent-color) !important;
+    border-width: 3px !important;
+    border-left-width: 6px !important;
+    box-shadow: 0 4px 16px -4px rgba(16, 185, 129, 0.4) !important;
+}
+
+.task-item.phase.status-done:hover {
+    box-shadow: 0 8px 24px -4px rgba(16, 185, 129, 0.5) !important;
+}
+
+.task-item.phase.status-done .task-text {
+    background: linear-gradient(135deg, #059669, #10b981) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+    color: transparent !important;
+}
+
+/* Add large checkmark before completed phase */
+.task-item.phase.status-done .task-text::before {
+    content: '✓ ';
+    font-size: 1.8rem;
+    color: var(--accent-color);
+    font-weight: 900;
+    background: none;
+    -webkit-text-fill-color: var(--accent-color);
+    text-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
 }
 
 .task-description {
@@ -1281,6 +1353,16 @@ textarea.form-control {
 
     .drag-handle {
         opacity: 1;
+    }
+
+    /* Reduce indentation on mobile */
+    .task-item.under-phase {
+        margin-left: 1.5rem;
+    }
+
+    .task-item.under-phase::before {
+        left: -0.75rem;
+        width: 0.5rem;
     }
 }
 

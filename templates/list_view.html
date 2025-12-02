@@ -107,7 +107,7 @@
 
 <div class="task-list" id="items-container">
     {% for item in items %}
-    <div class="task-item {{ 'phase' if item.status == 'phase' else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
+    <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if item.phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
         <div class="task-content">
             <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
@@ -121,7 +121,7 @@
                     <div class="hub-pill">Hub</div>
                     {% endif %}
                 </div>
-                {% if item.status == 'phase' %}
+                {% if item.is_phase %}
                 <div class="phase-pill">Phase</div>
                 {% endif %}
                 {% if item.description %}
@@ -166,7 +166,7 @@
                 </div>
                 {% endif %}
 
-                {% if item.status == 'phase' %}
+                {% if item.is_phase %}
                 <button class="btn btn-secondary phase-inline-add" onclick="openAddItemModal({{ item.id }}, 'task')">
                     <i class="fa-solid fa-plus"></i> Add Task
                 </button>
@@ -185,7 +185,7 @@
                 </div>
                 {% endif %}
 
-                {% if todo_list.type == 'list' and item.status != 'phase' %}
+                {% if todo_list.type == 'list' and not item.is_phase %}
                 <div class="status-buttons">
                     <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
                     <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
