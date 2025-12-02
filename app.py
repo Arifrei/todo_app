@@ -177,6 +177,12 @@ def insert_item_in_order(todo_list, new_item, phase_id=None):
     for idx, item in enumerate(ordered, start=1):
         item.order_index = idx
 
+def reindex_list(todo_list):
+    """Ensure order_index is sequential within a list."""
+    ordered = sorted(todo_list.items, key=lambda i: i.order_index)
+    for idx, item in enumerate(ordered, start=1):
+        item.order_index = idx
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -340,40 +346,87 @@ def handle_item(item_id):
 def move_item(item_id):
     item = TodoItem.query.get_or_404(item_id)
     data = request.json or {}
-    dest_id_str = data.get('destination_id')
+    dest_hub_id = data.get('destination_hub_id')
+    dest_list_id = data.get('destination_list_id')
+    dest_phase_id = data.get('destination_phase_id')
 
-    if not dest_id_str:
-        return jsonify({'error': 'Destination ID is required'}), 400
+    # Prevent moving phase headers for now
+    if item.status == 'phase':
+        return jsonify({'error': 'Cannot move a phase header.'}), 400
 
     # --- Moving a Project to another Hub ---
     if item.linked_list_id:
+        if dest_hub_id is None:
+            return jsonify({'error': 'destination_hub_id is required for projects'}), 400
         try:
-            dest_hub_id = int(dest_id_str)
+            dest_hub_id = int(dest_hub_id)
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid destination hub ID'}), 400
-        
+
         dest_hub = TodoList.query.get(dest_hub_id)
         if not dest_hub or dest_hub.type != 'hub':
             return jsonify({'error': 'Destination is not a valid hub'}), 404
-        
+
         item.list_id = dest_hub_id
+        db.session.flush()
         insert_item_in_order(dest_hub, item)
         db.session.commit()
         return jsonify({'message': f'Moved to {dest_hub.title}'})
 
-    # --- Moving a Task to another Phase (or no phase) ---
+    # --- Moving a Task to another list/phase ---
+    if dest_list_id is None:
+        return jsonify({'error': 'destination_list_id is required for tasks'}), 400
+
+    try:
+        dest_list_id = int(dest_list_id)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid destination list ID'}), 400
+
+    dest_list = TodoList.query.get(dest_list_id)
+    if not dest_list or dest_list.type != 'list':
+        return jsonify({'error': 'Destination is not a valid project list'}), 404
+
+    # Validate destination phase (optional)
+    phase_obj = None
+    if dest_phase_id is not None:
+        try:
+            dest_phase_id_int = int(dest_phase_id)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid destination phase ID'}), 400
+        phase_obj = TodoItem.query.get(dest_phase_id_int)
+        if not phase_obj or phase_obj.list_id != dest_list.id or phase_obj.status != 'phase':
+            return jsonify({'error': 'Destination phase not found in that project'}), 404
+        dest_phase_id = dest_phase_id_int
     else:
-        if dest_id_str == 'null':
-            phase_id = None
-        else:
-            try:
-                phase_id = int(dest_id_str)
-            except (ValueError, TypeError):
-                return jsonify({'error': 'Invalid destination phase ID'}), 400
-        
-        insert_item_in_order(item.list, item, phase_id=phase_id)
-        db.session.commit()
-        return jsonify({'message': 'Task moved successfully'})
+        dest_phase_id = None
+
+    old_list = item.list
+    item.list_id = dest_list.id
+    db.session.flush()
+
+    if dest_phase_id:
+        insert_item_in_order(dest_list, item, phase_id=dest_phase_id)
+    else:
+        insert_item_in_order(dest_list, item)
+
+    if old_list and old_list.id != dest_list.id:
+        reindex_list(old_list)
+
+    db.session.commit()
+    return jsonify({'message': 'Task moved successfully'})
+
+@app.route('/api/move-destinations/<int:list_id>', methods=['GET'])
+def move_destinations(list_id):
+    """Return possible destinations for moving tasks (all project lists with their phases)."""
+    project_lists = TodoList.query.filter_by(type='list').all()
+    payload = []
+    for l in project_lists:
+        payload.append({
+            'id': l.id,
+            'title': l.title,
+            'phases': [{'id': i.id, 'content': i.content} for i in l.items if i.status == 'phase']
+        })
+    return jsonify(payload)
 
 @app.route('/api/lists/<int:list_id>/bulk_import', methods=['POST'])
 def bulk_import(list_id):

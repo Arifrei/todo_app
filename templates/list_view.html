@@ -151,37 +151,63 @@
                 <a href="/list/{{ item.linked_list_id }}" class="btn btn-secondary" role="button" aria-label="Open Project {{ item.content }}">
                     Open Project
                 </a>
-                <button class="btn-icon" onclick="openMoveModal({{ item.id }}, 'project', '{{ item.content|replace('`', '\\`') }}')" title="Move Project">
-                    <i class="fa-solid fa-people-roof"></i>
-                </button>
+                <div class="task-actions-dropdown">
+                    <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                        <i class="fa-solid fa-ellipsis-vertical"></i>
+                    </button>
+                    <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
+                        <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'project', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-people-roof"></i> Move Project
+                        </button>
+                        <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
+                            <i class="fa-solid fa-trash"></i> Delete
+                        </button>
+                    </div>
+                </div>
                 {% endif %}
 
                 {% if item.status == 'phase' %}
                 <button class="btn btn-secondary phase-inline-add" onclick="openAddItemModal({{ item.id }}, 'task')">
                     <i class="fa-solid fa-plus"></i> Add Task
                 </button>
-                <button class="btn-icon"
-                    onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
-                    <i class="fa-solid fa-pen"></i>
-                </button>
+                <div class="task-actions-dropdown">
+                    <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                        <i class="fa-solid fa-ellipsis-vertical"></i>
+                    </button>
+                    <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
+                        <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-pen"></i> Edit
+                        </button>
+                        <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
+                            <i class="fa-solid fa-trash"></i> Delete
+                        </button>
+                    </div>
+                </div>
                 {% endif %}
 
                 {% if todo_list.type == 'list' and item.status != 'phase' %}
                 <div class="status-buttons">
-                <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
+                    <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
                     <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
                 </div>
 
-                <button class="btn-icon" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}')" title="Move Task">
-                    <i class="fa-solid fa-arrow-right-to-bracket"></i>
-                </button>
-                <button class="btn-icon"
-                    onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`)">
-                    <i class="fa-solid fa-pen"></i>
-                </button>
+                <div class="task-actions-dropdown">
+                    <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                        <i class="fa-solid fa-ellipsis-vertical"></i>
+                    </button>
+                    <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
+                        <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
+                        </button>
+                        <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-pen"></i> Edit
+                        </button>
+                        <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
+                            <i class="fa-solid fa-trash"></i> Delete
+                        </button>
+                    </div>
+                </div>
                 {% endif %}
-
-                <button class="btn-icon" onclick="deleteItem({{ item.id }})"><i class="fa-solid fa-trash"></i></button>
             </div>
         </div>
     </div>

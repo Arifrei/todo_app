@@ -252,10 +252,31 @@ function toggleStatusDropdown(itemId) {
     menu.classList.toggle('active');
 }
 
+// Toggle task actions dropdown
+function toggleTaskActionsMenu(itemId, event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById(`task-actions-menu-${itemId}`);
+
+    // Close all other menus
+    document.querySelectorAll('.task-actions-menu').forEach(el => {
+        if (el !== menu) el.classList.remove('active');
+    });
+
+    if (menu) {
+        menu.classList.toggle('active');
+    }
+}
+
 // Close dropdowns when clicking outside
 window.addEventListener('click', function (e) {
     if (!e.target.closest('.status-dropdown-container')) {
         document.querySelectorAll('.status-dropdown-menu').forEach(el => {
+            el.classList.remove('active');
+        });
+    }
+
+    if (!e.target.closest('.task-actions-dropdown')) {
+        document.querySelectorAll('.task-actions-menu').forEach(el => {
             el.classList.remove('active');
         });
     }
@@ -399,34 +420,26 @@ async function openMoveModal(itemId, itemType, itemName) {
     moveItemModal.classList.add('active');
 
     if (itemType === 'task') {
-        label.textContent = 'Move to Phase';
-        // Fetch phases for the current list
-        const res = await fetch(`/api/lists/${CURRENT_LIST_ID}`);
-        const list = await res.json();
-        const phases = list.items.filter(i => i.status === 'phase');
-        label.textContent = 'Move to...';
-        // Fetch all possible destinations (other lists, hubs, and their phases)
-        const res = await fetch(`/api/move-destinations/${CURRENT_LIST_ID}`);
-        const destinations = await res.json();
-        
-        let options = '<option value="null">No Phase</option>';
-        phases.forEach(phase => {
-            options += `<option value="${phase.id}">${phase.content}</option>`;
-        let options = '<option value="">Select a destination...</option>';
-        destinations.forEach(dest => {
-            const typeLabel = dest.type === 'hub' ? 'Hub' : 'Project';
-            options += `<optgroup label="${typeLabel}: ${dest.title}">`;
-            // Option to move to the list/hub directly (no phase)
-            options += `<option value="${dest.type}_${dest.id}_phase_null">Move to ${dest.title}</option>`;
-            // Options for each phase within the list
-            if (dest.phases) {
-                dest.phases.forEach(phase => {
-                    options += `<option value="${dest.type}_${dest.id}_phase_${phase.id}">Phase: ${phase.content}</option>`;
-                });
-            }
-            options += `</optgroup>`;
-        });
-        select.innerHTML = options;
+        label.textContent = 'Move to project / phase';
+        try {
+            const res = await fetch(`/api/move-destinations/${CURRENT_LIST_ID}`);
+            const destinations = await res.json();
+            let options = '<option value="">Select a destination...</option>';
+            destinations.forEach(dest => {
+                options += `<optgroup label="${dest.title}">`;
+                options += `<option value="${dest.id}:null">${dest.title} (no phase)</option>`;
+                if (dest.phases && dest.phases.length) {
+                    dest.phases.forEach(phase => {
+                        options += `<option value="${dest.id}:${phase.id}">${dest.title} — ${phase.content}</option>`;
+                    });
+                }
+                options += `</optgroup>`;
+            });
+            select.innerHTML = options;
+        } catch (e) {
+            console.error('Error loading destinations', e);
+            select.innerHTML = '<option value="">Unable to load destinations</option>';
+        }
 
     } else if (itemType === 'project') {
         label.textContent = 'Move to Hub';
@@ -452,17 +465,37 @@ function closeMoveModal() {
 async function moveItem() {
     const itemId = document.getElementById('move-item-id').value;
     const destinationId = document.getElementById('move-destination-select').value;
+    const destinationLabel = document.getElementById('move-destination-label').textContent || '';
 
     if (!itemId || !destinationId) {
         alert('Please select a destination.');
         return;
     }
 
+    let payload = {};
+    if (destinationId.includes(':')) {
+        const [listIdStr, phaseIdStr] = destinationId.split(':');
+        const listId = parseInt(listIdStr, 10);
+        const phaseId = phaseIdStr && phaseIdStr !== 'null' ? parseInt(phaseIdStr, 10) : null;
+        if (!listId || Number.isNaN(listId)) {
+            alert('Please select a destination project.');
+            return;
+        }
+        payload = { destination_list_id: listId, destination_phase_id: phaseId };
+    } else {
+        const hubId = parseInt(destinationId, 10);
+        if (!hubId || Number.isNaN(hubId)) {
+            alert('Please select a destination hub.');
+            return;
+        }
+        payload = { destination_hub_id: hubId };
+    }
+
     try {
         const res = await fetch(`/api/items/${itemId}/move`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ destination_id: destinationId })
+            body: JSON.stringify(payload)
         });
 
         if (res.ok) {
