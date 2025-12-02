@@ -1231,19 +1231,41 @@ textarea.form-control {
     color: var(--primary-color);
 }
 
-/* Mobile Responsive */
-@media (max-width: 700px) {
+/* Mobile & Tablet Responsive */
+@media (max-width: 1024px) {
+    .app-container {
+        flex-direction: column;
+    }
+
     .sidebar {
-        display: none;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        box-shadow: 0 6px 16px rgba(0,0,0,0.05);
+    }
+
+    .logo {
+        font-size: 1.25rem;
+    }
+
+    .nav-links {
+        display: flex;
+        gap: 0.5rem;
+        margin-left: auto;
+    }
+
+    .nav-links a {
+        padding: 0.75rem 1rem;
     }
 
     .content {
-        padding: 1.25rem;
+        padding: 1.25rem 1.5rem;
         max-width: 100%;
-    }
-
-    .grid {
-        grid-template-columns: 1fr;
     }
 
     h1 {
@@ -1255,48 +1277,11 @@ textarea.form-control {
         align-items: flex-start;
     }
 
-    .list-header {
-        padding: 1.5rem;
-    }
-
-    .list-header .card-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 1rem;
-    }
-
     .task-item {
         flex-direction: column;
         align-items: stretch;
         gap: 1rem;
         padding: 1.25rem;
-    }
-
-    .task-content {
-        flex-direction: row;
-        align-items: flex-start;
-        gap: 0.875rem;
-    }
-
-    /* Position checkbox inline on mobile instead of absolute */
-    .select-item {
-        position: relative;
-        left: 0;
-        top: 0;
-        transform: none;
-        order: -1;
-    }
-
-    /* Show checkboxes more readily on mobile */
-    body:not(.selection-mode-active) .select-item {
-        opacity: 0.3;
-        pointer-events: all;
-    }
-
-    .task-item:hover .select-item,
-    body.selection-mode-active .select-item,
-    .select-item:checked {
-        opacity: 1;
     }
 
     .task-footer {
@@ -1369,6 +1354,61 @@ textarea.form-control {
     .task-item.under-phase::before {
         left: -0.75rem;
         width: 0.5rem;
+    }
+}
+
+@media (max-width: 700px) {
+    .sidebar {
+        flex-wrap: wrap;
+    }
+
+    .nav-links {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .nav-links a {
+        flex: 1 1 auto;
+        justify-content: center;
+        text-align: center;
+    }
+
+    .list-header {
+        padding: 1.5rem;
+    }
+
+    .list-header .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .task-content {
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 0.875rem;
+    }
+
+    /* Position checkbox inline on mobile instead of absolute */
+    .select-item {
+        position: relative;
+        left: 0;
+        top: 0;
+        transform: none;
+        order: -1;
+    }
+
+    /* Show checkboxes more readily on mobile */
+    body:not(.selection-mode-active) .select-item {
+        opacity: 0.3;
+        pointer-events: all;
+    }
+
+    .task-item:hover .select-item,
+    body.selection-mode-active .select-item,
+    .select-item:checked {
+        opacity: 1;
     }
 }
 
