@@ -529,6 +529,11 @@ header p {
     transition: var(--transition);
     position: relative;
     box-shadow: var(--shadow-sm);
+    z-index: 1;
+}
+
+.task-item.menu-open {
+    z-index: 200;
 }
 
 .task-item:hover {
@@ -967,6 +972,7 @@ body.selection-mode-active .select-item,
 .task-actions-dropdown {
     position: relative;
     display: inline-block;
+    z-index: 150;
 }
 
 .task-actions-menu {

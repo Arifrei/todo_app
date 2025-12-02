@@ -256,14 +256,22 @@ function toggleStatusDropdown(itemId) {
 function toggleTaskActionsMenu(itemId, event) {
     if (event) event.stopPropagation();
     const menu = document.getElementById(`task-actions-menu-${itemId}`);
+    const taskItem = document.getElementById(`item-${itemId}`);
 
-    // Close all other menus
+    // Close all other menus and remove menu-open class from all task items
     document.querySelectorAll('.task-actions-menu').forEach(el => {
         if (el !== menu) el.classList.remove('active');
+    });
+    document.querySelectorAll('.task-item.menu-open').forEach(el => {
+        if (el !== taskItem) el.classList.remove('menu-open');
     });
 
     if (menu) {
         menu.classList.toggle('active');
+        // Add/remove menu-open class to task item
+        if (taskItem) {
+            taskItem.classList.toggle('menu-open', menu.classList.contains('active'));
+        }
     }
 }
 
@@ -278,6 +286,9 @@ window.addEventListener('click', function (e) {
     if (!e.target.closest('.task-actions-dropdown')) {
         document.querySelectorAll('.task-actions-menu').forEach(el => {
             el.classList.remove('active');
+        });
+        document.querySelectorAll('.task-item.menu-open').forEach(el => {
+            el.classList.remove('menu-open');
         });
     }
 });
