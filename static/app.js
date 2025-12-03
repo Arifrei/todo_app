@@ -13,6 +13,10 @@ let pendingConfirm = null;
 let currentDragId = null;
 let currentDragBlock = [];
 let longPressTimer = null;
+let longPressTriggered = false;
+let touchStartX = 0;
+let touchStartY = 0;
+let isTouchScrolling = false;
 
 // --- Dashboard Functions ---
 
@@ -575,6 +579,7 @@ async function saveItemChanges() {
 // --- Bulk Selection ---
 
 function updateBulkBar() {
+    const scrollY = window.scrollY;
     const bar = document.getElementById('bulk-actions');
     const countSpan = document.getElementById('bulk-count');
     const selectAll = document.getElementById('select-all');
@@ -598,6 +603,8 @@ function updateBulkBar() {
         selectAll.checked = totalCheckboxes > 0 && selectedItems.size === totalCheckboxes;
         selectAll.indeterminate = selectedItems.size > 0 && selectedItems.size < totalCheckboxes;
     }
+    // Prevent layout jump when bar appears
+    window.scrollTo(0, scrollY);
 }
 
 function cascadePhaseSelection(phaseElement, isChecked) {
@@ -816,6 +823,12 @@ function initDragAndDrop() {
 }
 
 function handleTouchStart(e) {
+    longPressTriggered = false;
+    isTouchScrolling = false;
+    if (e.touches && e.touches.length) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+    }
     const item = e.currentTarget;
     // Don't trigger long press if dragging
     if (e.target.closest('.drag-handle')) return;
@@ -830,17 +843,36 @@ function handleTouchStart(e) {
         if (checkbox && !checkbox.checked) {
             checkbox.checked = true;
             toggleSelectItem(itemId, true);
+            longPressTriggered = true;
         }
     }, 500); // 500ms for a long press
 }
 
-function handleTouchMove() {
+function handleTouchMove(e) {
     // If user moves finger, it's a scroll, not a long press
-    clearTimeout(longPressTimer);
+    if (e.touches && e.touches.length) {
+        const dx = Math.abs(e.touches[0].clientX - touchStartX);
+        const dy = Math.abs(e.touches[0].clientY - touchStartY);
+        if (dx > 8 || dy > 8) {
+            isTouchScrolling = true;
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+            return;
+        }
+    }
 }
 
 function handleTouchEnd(e) {
     clearTimeout(longPressTimer);
+    if (isTouchScrolling) {
+        isTouchScrolling = false;
+        longPressTriggered = false;
+        return;
+    }
+    if (longPressTriggered) {
+        longPressTriggered = false;
+        return;
+    }
     // If we are in selection mode, a short tap should toggle selection
     if (document.body.classList.contains('selection-mode-active')) {
         // Prevent click event from also firing and toggling again
@@ -848,7 +880,7 @@ function handleTouchEnd(e) {
         const item = e.currentTarget;
         const checkbox = item.querySelector('.select-item');
         if (checkbox) {
-            checkbox.click(); // Programmatically click the checkbox to trigger its onchange
+            checkbox.click(); // Programmatically toggle the checkbox to trigger its onchange
         }
     }
 }
@@ -901,8 +933,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Add long-press listeners for mobile selection
     document.querySelectorAll('.task-item').forEach(item => {
-        item.addEventListener('touchstart', handleTouchStart, { passive: true });
-        item.addEventListener('touchend', handleTouchEnd);
-        item.addEventListener('touchmove', handleTouchMove, { passive: true });
+        item.addEventListener('touchstart', handleTouchStart, { passive: false });
+        item.addEventListener('touchend', handleTouchEnd, { passive: false });
+        item.addEventListener('touchmove', handleTouchMove, { passive: false });
+        item.addEventListener('mousedown', handleMouseHoldStart);
+        item.addEventListener('mouseup', handleMouseHoldEnd);
+        item.addEventListener('mouseleave', handleMouseHoldEnd);
     });
 });
+
+let mouseHoldTimer = null;
+
+function handleMouseHoldStart(e) {
+    // Only trigger on left click
+    if (e.button !== 0) return;
+    const item = e.currentTarget;
+    if (e.target.closest('.drag-handle') || e.target.closest('.task-actions-dropdown')) return;
+    mouseHoldTimer = setTimeout(() => {
+        mouseHoldTimer = null;
+        const itemId = parseInt(item.dataset.itemId, 10);
+        const checkbox = item.querySelector('.select-item');
+        document.body.classList.add('selection-mode-active');
+        if (checkbox && !checkbox.checked) {
+            checkbox.checked = true;
+            toggleSelectItem(itemId, true);
+            checkbox.classList.add('force-visible');
+        }
+    }, 500);
+}
+
+function handleMouseHoldEnd() {
+    clearTimeout(mouseHoldTimer);
+    mouseHoldTimer = null;
+}

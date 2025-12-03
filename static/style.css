@@ -181,10 +181,98 @@ body {
     transform: translateX(4px);
 }
 
+.header-row {
+    margin-bottom: 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .nav-links a.active {
     background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
     color: var(--white);
     box-shadow: 0 8px 20px -8px var(--primary-color);
+}
+
+.nav-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-direction: column;
+    align-items: flex-start;
+    margin-top: 1rem;
+}
+
+.user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: 999px;
+    font-weight: 600;
+    color: var(--text-color);
+    font-size: 0.95rem;
+    cursor: pointer;
+    position: relative;
+}
+
+.user-chip .caret {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.user-chip:hover {
+    background: var(--primary-light);
+}
+
+.user-chip i {
+    color: var(--primary-color);
+}
+.user-chip {
+    margin: 0;
+}
+
+.user-menu {
+    display: none;
+    position: absolute;
+    top: 110%;
+    right: 0;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: var(--shadow-md);
+    padding: 0.5rem;
+    z-index: 200;
+    min-width: 160px;
+}
+
+.user-menu a {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    text-decoration: none;
+    color: var(--text-color);
+    font-weight: 600;
+    border-radius: 8px;
+}
+
+.user-menu a:hover {
+    background: var(--primary-light);
+    color: var(--primary-color);
+}
+
+.user-menu.open {
+    display: block;
 }
 
 .content {
@@ -641,7 +729,7 @@ header p {
 .task-item:hover .task-content,
 body.selection-mode-active .task-content,
 .task-item:has(.select-item:checked) .task-content {
-    margin-left: 0.5rem;
+    margin-left: 0;
 }
 
 /* Checkbox Selection Styling */
@@ -662,11 +750,17 @@ body.selection-mode-active .task-content,
 }
 
 /* Show checkbox on hover or when in selection mode */
-.task-item:hover .select-item,
 body.selection-mode-active .select-item,
 .select-item:checked {
     opacity: 1;
     pointer-events: all;
+}
+
+@media (min-width: 701px) {
+    .task-item:hover .select-item {
+        opacity: 1;
+        pointer-events: all;
+    }
 }
 
 /* Hover state for unchecked checkbox */
@@ -744,19 +838,19 @@ body.selection-mode-active .select-item,
 
 /* Phase with done status - keep it looking like a phase but with celebration colors */
 .task-item.phase.status-done {
-    background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%) !important;
-    border-color: var(--accent-color) !important;
+    background: linear-gradient(135deg, #ccfbf1 0%, #cffafe 100%) !important;
+    border-color: #14b8a6 !important;
     border-width: 3px !important;
     border-left-width: 6px !important;
-    box-shadow: 0 4px 16px -4px rgba(16, 185, 129, 0.4) !important;
+    box-shadow: 0 4px 16px -4px rgba(20, 184, 166, 0.35) !important;
 }
 
 .task-item.phase.status-done:hover {
-    box-shadow: 0 8px 24px -4px rgba(16, 185, 129, 0.5) !important;
+    box-shadow: 0 8px 24px -4px rgba(20, 184, 166, 0.5) !important;
 }
 
 .task-item.phase.status-done .task-text {
-    background: linear-gradient(135deg, #059669, #10b981) !important;
+    background: linear-gradient(135deg, #0f766e, #14b8a6) !important;
     -webkit-background-clip: text !important;
     -webkit-text-fill-color: transparent !important;
     background-clip: text !important;
@@ -884,9 +978,11 @@ body.selection-mode-active .select-item,
     border-radius: 14px;
     padding: 1rem 1.5rem;
     flex-wrap: wrap;
-    margin-bottom: 1.5rem;
     gap: 1rem;
     box-shadow: var(--shadow-md);
+    position: sticky;
+    bottom: 1rem;
+    z-index: 150;
 }
 
 .bulk-buttons {
@@ -1253,19 +1349,25 @@ textarea.form-control {
         font-size: 1.25rem;
     }
 
-    .nav-links {
-        display: flex;
-        gap: 0.5rem;
-        margin-left: auto;
-    }
-
-    .nav-links a {
-        padding: 0.75rem 1rem;
-    }
-
     .content {
         padding: 1.25rem 1.5rem;
         max-width: 100%;
+    }
+
+    .nav-row {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .header-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .header-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 
     h1 {
@@ -1325,6 +1427,12 @@ textarea.form-control {
         align-items: flex-start;
         gap: 1rem;
         padding: 1rem;
+        position: fixed;
+        left: 1rem;
+        right: 1rem;
+        bottom: 1rem;
+        margin: 0;
+        z-index: 300;
     }
 
     .bulk-buttons {
@@ -1362,16 +1470,93 @@ textarea.form-control {
         flex-wrap: wrap;
     }
 
+    .task-item {
+        touch-action: manipulation;
+    }
+
+    .task-item:hover {
+        transform: none;
+    }
+
+    .nav-row {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+    }
+
     .nav-links {
-        width: 100%;
+        flex: 1 1 auto;
         justify-content: flex-start;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        gap: 0.35rem;
     }
 
     .nav-links a {
-        flex: 1 1 auto;
+        flex: 0 0 auto;
         justify-content: center;
         text-align: center;
+        padding: 0.65rem 0.85rem;
+        white-space: nowrap;
+    }
+
+    .nav-row {
+        gap: 0.5rem;
+    }
+
+    .user-chip {
+        flex: 0 0 auto;
+        justify-content: center;
+        padding: 0.5rem 0.65rem;
+    }
+
+    .user-menu {
+        position: absolute;
+        top: 110%;
+        right: 0;
+        width: 180px;
+        margin-top: 0.1rem;
+    }
+
+    .task-footer {
+        order: 0;
+        width: 100%;
+        justify-content: flex-end;
+        align-items: center;
+        flex-wrap: nowrap;
+        gap: 0.35rem;
+    }
+
+    .task-actions {
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+        gap: 0.35rem;
+    }
+
+    .task-actions-dropdown {
+        flex: 0 0 auto;
+        order: 0;
+    }
+
+    .status-buttons {
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+        gap: 0.35rem;
+    }
+
+    .header-actions {
+        gap: 0.4rem;
+    }
+
+    .header-actions .btn,
+    .header-actions .btn-secondary,
+    .header-actions .btn-primary {
+        width: 100%;
+        text-align: center;
+        justify-content: center;
     }
 
     .list-header {
@@ -1388,6 +1573,7 @@ textarea.form-control {
         flex-direction: row;
         align-items: flex-start;
         gap: 0.875rem;
+        touch-action: pan-y;
     }
 
     /* Position checkbox inline on mobile instead of absolute */
@@ -1399,16 +1585,17 @@ textarea.form-control {
         order: -1;
     }
 
-    /* Show checkboxes more readily on mobile */
+    /* Only reveal checkboxes after long-press selection */
     body:not(.selection-mode-active) .select-item {
-        opacity: 0.3;
-        pointer-events: all;
+        opacity: 0;
+        pointer-events: none;
     }
 
-    .task-item:hover .select-item,
     body.selection-mode-active .select-item,
-    .select-item:checked {
+    .select-item:checked,
+    .select-item.force-visible {
         opacity: 1;
+        pointer-events: all;
     }
 }
 

@@ -28,18 +28,19 @@
                 <i class="fa-solid fa-layer-group"></i>
                 <span>TaskFlow</span>
             </div>
-            <ul class="nav-links">
-                <li><a href="/" class="active"><i class="fa-solid fa-house"></i> Dashboard</a></li>
-                <!-- We could add more links here later -->
-            </ul>
-            <div style="margin-top: auto; padding: 1rem;">
-                <div id="current-user-display" style="padding: 0.75rem; background: rgba(99, 102, 241, 0.1); border-radius: 10px; margin-bottom: 0.5rem;">
-                    <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.25rem;">Current User</div>
-                    <div style="font-weight: 600; color: var(--text-color);" id="current-username">Loading...</div>
+            <div class="nav-row">
+                <ul class="nav-links">
+                    <li><a href="/" class="active"><i class="fa-solid fa-house"></i> Dashboard</a></li>
+                    <!-- We could add more links here later -->
+                </ul>
+                <div class="user-chip user-trigger" onclick="toggleUserMenu(event)">
+                    <i class="fa-solid fa-user"></i>
+                    <span id="current-username">Loading...</span>
+                    <i class="fa-solid fa-caret-down caret"></i>
                 </div>
-                <a href="{{ url_for('select_user') }}" style="display: block; padding: 0.75rem; text-align: center; background: rgba(255, 255, 255, 0.5); border-radius: 10px; text-decoration: none; color: var(--text-color); font-weight: 500; transition: background 0.2s;">
-                    <i class="fa-solid fa-user-group"></i> Switch User
-                </a>
+                <div class="user-menu" id="user-menu">
+                    <a href="{{ url_for('select_user') }}"><i class="fa-solid fa-user-group"></i> Switch User</a>
+                </div>
             </div>
             <script>
                 // Load current user
@@ -48,6 +49,17 @@
                     .then(data => {
                         document.getElementById('current-username').textContent = data.username || 'None';
                     });
+
+                function toggleUserMenu(event) {
+                    event.stopPropagation();
+                    const menu = document.getElementById('user-menu');
+                    if (menu) menu.classList.toggle('open');
+                }
+
+                document.addEventListener('click', () => {
+                    const menu = document.getElementById('user-menu');
+                    if (menu) menu.classList.remove('open');
+                });
             </script>
         </nav>
 

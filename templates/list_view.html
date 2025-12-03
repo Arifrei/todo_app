@@ -7,7 +7,6 @@
     <a href="/list/{{ parent_list.id }}" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to {{
         parent_list.title }}</a>
     {% endif %}
-    <a href="/" class="back-link" style="margin-left: auto;"><i class="fa-solid fa-house"></i> Home</a>
 </div>
 
 <div class="list-header">
@@ -49,14 +48,14 @@
     {% endif %}
 </div>
 
-<div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center;">
+<div class="header-row">
     <h2>{{ 'Projects' if todo_list.type == 'hub' else 'Tasks' }}</h2>
-    <div style="display: flex; gap: 0.5rem;">
+    <div class="header-actions">
         <a class="btn btn-secondary" href="/api/lists/{{ todo_list.id }}/export" download>
             <i class="fa-solid fa-download"></i> Export
         </a>
         <button class="btn" onclick="openBulkImportModal()">
-            <i class="fa-solid fa-list-check"></i> Bulk Import
+            <i class="fa-solid fa-list-check"></i> Bulk Add
         </button>
 
         {% if todo_list.type == 'list' %}
