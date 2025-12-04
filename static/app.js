@@ -17,6 +17,13 @@ let longPressTriggered = false;
 let touchStartX = 0;
 let touchStartY = 0;
 let isTouchScrolling = false;
+let bulkMoveIds = null;
+let moveSelectedDestination = null;
+let moveNavStack = [];
+let moveItemType = 'task';
+let touchDragActive = false;
+let touchDragId = null;
+let touchDragBlock = [];
 
 // --- Dashboard Functions ---
 
@@ -427,96 +434,74 @@ async function bulkImportItems(listId) {
 async function openMoveModal(itemId, itemType, itemName) {
     if (!moveItemModal) return;
 
+    bulkMoveIds = null; // ensure single-item mode
+    moveItemType = itemType;
+    moveSelectedDestination = null;
+    moveNavStack = [];
     document.getElementById('move-item-id').value = itemId;
     document.getElementById('move-item-title').textContent = `Move "${itemName}"`;
-    const select = document.getElementById('move-destination-select');
-    const label = document.getElementById('move-destination-label');
-    select.innerHTML = '<option>Loading...</option>';
     moveItemModal.classList.add('active');
+    renderMoveRoot(itemType);
+}
 
-    if (itemType === 'task') {
-        label.textContent = 'Move to project / phase';
-        try {
-            const res = await fetch(`/api/move-destinations/${CURRENT_LIST_ID}`);
-            const destinations = await res.json();
-            let options = '<option value="">Select a destination...</option>';
-            destinations.forEach(dest => {
-                options += `<optgroup label="${dest.title}">`;
-                options += `<option value="${dest.id}:null">${dest.title} (no phase)</option>`;
-                if (dest.phases && dest.phases.length) {
-                    dest.phases.forEach(phase => {
-                        options += `<option value="${dest.id}:${phase.id}">${dest.title} — ${phase.content}</option>`;
-                    });
-                }
-                options += `</optgroup>`;
-            });
-            select.innerHTML = options;
-        } catch (e) {
-            console.error('Error loading destinations', e);
-            select.innerHTML = '<option value="">Unable to load destinations</option>';
-        }
-
-    } else if (itemType === 'project') {
-        label.textContent = 'Move to Hub';
-        // Fetch all available hubs, excluding the current one
-        const res = await fetch('/api/lists?type=hub&include_children=true');
-        const hubs = await res.json();
-        
-        let options = '';
-        hubs.filter(hub => hub.id !== CURRENT_LIST_ID).forEach(hub => {
-            options += `<option value="${hub.id}">${hub.title}</option>`;
-        });
-        if (!options) {
-            options = '<option value="">No other hubs available</option>';
-        }
-        select.innerHTML = options;
-    }
+function openBulkMoveModal() {
+    if (!moveItemModal || selectedItems.size === 0) return;
+    bulkMoveIds = Array.from(selectedItems).map(Number);
+    moveItemType = 'task';
+    document.getElementById('move-item-id').value = '';
+    document.getElementById('move-item-title').textContent = `Move ${bulkMoveIds.length} items`;
+    moveItemModal.classList.add('active');
+    moveSelectedDestination = null;
+    moveNavStack = [];
+    renderMoveRoot('task');
 }
 
 function closeMoveModal() {
     if (moveItemModal) moveItemModal.classList.remove('active');
+    bulkMoveIds = null;
+    moveSelectedDestination = null;
+    moveNavStack = [];
+    updateMoveBackButton();
+    updateMoveSelectionSummary();
 }
 
 async function moveItem() {
     const itemId = document.getElementById('move-item-id').value;
-    const destinationId = document.getElementById('move-destination-select').value;
-    const destinationLabel = document.getElementById('move-destination-label').textContent || '';
+    const isBulk = Array.isArray(bulkMoveIds) && bulkMoveIds.length > 0;
 
-    if (!itemId || !destinationId) {
+    if (!moveSelectedDestination || (!itemId && !isBulk)) {
         alert('Please select a destination.');
         return;
     }
 
-    let payload = {};
-    if (destinationId.includes(':')) {
-        const [listIdStr, phaseIdStr] = destinationId.split(':');
-        const listId = parseInt(listIdStr, 10);
-        const phaseId = phaseIdStr && phaseIdStr !== 'null' ? parseInt(phaseIdStr, 10) : null;
-        if (!listId || Number.isNaN(listId)) {
-            alert('Please select a destination project.');
-            return;
-        }
-        payload = { destination_list_id: listId, destination_phase_id: phaseId };
-    } else {
-        const hubId = parseInt(destinationId, 10);
-        if (!hubId || Number.isNaN(hubId)) {
-            alert('Please select a destination hub.');
-            return;
-        }
-        payload = { destination_hub_id: hubId };
-    }
-
     try {
-        const res = await fetch(`/api/items/${itemId}/move`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (res.ok) {
-            closeMoveModal();
-            window.location.reload();
+        let res;
+        if (isBulk) {
+            res = await fetch('/api/items/bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'move',
+                    ids: bulkMoveIds,
+                    list_id: typeof CURRENT_LIST_ID !== 'undefined' ? CURRENT_LIST_ID : null,
+                    ...moveSelectedDestination
+                })
+            });
         } else {
+            res = await fetch(`/api/items/${itemId}/move`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(moveSelectedDestination)
+            });
+        }
+
+    if (res.ok) {
+        closeMoveModal();
+        selectedItems.clear();
+        bulkMoveIds = null;
+        moveSelectedDestination = null;
+        window.location.reload();
+    } else {
             const err = await res.json();
             alert(`Error: ${err.error || 'Could not move item.'}`);
         }
@@ -540,6 +525,204 @@ function closeEditItemModal() {
     modal.classList.remove('active');
 }
 
+// --- Move Navigation (step-by-step) ---
+
+function updateMoveBackButton() {
+    const backBtn = document.getElementById('move-back-button');
+    if (!backBtn) return;
+    backBtn.style.display = moveNavStack.length > 1 ? 'inline-flex' : 'none';
+}
+
+function updateMoveSelectionSummary() {
+    const summary = document.getElementById('move-selection-summary');
+    if (!summary) return;
+    if (!moveSelectedDestination) {
+        summary.textContent = 'Select a destination.';
+        return;
+    }
+    if (moveSelectedDestination.destination_hub_id) {
+        summary.textContent = `Selected hub: ${moveSelectedDestination.label || moveSelectedDestination.destination_hub_id}`;
+    } else {
+        const phasePart = moveSelectedDestination.destination_phase_id ? ` / phase ${moveSelectedDestination.phase_label || moveSelectedDestination.destination_phase_id}` : ' (no phase)';
+        summary.textContent = `Selected project: ${moveSelectedDestination.label || moveSelectedDestination.destination_list_id}${phasePart}`;
+    }
+}
+
+function pushMoveView(renderFn) {
+    moveNavStack.push(renderFn);
+    updateMoveBackButton();
+    renderFn();
+}
+
+function moveNavBack() {
+    if (moveNavStack.length > 1) {
+        moveNavStack.pop();
+        const last = moveNavStack[moveNavStack.length - 1];
+        last && last();
+    }
+    updateMoveBackButton();
+}
+
+function renderMoveRoot(itemType = 'task') {
+    const panel = document.getElementById('move-step-container');
+    if (!panel) return;
+    panel.innerHTML = '';
+    moveSelectedDestination = null;
+    updateMoveSelectionSummary();
+    const effectiveType = itemType || moveItemType || 'task';
+    moveNavStack = [() => renderMoveRoot(effectiveType)];
+    updateMoveBackButton();
+
+    const actions = [];
+    if (effectiveType === 'task') {
+        actions.push({
+            label: `Move within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
+            handler: () => pushMoveView(() => renderPhasePicker(CURRENT_LIST_ID, typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'This project'))
+        });
+    }
+    actions.push({
+        label: 'Browse hubs',
+        handler: () => pushMoveView(renderHubList)
+    });
+
+    actions.forEach(action => {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-secondary';
+        btn.style.marginBottom = '0.5rem';
+        btn.textContent = action.label;
+        btn.onclick = action.handler;
+        panel.appendChild(btn);
+    });
+}
+
+async function renderPhasePicker(listId, listTitle) {
+    const panel = document.getElementById('move-step-container');
+    if (!panel) return;
+    panel.innerHTML = `<div class="move-heading">Choose a phase in "${listTitle}"</div>`;
+
+    try {
+        const res = await fetch(`/api/lists/${listId}/phases`);
+        const data = await res.json();
+        const btnNoPhase = document.createElement('button');
+        btnNoPhase.className = 'btn btn-secondary';
+        btnNoPhase.style.margin = '0.25rem 0';
+        btnNoPhase.textContent = `${data.title || 'Project'} (no phase)`;
+        btnNoPhase.onclick = () => {
+            moveSelectedDestination = { destination_list_id: listId, destination_phase_id: null, label: data.title || listTitle };
+            updateMoveSelectionSummary();
+        };
+        panel.appendChild(btnNoPhase);
+
+        if (data.phases && data.phases.length) {
+            data.phases.forEach(phase => {
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-secondary';
+                btn.style.margin = '0.25rem 0';
+                btn.textContent = `${data.title || listTitle} → ${phase.content}`;
+                btn.onclick = () => {
+                    moveSelectedDestination = {
+                        destination_list_id: listId,
+                        destination_phase_id: phase.id,
+                        label: data.title || listTitle,
+                        phase_label: phase.content
+                    };
+                    updateMoveSelectionSummary();
+                };
+                panel.appendChild(btn);
+            });
+        }
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load phases.</div>';
+    }
+}
+
+async function renderHubList() {
+    const panel = document.getElementById('move-step-container');
+    if (!panel) return;
+    panel.innerHTML = '<div class="move-heading">Choose a hub</div>';
+    try {
+        const res = await fetch('/api/hubs');
+        const hubs = await res.json();
+        if (!hubs.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted);">No hubs available.</div>';
+            return;
+        }
+        hubs.forEach(hub => {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-secondary';
+            btn.style.margin = '0.25rem 0';
+            btn.textContent = hub.title;
+            btn.onclick = () => {
+                if (moveItemType === 'project') {
+                    moveSelectedDestination = { destination_hub_id: hub.id, label: hub.title };
+                    updateMoveSelectionSummary();
+                } else {
+                    pushMoveView(() => renderHubChildren(hub.id, hub.title));
+                }
+            };
+            panel.appendChild(btn);
+        });
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load hubs.</div>';
+    }
+}
+
+async function renderHubChildren(hubId, hubTitle) {
+    const panel = document.getElementById('move-step-container');
+    if (!panel) return;
+    panel.innerHTML = `<div class="move-heading">Destinations in "${hubTitle}"</div>`;
+    try {
+        const res = await fetch(`/api/hubs/${hubId}/children`);
+        const data = await res.json();
+        if (!data.children || !data.children.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted); margin-top: 0.5rem;">No projects in this hub.</div>';
+            return;
+        }
+
+        data.children.forEach(child => {
+            if (child.type === 'hub') {
+                const btnHub = document.createElement('button');
+                btnHub.className = 'btn btn-secondary';
+                btnHub.style.margin = '0.25rem 0';
+                btnHub.textContent = `${child.title} (Hub)`;
+                btnHub.onclick = () => pushMoveView(() => renderHubChildren(child.id, child.title));
+                panel.appendChild(btnHub);
+            } else {
+                // list with phases
+                const btnNoPhase = document.createElement('button');
+                btnNoPhase.className = 'btn btn-secondary';
+                btnNoPhase.style.margin = '0.25rem 0';
+                btnNoPhase.textContent = `${child.title} (no phase)`;
+                btnNoPhase.onclick = () => {
+                    moveSelectedDestination = { destination_list_id: child.id, destination_phase_id: null, label: child.title };
+                    updateMoveSelectionSummary();
+                };
+                panel.appendChild(btnNoPhase);
+
+                if (child.phases && child.phases.length) {
+                    child.phases.forEach(phase => {
+                        const btn = document.createElement('button');
+                        btn.className = 'btn btn-secondary';
+                        btn.style.margin = '0.25rem 0';
+                        btn.textContent = `${child.title} → ${phase.content}`;
+                        btn.onclick = () => {
+                            moveSelectedDestination = {
+                                destination_list_id: child.id,
+                                destination_phase_id: phase.id,
+                                label: child.title,
+                                phase_label: phase.content
+                            };
+                            updateMoveSelectionSummary();
+                        };
+                        panel.appendChild(btn);
+                    });
+                }
+            }
+        });
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load hub contents.</div>';
+    }
+}
 // --- Confirm Modal ---
 
 function openConfirmModal(message, onConfirm) {
@@ -750,6 +933,24 @@ function handleDragEnd() {
     currentDragBlock = [];
 }
 
+async function commitOrderFromDOM() {
+    const container = document.getElementById('items-container');
+    if (!container) return;
+    const ids = Array.from(container.querySelectorAll('.task-item')).map(el => parseInt(el.getAttribute('data-item-id'), 10));
+    try {
+        const res = await fetch(`/api/lists/${CURRENT_LIST_ID}/reorder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+        });
+        if (!res.ok) {
+            console.error('Failed to save order');
+        }
+    } catch (err) {
+        console.error('Error saving order:', err);
+    }
+}
+
 function handleDragOver(e) {
     e.preventDefault();
     const container = document.getElementById('items-container');
@@ -775,21 +976,8 @@ async function handleDrop(e) {
     e.preventDefault();
     const container = document.getElementById('items-container');
     if (!container) return;
-    const ids = Array.from(container.querySelectorAll('.task-item')).map(el => parseInt(el.getAttribute('data-item-id'), 10));
-    try {
-        const res = await fetch(`/api/lists/${CURRENT_LIST_ID}/reorder`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids })
-        });
-        if (!res.ok) {
-            console.error('Failed to save order');
-        }
-    } catch (err) {
-        console.error('Error saving order:', err);
-    } finally {
-        handleDragEnd();
-    }
+    await commitOrderFromDOM();
+    handleDragEnd();
 }
 
 async function refreshListView() {
@@ -802,8 +990,10 @@ async function refreshListView() {
         const doc = parser.parseFromString(html, 'text/html');
         const newContainer = doc.getElementById('items-container');
         document.getElementById('items-container').innerHTML = newContainer.innerHTML;
+        normalizePhaseParents();
         updateBulkBar();
         initDragAndDrop(); // Re-initialize drag and drop on new elements
+        restorePhaseVisibility();
     } catch (e) {
         console.error('Error refreshing list view:', e);
     }
@@ -819,6 +1009,9 @@ function initDragAndDrop() {
         handle.setAttribute('draggable', 'true');
         handle.addEventListener('dragstart', handleDragStart);
         handle.addEventListener('dragend', handleDragEnd);
+        handle.addEventListener('touchstart', touchHandleDragStart, { passive: false });
+        handle.addEventListener('touchmove', touchHandleDragMove, { passive: false });
+        handle.addEventListener('touchend', touchHandleDragEnd, { passive: false });
     });
 }
 
@@ -884,6 +1077,168 @@ function handleTouchEnd(e) {
         }
     }
 }
+
+// Touch drag for mobile (reorder)
+function touchHandleDragStart(e) {
+    const handle = e.currentTarget;
+    const itemId = handle.getAttribute('data-drag-id');
+    if (!itemId) return;
+    touchDragActive = true;
+    touchDragId = itemId;
+    touchDragBlock = [];
+    const row = document.getElementById(`item-${itemId}`);
+    if (row) {
+        const isPhase = row.classList.contains('phase');
+        if (isPhase) {
+            const siblings = Array.from(document.querySelectorAll('.task-item'));
+            const startIdx = siblings.indexOf(row);
+            for (let i = startIdx; i < siblings.length; i++) {
+                const el = siblings[i];
+                if (i > startIdx && el.classList.contains('phase')) break;
+                touchDragBlock.push(el);
+                el.classList.add('dragging');
+            }
+        } else {
+            touchDragBlock.push(row);
+            row.classList.add('dragging');
+        }
+    }
+    e.preventDefault();
+}
+
+function touchHandleDragMove(e) {
+    if (!touchDragActive || !touchDragBlock.length) return;
+    if (!e.touches || !e.touches.length) return;
+    const y = e.touches[0].clientY;
+    const container = document.getElementById('items-container');
+    if (!container) return;
+    const afterElement = getDragAfterElement(container, y);
+
+    // Remove current block to reinsert
+    touchDragBlock.forEach(el => {
+        if (el.parentElement === container) {
+            container.removeChild(el);
+        }
+    });
+
+    if (afterElement == null) {
+        touchDragBlock.forEach(el => container.appendChild(el));
+    } else {
+        touchDragBlock.forEach(el => container.insertBefore(el, afterElement));
+    }
+    e.preventDefault();
+}
+
+async function touchHandleDragEnd(e) {
+    if (!touchDragActive) return;
+    touchDragActive = false;
+    touchDragId = null;
+    await commitOrderFromDOM();
+    touchDragBlock.forEach(el => el.classList.remove('dragging'));
+    touchDragBlock = [];
+}
+
+// --- Phase Visibility ---
+
+function getPhaseVisibilityKey() {
+    if (typeof CURRENT_LIST_ID === 'undefined') return null;
+    return `phase-visibility-${CURRENT_LIST_ID}`;
+}
+
+function applyPhaseVisibility(phaseId, collapsed) {
+    const phaseEl = document.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
+    if (!phaseEl) return;
+    phaseEl.classList.toggle('phase-collapsed', collapsed);
+
+    const icon = phaseEl.querySelector('.phase-toggle i');
+    if (icon) {
+        icon.className = collapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up';
+    }
+
+    const phaseIdStr = String(phaseId);
+
+    // Primary: hide/show tasks explicitly assigned to this phase
+    document.querySelectorAll(`.task-item[data-phase-parent='${phaseIdStr}']`).forEach(el => {
+        el.classList.toggle('hidden-by-phase', collapsed);
+    });
+
+    // Fallback: also hide tasks visually under this phase that lack a parent attribute
+    // but are marked as under-phase, stopping at the next phase header or an item
+    // explicitly tied to another phase.
+    let sibling = phaseEl.nextElementSibling;
+    while (sibling && !sibling.classList.contains('phase')) {
+        const parentAttr = sibling.getAttribute('data-phase-parent') || '';
+        const isUnderPhase = sibling.classList.contains('under-phase');
+
+        if (parentAttr) {
+            if (parentAttr !== phaseIdStr) break; // belongs to another phase
+            sibling.classList.toggle('hidden-by-phase', collapsed);
+        } else if (isUnderPhase) {
+            sibling.classList.toggle('hidden-by-phase', collapsed);
+        } else {
+            break; // not under this phase, stop scanning
+        }
+
+        sibling = sibling.nextElementSibling;
+    }
+}
+
+function normalizePhaseParents() {
+    const items = Array.from(document.querySelectorAll('.task-item'));
+    let currentPhaseId = null;
+
+    items.forEach(el => {
+        const isPhase = el.classList.contains('phase');
+        if (isPhase) {
+            currentPhaseId = el.dataset.phaseId || null;
+            return;
+        }
+
+        // Only set when missing/empty to avoid overwriting real data
+        const existingParent = el.dataset.phaseParent;
+        if (!existingParent && currentPhaseId) {
+            el.dataset.phaseParent = currentPhaseId;
+            el.classList.add('under-phase');
+        }
+    });
+}
+
+function persistPhaseVisibility(phaseId, collapsed) {
+    const key = getPhaseVisibilityKey();
+    if (!key) return;
+    let state = {};
+    try {
+        state = JSON.parse(localStorage.getItem(key)) || {};
+    } catch (e) {
+        state = {};
+    }
+    state[phaseId] = collapsed;
+    localStorage.setItem(key, JSON.stringify(state));
+}
+
+function togglePhaseVisibility(phaseId) {
+    const phaseEl = document.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
+    if (!phaseEl) return;
+    const collapsed = !phaseEl.classList.contains('phase-collapsed');
+    applyPhaseVisibility(phaseId, collapsed);
+    persistPhaseVisibility(phaseId, collapsed);
+}
+
+function restorePhaseVisibility() {
+    const key = getPhaseVisibilityKey();
+    if (!key) return;
+    let state = {};
+    try {
+        state = JSON.parse(localStorage.getItem(key)) || {};
+    } catch (e) {
+        state = {};
+    }
+    Object.entries(state).forEach(([phaseId, collapsed]) => {
+        if (collapsed) {
+            applyPhaseVisibility(phaseId, true);
+        }
+    });
+}
 // --- Hub Calculation ---
 function calculateHubProgress() {
     // This is handled by the backend now and rendered in template/API
@@ -930,6 +1285,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     initDragAndDrop();
+    normalizePhaseParents();
+    restorePhaseVisibility();
 
     // Add long-press listeners for mobile selection
     document.querySelectorAll('.task-item').forEach(item => {

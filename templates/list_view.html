@@ -103,13 +103,14 @@
         <button class="btn-status status-pending" onclick="bulkUpdateStatus('not_started')">Not Started</button>
         <button class="btn-status status-in_progress" onclick="bulkUpdateStatus('in_progress')">Started</button>
         <button class="btn-status status-done" onclick="bulkUpdateStatus('done')">Done</button>
+        <button class="btn btn-secondary" onclick="openBulkMoveModal()">Move to…</button>
         <button class="btn-icon delete" onclick="bulkDelete()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
     </div>
 </div>
 
 <div class="task-list" id="items-container">
     {% for item in items %}
-    <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if item.phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}">
+    <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if item.phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if item.is_phase else '' }}" data-phase-parent="{{ item.phase_id if item.phase_id else '' }}">
         <div class="task-content">
             <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
@@ -118,6 +119,11 @@
 
             <div class="task-body" style="flex: 1;">
                 <div class="task-title-row">
+                    {% if item.is_phase %}
+                    <button class="btn-icon phase-toggle" onclick="togglePhaseVisibility({{ item.id }})" aria-label="Toggle phase visibility">
+                        <i class="fa-solid fa-chevron-up"></i>
+                    </button>
+                    {% endif %}
                     <div class="task-text">{{ item.content }}</div>
                     {% if item.linked_list and item.linked_list.type == 'hub' %}
                     <div class="hub-pill">Hub</div>
@@ -333,11 +339,14 @@
         <h2 id="move-item-title">Move Item</h2>
         <br>
         <input type="hidden" id="move-item-id">
-        <div class="form-group">
-            <label id="move-destination-label">Move to...</label>
-            <select id="move-destination-select" class="form-control">
-                <!-- Options will be populated by JS -->
-            </select>
+        <div class="move-nav-header">
+            <button class="btn btn-secondary" id="move-back-button" style="display:none;" onclick="moveNavBack()">Back</button>
+        </div>
+        <div id="move-selection-summary" class="move-selection-summary" style="margin: 0.5rem 0 0.75rem 0; color: var(--text-muted); font-size: 0.95rem;">
+            Select a destination.
+        </div>
+        <div id="move-step-container" class="move-step-container">
+            <!-- Navigation options populated by JS -->
         </div>
         <div class="modal-actions">
             <button class="btn" onclick="closeMoveModal()">Cancel</button>
@@ -365,6 +374,7 @@
 <script>
     const CURRENT_LIST_ID = {{ todo_list.id }};
     const CURRENT_LIST_TYPE = '{{ todo_list.type }}';
+    const CURRENT_LIST_TITLE = `{{ todo_list.title }}`;
 
     // Initial progress calculation for Hub
     {% if todo_list.type == 'hub' %}

@@ -217,19 +217,23 @@ def _slugify_filename(value):
 
 def insert_item_in_order(todo_list, new_item, phase_id=None):
     """Place a new item in the ordering, optionally directly under a phase."""
-    ordered = list(todo_list.items)
+    def is_phase_header(item):
+        return item.is_phase or item.status == 'phase'
+
+    ordered = sorted(list(todo_list.items), key=lambda i: i.order_index or 0)
     if new_item not in ordered:
         ordered.append(new_item)
 
     if phase_id:
-        phase = next((i for i in ordered if i.id == phase_id and i.is_phase), None)
+        phase = next((i for i in ordered if i.id == phase_id and is_phase_header(i)), None)
         if phase:
             try:
                 phase_idx = ordered.index(phase)
             except ValueError:
                 phase_idx = -1
             insert_idx = phase_idx + 1
-            while insert_idx < len(ordered) and ordered[insert_idx].status != 'phase':
+            # Walk forward until the next phase header
+            while insert_idx < len(ordered) and not is_phase_header(ordered[insert_idx]):
                 insert_idx += 1
             # Remove and reinsert in the right spot
             ordered = [i for i in ordered if i.id != new_item.id]
@@ -238,9 +242,41 @@ def insert_item_in_order(todo_list, new_item, phase_id=None):
     for idx, item in enumerate(ordered, start=1):
         item.order_index = idx
 
+def insert_items_under_phase(todo_list, new_items, phase_id=None):
+    """Place multiple items under a specific phase (or at end if no phase)."""
+    if not new_items:
+        return
+
+    def is_phase_header(item):
+        return item.is_phase or item.status == 'phase'
+
+    ordered = sorted(list(todo_list.items), key=lambda i: i.order_index or 0)
+    new_ids = {i.id for i in new_items if i.id is not None}
+    ordered = [i for i in ordered if i.id not in new_ids]
+
+    if phase_id:
+        phase = next((i for i in ordered if i.id == phase_id and is_phase_header(i)), None)
+        if phase:
+            try:
+                phase_idx = ordered.index(phase)
+            except ValueError:
+                phase_idx = -1
+            insert_idx = phase_idx + 1
+            while insert_idx < len(ordered) and not is_phase_header(ordered[insert_idx]):
+                insert_idx += 1
+            for offset, item in enumerate(new_items):
+                ordered.insert(insert_idx + offset, item)
+        else:
+            ordered.extend(new_items)
+    else:
+        ordered.extend(new_items)
+
+    for idx, item in enumerate(ordered, start=1):
+        item.order_index = idx
+
 def reindex_list(todo_list):
     """Ensure order_index is sequential within a list."""
-    ordered = sorted(todo_list.items, key=lambda i: i.order_index)
+    ordered = sorted(todo_list.items, key=lambda i: i.order_index or 0)
     for idx, item in enumerate(ordered, start=1):
         item.order_index = idx
 
@@ -560,23 +596,31 @@ def move_item(item_id):
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid destination phase ID'}), 400
         phase_obj = TodoItem.query.get(dest_phase_id_int)
-        if not phase_obj or phase_obj.list_id != dest_list.id or phase_obj.status != 'phase':
+        if not phase_obj or phase_obj.list_id != dest_list.id or not (phase_obj.is_phase or phase_obj.status == 'phase'):
             return jsonify({'error': 'Destination phase not found in that project'}), 404
         dest_phase_id = dest_phase_id_int
     else:
         dest_phase_id = None
 
     old_list = item.list
+    old_phase_id = item.phase_id
     item.list_id = dest_list.id
+    item.phase_id = dest_phase_id
     db.session.flush()
 
-    if dest_phase_id:
-        insert_item_in_order(dest_list, item, phase_id=dest_phase_id)
-    else:
-        insert_item_in_order(dest_list, item)
+    insert_items_under_phase(dest_list, [item], phase_id=dest_phase_id)
 
     if old_list and old_list.id != dest_list.id:
         reindex_list(old_list)
+
+    if old_phase_id:
+        old_phase = TodoItem.query.get(old_phase_id)
+        if old_phase:
+            old_phase.update_phase_status()
+    if dest_phase_id:
+        new_phase = TodoItem.query.get(dest_phase_id)
+        if new_phase:
+            new_phase.update_phase_status()
 
     db.session.commit()
     return jsonify({'message': 'Task moved successfully'})
@@ -593,9 +637,51 @@ def move_destinations(list_id):
         payload.append({
             'id': l.id,
             'title': l.title,
-            'phases': [{'id': i.id, 'content': i.content} for i in l.items if i.is_phase]
+            'phases': [{'id': i.id, 'content': i.content} for i in l.items if i.is_phase or i.status == 'phase']
         })
     return jsonify(payload)
+
+@app.route('/api/lists/<int:list_id>/phases')
+def list_phases(list_id):
+    """Return phases for a specific project list."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id, type='list').first_or_404()
+    phases = [{'id': i.id, 'content': i.content} for i in todo_list.items if i.is_phase or i.status == 'phase']
+    return jsonify({'id': todo_list.id, 'title': todo_list.title, 'phases': phases})
+
+@app.route('/api/hubs')
+def list_hubs():
+    """Return all hubs for the current user (id, title)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    hubs = TodoList.query.filter_by(user_id=user.id, type='hub').all()
+    return jsonify([{'id': h.id, 'title': h.title} for h in hubs])
+
+@app.route('/api/hubs/<int:hub_id>/children')
+def hub_children(hub_id):
+    """Return projects/hubs within a hub for navigation."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    hub = TodoList.query.filter_by(id=hub_id, user_id=user.id, type='hub').first_or_404()
+    children = []
+    for item in hub.items:
+        if not item.linked_list:
+            continue
+        child_list = item.linked_list
+        entry = {
+            'id': child_list.id,
+            'title': child_list.title,
+            'type': child_list.type,
+            'has_children': child_list.type == 'hub'
+        }
+        if child_list.type == 'list':
+            entry['phases'] = [{'id': i.id, 'content': i.content} for i in child_list.items if i.is_phase or i.status == 'phase']
+        children.append(entry)
+    return jsonify({'hub': {'id': hub.id, 'title': hub.title}, 'children': children})
 
 @app.route('/api/lists/<int:list_id>/export', methods=['GET'])
 def export_list(list_id):
@@ -649,7 +735,18 @@ def bulk_import(list_id):
 
             # Add phases and tasks to the child list
             for item_data in project_data.get('items', []):
-                child_item = TodoItem(list_id=child_list.id, **item_data)
+                status = item_data.get('status', 'not_started')
+                is_phase = status == 'phase'
+                if is_phase:
+                    status = 'not_started'
+                child_item = TodoItem(
+                    list_id=child_list.id,
+                    content=item_data.get('content', ''),
+                    description=item_data.get('description'),
+                    notes=item_data.get('notes'),
+                    status=status,
+                    is_phase=is_phase
+                )
                 db.session.add(child_item)
     else:
         # For simple lists, parsed_items is a flat list of tasks/phases
@@ -657,12 +754,17 @@ def bulk_import(list_id):
             content = entry.get('content', '').strip()
             if not content:
                 continue
+            status = entry.get('status', 'not_started')
+            is_phase = status == 'phase'
+            if is_phase:
+                status = 'not_started'
             new_item = TodoItem(
                 list_id=todo_list.id,
                 content=content,
-                status=entry.get('status', 'not_started'),
+                status=status,
                 description=entry.get('description'),
-                notes=entry.get('notes')
+                notes=entry.get('notes'),
+                is_phase=is_phase
             )
             db.session.add(new_item)
             created_items.append(new_item)
@@ -685,14 +787,24 @@ def bulk_items():
         return jsonify({'error': 'No user selected'}), 401
 
     data = request.json or {}
-    ids = data.get('ids') or []
+    raw_ids = data.get('ids') or []
     action = data.get('action')
     list_id = data.get('list_id')
 
-    if not ids or not isinstance(ids, list):
+    if not raw_ids or not isinstance(raw_ids, list):
         return jsonify({'error': 'ids list is required'}), 400
-    if action not in ['status', 'delete']:
-        return jsonify({'error': 'action must be status or delete'}), 400
+    if action not in ['status', 'delete', 'move']:
+        return jsonify({'error': 'action must be status, delete, or move'}), 400
+
+    # Normalize IDs to integers
+    ids = []
+    for raw_id in raw_ids:
+        try:
+            ids.append(int(raw_id))
+        except (ValueError, TypeError):
+            continue
+    if not ids:
+        return jsonify({'error': 'No valid item ids provided'}), 400
 
     # Filter items by user ownership
     items = TodoItem.query.select_from(TodoItem).join(TodoList, TodoItem.list_id == TodoList.id).filter(
@@ -701,7 +813,12 @@ def bulk_items():
     ).all()
 
     if list_id is not None:
-        items = [i for i in items if i.list_id == list_id]
+        try:
+            list_id_int = int(list_id)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid list_id'}), 400
+        items = [i for i in items if i.list_id == list_id_int]
+        list_id = list_id_int
 
     if not items:
         return jsonify({'error': 'No matching items found'}), 404
@@ -736,6 +853,77 @@ def bulk_items():
             db.session.delete(item)
         db.session.commit()
         return jsonify({'deleted': len(items)})
+
+    if action == 'move':
+        dest_list_id = data.get('destination_list_id')
+        dest_phase_id = data.get('destination_phase_id')
+
+        if dest_list_id is None:
+            return jsonify({'error': 'destination_list_id is required for move'}), 400
+        try:
+            dest_list_id = int(dest_list_id)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid destination list ID'}), 400
+
+        dest_list = TodoList.query.filter_by(id=dest_list_id, user_id=user.id, type='list').first()
+        if not dest_list:
+            return jsonify({'error': 'Destination is not a valid project list'}), 404
+
+        dest_phase_obj = None
+        if dest_phase_id is not None:
+            try:
+                dest_phase_id_int = int(dest_phase_id)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Invalid destination phase ID'}), 400
+            dest_phase_obj = TodoItem.query.get(dest_phase_id_int)
+            if not dest_phase_obj or dest_phase_obj.list_id != dest_list.id or not (dest_phase_obj.is_phase or dest_phase_obj.status == 'phase'):
+                return jsonify({'error': 'Destination phase not found in that project'}), 404
+            dest_phase_id = dest_phase_id_int
+        else:
+            dest_phase_id = None
+
+        # Only move regular tasks (no phases or linked projects)
+        movable_items = [i for i in items if not i.is_phase and not i.linked_list]
+        skipped = len(items) - len(movable_items)
+        if not movable_items:
+            return jsonify({'error': 'No movable tasks found (cannot move phases or projects).'}), 400
+
+        old_lists = set()
+        old_phase_ids = set()
+
+        for item in movable_items:
+            if item.phase_id:
+                old_phase_ids.add(item.phase_id)
+            if item.list_id != dest_list.id and item.list:
+                old_lists.add(item.list)
+            item.list_id = dest_list.id
+            item.phase_id = dest_phase_id
+            # Ensure relationship collection is aware of the move before ordering
+            if item not in dest_list.items:
+                dest_list.items.append(item)
+            db.session.flush()
+
+        insert_items_under_phase(dest_list, movable_items, phase_id=dest_phase_id)
+
+        for l in old_lists:
+            reindex_list(l)
+
+        # Reindex destination list to ensure contiguous ordering after multiple inserts
+        dest_list_refreshed = TodoList.query.get(dest_list.id)
+        if dest_list_refreshed:
+            reindex_list(dest_list_refreshed)
+
+        for pid in old_phase_ids:
+            phase = TodoItem.query.get(pid)
+            if phase:
+                phase.update_phase_status()
+        if dest_phase_id:
+            dest_phase_obj = TodoItem.query.get(dest_phase_id)
+            if dest_phase_obj:
+                dest_phase_obj.update_phase_status()
+
+        db.session.commit()
+        return jsonify({'moved': len(movable_items), 'skipped': skipped})
 
 
 @app.route('/api/lists/<int:list_id>/reorder', methods=['POST'])

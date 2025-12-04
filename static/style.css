@@ -897,6 +897,37 @@ body.selection-mode-active .select-item,
     box-shadow: 0 2px 8px -2px var(--indigo);
 }
 
+.phase-toggle {
+    border: none;
+    background: var(--primary-light);
+    color: var(--primary-color);
+    border-radius: 10px;
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.5rem;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition);
+}
+
+.phase-toggle:hover {
+    background: var(--primary-color);
+    color: var(--white);
+    transform: translateY(-1px);
+}
+
+.task-item.phase.phase-collapsed {
+    border-color: var(--border-color);
+    background: #f8fafc;
+}
+
+.hidden-by-phase {
+    display: none !important;
+}
+
 .hub-pill {
     display: inline-flex;
     align-items: center;
