@@ -65,6 +65,10 @@ async function loadDashboard() {
 
 function renderListCard(list) {
     const cardColorVar = list.type === 'hub' ? 'var(--accent-color)' : 'var(--primary-color)';
+    const progress = list.progress || 0;
+    const itemCount = list.items ? list.items.length : 0;
+    const doneCount = list.items ? list.items.filter(i => i.status === 'done').length : 0;
+
     return `
         <a href="/list/${list.id}" class="card" style="border-top-color: ${cardColorVar};">
             <div class="card-header">
@@ -73,24 +77,21 @@ function renderListCard(list) {
                     <span class="card-type ${list.type}">${list.type === 'hub' ? 'Project Hub' : 'List'}</span>
                 </div>
             </div>
-            ${list.type === 'hub' ? `
             <div class="progress-container">
-                <div class="progress-bar" style="width: ${list.progress}%"></div>
+                <div class="progress-bar" style="width: ${progress}%"></div>
             </div>
             <div class="progress-text">
-                <span>${list.progress}% Complete</span>
-                <button class="btn-icon delete" title="Delete" onclick="event.preventDefault(); event.stopPropagation(); deleteList(${list.id});">
-                    <i class="fa-solid fa-trash"></i>
-                </button>
+                <span>${progress}% Complete</span>
+                ${list.type === 'hub' ?
+                    `<button class="btn-icon delete" title="Delete" onclick="event.preventDefault(); event.stopPropagation(); deleteList(${list.id});">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>` :
+                    `<span>${doneCount}/${itemCount} Tasks</span>
+                    <button class="btn-icon delete" title="Delete" onclick="event.preventDefault(); event.stopPropagation(); deleteList(${list.id});">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>`
+                }
             </div>
-            ` : `
-            <div class="progress-text">
-                <span>${list.items.length} Tasks</span>
-                <button class="btn-icon delete" title="Delete" onclick="event.preventDefault(); event.stopPropagation(); deleteList(${list.id});">
-                    <i class="fa-solid fa-trash"></i>
-                </button>
-            </div>
-            `}
         </a>
     `;
 }
