@@ -899,24 +899,58 @@ body.selection-mode-active .select-item,
 
 .phase-toggle {
     border: none;
-    background: var(--primary-light);
-    color: var(--primary-color);
-    border-radius: 10px;
-    width: 34px;
-    height: 34px;
+    background: linear-gradient(135deg, var(--indigo-light), var(--secondary-light));
+    color: var(--indigo);
+    border-radius: 12px;
+    width: 40px;
+    height: 40px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    margin-right: 0.5rem;
+    margin-right: 0.75rem;
     cursor: pointer;
-    box-shadow: var(--shadow-sm);
-    transition: var(--transition);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 2px solid var(--indigo);
+    position: relative;
+    overflow: hidden;
+}
+
+.phase-toggle::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: var(--indigo);
+    transform: translate(-50%, -50%);
+    transition: width 0.3s, height 0.3s;
+}
+
+.phase-toggle:hover::before {
+    width: 100%;
+    height: 100%;
+}
+
+.phase-toggle i {
+    position: relative;
+    z-index: 1;
+    transition: color 0.25s;
 }
 
 .phase-toggle:hover {
-    background: var(--primary-color);
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3);
+}
+
+.phase-toggle:hover i {
     color: var(--white);
-    transform: translateY(-1px);
+}
+
+.phase-toggle:active {
+    transform: translateY(0) scale(0.95);
 }
 
 .task-item.phase.phase-collapsed {
@@ -1628,6 +1662,123 @@ textarea.form-control {
         opacity: 1;
         pointer-events: all;
     }
+}
+
+/* Move Modal Enhancements */
+.move-nav-header {
+    margin-bottom: 1rem;
+}
+
+#move-back-button {
+    background: linear-gradient(135deg, var(--border-color), #cbd5e1);
+    color: var(--text-color);
+    border: 2px solid var(--border-color);
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: var(--transition);
+}
+
+#move-back-button::before {
+    content: '\f060';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+}
+
+#move-back-button:hover {
+    background: linear-gradient(135deg, var(--primary-light), var(--secondary-light));
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.move-step-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0.5rem 0;
+}
+
+.move-heading {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-color);
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid var(--border-color);
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.move-step-container .btn {
+    width: 100%;
+    text-align: left;
+    justify-content: flex-start;
+    background: var(--white);
+    border: 2px solid var(--border-color);
+    color: var(--text-color);
+    padding: 1rem 1.25rem;
+    margin: 0;
+    font-size: 0.95rem;
+    position: relative;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.move-step-container .btn::before {
+    display: none;
+}
+
+.move-step-container .btn::after {
+    content: '\f054';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    position: absolute;
+    right: 1.25rem;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.5;
+    transition: all 0.25s;
+}
+
+.move-step-container .btn:hover::after {
+    right: 1rem;
+    opacity: 1;
+    color: var(--primary-color);
+}
+
+.move-step-container .btn:hover {
+    background: var(--white);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    box-shadow: var(--shadow-md);
+}
+
+.move-step-container .btn:active {
+    transform: scale(0.98);
+}
+
+/* Custom scrollbar for move container */
+.move-step-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.move-step-container::-webkit-scrollbar-track {
+    background: var(--bg-color);
+    border-radius: 4px;
+}
+
+.move-step-container::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    border-radius: 4px;
+}
+
+.move-step-container::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, var(--primary-hover), var(--secondary-hover));
 }
 
 /* Print Styles */

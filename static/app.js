@@ -462,7 +462,6 @@ function closeMoveModal() {
     moveSelectedDestination = null;
     moveNavStack = [];
     updateMoveBackButton();
-    updateMoveSelectionSummary();
 }
 
 async function moveItem() {
@@ -533,20 +532,7 @@ function updateMoveBackButton() {
     backBtn.style.display = moveNavStack.length > 1 ? 'inline-flex' : 'none';
 }
 
-function updateMoveSelectionSummary() {
-    const summary = document.getElementById('move-selection-summary');
-    if (!summary) return;
-    if (!moveSelectedDestination) {
-        summary.textContent = 'Select a destination.';
-        return;
-    }
-    if (moveSelectedDestination.destination_hub_id) {
-        summary.textContent = `Selected hub: ${moveSelectedDestination.label || moveSelectedDestination.destination_hub_id}`;
-    } else {
-        const phasePart = moveSelectedDestination.destination_phase_id ? ` / phase ${moveSelectedDestination.phase_label || moveSelectedDestination.destination_phase_id}` : ' (no phase)';
-        summary.textContent = `Selected project: ${moveSelectedDestination.label || moveSelectedDestination.destination_list_id}${phasePart}`;
-    }
-}
+// Selection summary removed - destination is selected when user clicks final option
 
 function pushMoveView(renderFn) {
     moveNavStack.push(renderFn);
@@ -568,7 +554,6 @@ function renderMoveRoot(itemType = 'task') {
     if (!panel) return;
     panel.innerHTML = '';
     moveSelectedDestination = null;
-    updateMoveSelectionSummary();
     const effectiveType = itemType || moveItemType || 'task';
     moveNavStack = [() => renderMoveRoot(effectiveType)];
     updateMoveBackButton();
@@ -576,20 +561,19 @@ function renderMoveRoot(itemType = 'task') {
     const actions = [];
     if (effectiveType === 'task') {
         actions.push({
-            label: `Move within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
+            label: `<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
             handler: () => pushMoveView(() => renderPhasePicker(CURRENT_LIST_ID, typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'This project'))
         });
     }
     actions.push({
-        label: 'Browse hubs',
+        label: '<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>Browse hubs',
         handler: () => pushMoveView(renderHubList)
     });
 
     actions.forEach(action => {
         const btn = document.createElement('button');
-        btn.className = 'btn btn-secondary';
-        btn.style.marginBottom = '0.5rem';
-        btn.textContent = action.label;
+        btn.className = 'btn';
+        btn.innerHTML = action.label;
         btn.onclick = action.handler;
         panel.appendChild(btn);
     });
@@ -598,27 +582,25 @@ function renderMoveRoot(itemType = 'task') {
 async function renderPhasePicker(listId, listTitle) {
     const panel = document.getElementById('move-step-container');
     if (!panel) return;
-    panel.innerHTML = `<div class="move-heading">Choose a phase in "${listTitle}"</div>`;
+    panel.innerHTML = `<div class="move-heading"><i class="fa-solid fa-list-check" style="margin-right: 0.5rem;"></i>Choose a phase in "${listTitle}"</div>`;
 
     try {
         const res = await fetch(`/api/lists/${listId}/phases`);
         const data = await res.json();
         const btnNoPhase = document.createElement('button');
-        btnNoPhase.className = 'btn btn-secondary';
-        btnNoPhase.style.margin = '0.25rem 0';
-        btnNoPhase.textContent = `${data.title || 'Project'} (no phase)`;
+        btnNoPhase.className = 'btn';
+        btnNoPhase.innerHTML = `<i class="fa-solid fa-inbox" style="margin-right: 0.5rem; opacity: 0.7;"></i>${data.title || 'Project'} <span style="opacity: 0.6; margin-left: 0.25rem;">(no phase)</span>`;
         btnNoPhase.onclick = () => {
             moveSelectedDestination = { destination_list_id: listId, destination_phase_id: null, label: data.title || listTitle };
-            updateMoveSelectionSummary();
+            moveItem();
         };
         panel.appendChild(btnNoPhase);
 
         if (data.phases && data.phases.length) {
             data.phases.forEach(phase => {
                 const btn = document.createElement('button');
-                btn.className = 'btn btn-secondary';
-                btn.style.margin = '0.25rem 0';
-                btn.textContent = `${data.title || listTitle} → ${phase.content}`;
+                btn.className = 'btn';
+                btn.innerHTML = `<i class="fa-solid fa-layer-group" style="margin-right: 0.5rem; opacity: 0.7;"></i>${phase.content}`;
                 btn.onclick = () => {
                     moveSelectedDestination = {
                         destination_list_id: listId,
@@ -626,101 +608,79 @@ async function renderPhasePicker(listId, listTitle) {
                         label: data.title || listTitle,
                         phase_label: phase.content
                     };
-                    updateMoveSelectionSummary();
+                    moveItem();
                 };
                 panel.appendChild(btn);
             });
         }
     } catch (e) {
-        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load phases.</div>';
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;"><i class="fa-solid fa-exclamation-triangle"></i> Unable to load phases.</div>';
     }
 }
 
 async function renderHubList() {
     const panel = document.getElementById('move-step-container');
     if (!panel) return;
-    panel.innerHTML = '<div class="move-heading">Choose a hub</div>';
+    panel.innerHTML = '<div class="move-heading"><i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>Choose a hub</div>';
     try {
         const res = await fetch('/api/hubs');
         const hubs = await res.json();
         if (!hubs.length) {
-            panel.innerHTML += '<div style="color: var(--text-muted);">No hubs available.</div>';
+            panel.innerHTML += '<div style="color: var(--text-muted); padding: 1rem; text-align: center;"><i class="fa-solid fa-inbox" style="margin-right: 0.5rem;"></i>No hubs available.</div>';
             return;
         }
         hubs.forEach(hub => {
             const btn = document.createElement('button');
-            btn.className = 'btn btn-secondary';
-            btn.style.margin = '0.25rem 0';
-            btn.textContent = hub.title;
+            btn.className = 'btn';
+            btn.innerHTML = `<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem; opacity: 0.7;"></i>${hub.title}`;
             btn.onclick = () => {
                 if (moveItemType === 'project') {
+                    // Moving a project to a hub - this is final destination
                     moveSelectedDestination = { destination_hub_id: hub.id, label: hub.title };
-                    updateMoveSelectionSummary();
+                    moveItem();
                 } else {
-                    pushMoveView(() => renderHubChildren(hub.id, hub.title));
+                    // Moving a task - show projects in this hub
+                    pushMoveView(() => renderHubProjects(hub.id, hub.title));
                 }
             };
             panel.appendChild(btn);
         });
     } catch (e) {
-        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load hubs.</div>';
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem; padding: 1rem;"><i class="fa-solid fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>Unable to load hubs.</div>';
     }
 }
 
-async function renderHubChildren(hubId, hubTitle) {
+async function renderHubProjects(hubId, hubTitle) {
     const panel = document.getElementById('move-step-container');
     if (!panel) return;
-    panel.innerHTML = `<div class="move-heading">Destinations in "${hubTitle}"</div>`;
+    panel.innerHTML = `<div class="move-heading"><i class="fa-solid fa-sitemap" style="margin-right: 0.5rem;"></i>Projects in "${hubTitle}"</div>`;
     try {
         const res = await fetch(`/api/hubs/${hubId}/children`);
         const data = await res.json();
         if (!data.children || !data.children.length) {
-            panel.innerHTML += '<div style="color: var(--text-muted); margin-top: 0.5rem;">No projects in this hub.</div>';
+            panel.innerHTML += '<div style="color: var(--text-muted); margin-top: 0.5rem; padding: 1rem; text-align: center;"><i class="fa-solid fa-inbox" style="margin-right: 0.5rem;"></i>No projects in this hub.</div>';
             return;
         }
 
         data.children.forEach(child => {
             if (child.type === 'hub') {
+                // Nested hub - navigate into it
                 const btnHub = document.createElement('button');
-                btnHub.className = 'btn btn-secondary';
-                btnHub.style.margin = '0.25rem 0';
-                btnHub.textContent = `${child.title} (Hub)`;
-                btnHub.onclick = () => pushMoveView(() => renderHubChildren(child.id, child.title));
+                btnHub.className = 'btn';
+                btnHub.innerHTML = `<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem; opacity: 0.7;"></i>${child.title} <span style="opacity: 0.6; margin-left: 0.25rem;">(Hub)</span>`;
+                btnHub.onclick = () => pushMoveView(() => renderHubProjects(child.id, child.title));
                 panel.appendChild(btnHub);
             } else {
-                // list with phases
-                const btnNoPhase = document.createElement('button');
-                btnNoPhase.className = 'btn btn-secondary';
-                btnNoPhase.style.margin = '0.25rem 0';
-                btnNoPhase.textContent = `${child.title} (no phase)`;
-                btnNoPhase.onclick = () => {
-                    moveSelectedDestination = { destination_list_id: child.id, destination_phase_id: null, label: child.title };
-                    updateMoveSelectionSummary();
-                };
-                panel.appendChild(btnNoPhase);
-
-                if (child.phases && child.phases.length) {
-                    child.phases.forEach(phase => {
-                        const btn = document.createElement('button');
-                        btn.className = 'btn btn-secondary';
-                        btn.style.margin = '0.25rem 0';
-                        btn.textContent = `${child.title} → ${phase.content}`;
-                        btn.onclick = () => {
-                            moveSelectedDestination = {
-                                destination_list_id: child.id,
-                                destination_phase_id: phase.id,
-                                label: child.title,
-                                phase_label: phase.content
-                            };
-                            updateMoveSelectionSummary();
-                        };
-                        panel.appendChild(btn);
-                    });
-                }
+                // Project list - show it to navigate to phases
+                const btnProject = document.createElement('button');
+                btnProject.className = 'btn';
+                btnProject.innerHTML = `<i class="fa-solid fa-list-check" style="margin-right: 0.5rem; opacity: 0.7;"></i>${child.title}`;
+                btnProject.onclick = () => pushMoveView(() => renderPhasePicker(child.id, child.title));
+                panel.appendChild(btnProject);
             }
         });
     } catch (e) {
-        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load hub contents.</div>';
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem; padding: 1rem;"><i class="fa-solid fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>Unable to load hub contents.</div>';
     }
 }
 // --- Confirm Modal ---
