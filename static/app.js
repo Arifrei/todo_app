@@ -24,6 +24,7 @@ let moveItemType = 'task';
 let touchDragActive = false;
 let touchDragId = null;
 let touchDragBlock = [];
+let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null };
 
 // --- Dashboard Functions ---
 
@@ -1200,6 +1201,355 @@ function restorePhaseVisibility() {
         }
     });
 }
+
+// --- Notes Functions ---
+
+function initNotesPage() {
+    const editor = document.getElementById('note-editor');
+    const listEl = document.getElementById('notes-list');
+    const titleInput = document.getElementById('note-title');
+    if (!editor || !listEl || !titleInput) return; // Not on notes page
+
+    const saveBtn = document.getElementById('note-save-btn');
+    const newBtn = document.getElementById('note-new-btn');
+    const deleteBtn = document.getElementById('note-delete-btn');
+    const refreshBtn = document.getElementById('note-refresh-btn');
+
+    if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote());
+    if (newBtn) newBtn.addEventListener('click', () => createNote());
+    if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
+    if (refreshBtn) refreshBtn.addEventListener('click', () => loadNotes({ keepSelection: true }));
+
+    editor.addEventListener('input', refreshNoteDirtyState);
+    titleInput.addEventListener('input', refreshNoteDirtyState);
+
+    bindNoteToolbar();
+    loadNotes({ keepSelection: false });
+}
+
+function bindNoteToolbar() {
+    const toolbar = document.getElementById('note-toolbar');
+    if (!toolbar) return;
+    toolbar.querySelectorAll('.note-tool').forEach(btn => {
+        // Keep selection in the editor when clicking toolbar buttons
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            applyNoteCommand(btn.dataset.command);
+        });
+    });
+}
+
+function applyNoteCommand(command) {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    editor.focus();
+
+    if (command === 'checkbox') {
+        document.execCommand('insertHTML', false, '<label class="note-inline-checkbox"><input type="checkbox"> </label>');
+        setNoteDirty(true);
+        return;
+    }
+    if (command === 'quote') {
+        if (toggleBlockquote()) return;
+        document.execCommand('formatBlock', false, 'blockquote');
+        setNoteDirty(true);
+        return;
+    }
+    if (command === 'code') {
+        if (toggleInlineCode()) return;
+        const selection = window.getSelection ? window.getSelection().toString() : '';
+        const html = selection ? `<code>${selection}</code>` : '<code></code>';
+        document.execCommand('insertHTML', false, html);
+        setNoteDirty(true);
+        return;
+    }
+
+    document.execCommand(command, false, null);
+    refreshNoteDirtyState();
+}
+
+function unwrapTag(tagName) {
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0) return false;
+    let node = sel.focusNode;
+    let el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+    while (el && el !== document.body && el.tagName !== tagName) {
+        el = el.parentElement;
+    }
+    if (!el || el.tagName !== tagName) return false;
+
+    const textNode = document.createTextNode(el.textContent || '');
+    el.replaceWith(textNode);
+
+    // Restore caret at end of unwrapped content
+    const range = document.createRange();
+    range.setStart(textNode, textNode.length);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
+}
+
+function findAncestor(el, tagName) {
+    let node = el;
+    while (node && node !== document.body) {
+        if (node.tagName === tagName) return node;
+        node = node.parentElement;
+    }
+    return null;
+}
+
+function toggleBlockquote() {
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    const el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const blockquote = findAncestor(el, 'BLOCKQUOTE');
+    if (!blockquote) return false;
+
+    const frag = document.createDocumentFragment();
+    while (blockquote.firstChild) {
+        frag.appendChild(blockquote.firstChild);
+    }
+    blockquote.replaceWith(frag);
+
+    const endNode = frag.lastChild || frag.firstChild;
+    if (endNode) {
+        const newRange = document.createRange();
+        if (endNode.nodeType === 3) {
+            newRange.setStart(endNode, endNode.length);
+        } else {
+            newRange.setStartAfter(endNode);
+        }
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    }
+    setNoteDirty(true);
+    return true;
+}
+
+function toggleInlineCode() {
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0) return false;
+    const node = sel.focusNode;
+    const codeEl = node ? findAncestor(node.nodeType === 1 ? node : node.parentElement, 'CODE') : null;
+    if (!codeEl) return false;
+
+    const textNode = document.createTextNode(codeEl.textContent || '');
+    codeEl.replaceWith(textNode);
+
+    const range = document.createRange();
+    range.setStart(textNode, textNode.length);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    setNoteDirty(true);
+    return true;
+}
+
+function setNoteDirty(dirty) {
+    notesState.dirty = dirty;
+    const saveBtn = document.getElementById('note-save-btn');
+    if (saveBtn) {
+        saveBtn.disabled = !dirty;
+    }
+}
+
+function refreshNoteDirtyState() {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const snapshot = notesState.activeSnapshot || { title: '', content: '' };
+    const currentTitle = titleInput ? (titleInput.value || '').trim() : '';
+    const currentContent = editor ? (editor.innerHTML || '').trim() : '';
+    const dirty = currentTitle !== (snapshot.title || '') || currentContent !== (snapshot.content || '');
+    setNoteDirty(dirty);
+}
+
+async function loadNotes(options = {}) {
+    const { keepSelection = false } = options;
+    const listEl = document.getElementById('notes-list');
+    if (!listEl) return;
+    try {
+        const res = await fetch('/api/notes');
+        if (!res.ok) throw new Error('Failed to load notes');
+        const notes = await res.json();
+        notesState.notes = notes;
+        renderNotesList();
+
+        if (keepSelection && notesState.activeNoteId) {
+            const nextNote = notes.find(n => n.id === notesState.activeNoteId);
+            if (nextNote) setActiveNote(nextNote.id, { skipAutosave: true });
+            else clearNoteEditor();
+        } else {
+            clearNoteEditor();
+        }
+    } catch (err) {
+        console.error('Error loading notes:', err);
+    }
+}
+
+function renderNotesList() {
+    const listEl = document.getElementById('notes-list');
+    if (!listEl) return;
+    if (!notesState.notes.length) {
+        listEl.innerHTML = `<div class="empty-state">
+            <p style="color: var(--text-muted); margin: 0;">No notes yet. Create one to get started.</p>
+        </div>`;
+        return;
+    }
+
+    listEl.innerHTML = '';
+    notesState.notes.forEach(note => {
+        const btn = document.createElement('button');
+        btn.className = `notes-list-item ${note.id === notesState.activeNoteId ? 'active' : ''}`;
+        btn.innerHTML = `
+            <div class="note-title">${note.title || 'Untitled'}</div>
+            <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
+        `;
+        btn.addEventListener('click', () => setActiveNote(note.id));
+        listEl.appendChild(btn);
+    });
+}
+
+function formatNoteDate(dateStr) {
+    if (!dateStr) return 'New note';
+    const date = new Date(dateStr);
+    return date.toLocaleString('en-US', { timeZone: 'Etc/GMT+5' });
+}
+
+async function setActiveNote(noteId, options = {}) {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const updatedLabel = document.getElementById('note-updated-label');
+    if (!editor || !titleInput || !updatedLabel) return;
+
+    if (notesState.dirty && notesState.activeNoteId === noteId && options.skipAutosave) {
+        renderNotesList();
+        return; // Keep unsaved content intact
+    }
+
+    if (notesState.dirty && notesState.activeNoteId && notesState.activeNoteId !== noteId && !options.skipAutosave) {
+        await saveCurrentNote({ silent: true });
+    }
+
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    notesState.activeNoteId = noteId;
+    titleInput.value = note.title || '';
+    editor.innerHTML = note.content || '';
+    updatedLabel.textContent = `Updated ${formatNoteDate(note.updated_at)}`;
+    notesState.activeSnapshot = {
+        title: (note.title || '').trim(),
+        content: (note.content || '').trim()
+    };
+    setNoteDirty(false);
+    renderNotesList();
+}
+
+async function saveCurrentNote(options = {}) {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const updatedLabel = document.getElementById('note-updated-label');
+    if (!editor || !titleInput) return;
+    const noteId = notesState.activeNoteId;
+    if (!notesState.dirty && noteId) {
+        // No changes: still clear and reset without touching the timestamp
+        clearNoteEditor();
+        renderNotesList();
+        return;
+    }
+
+    const payload = {
+        title: titleInput.value.trim() || 'Untitled Note',
+        content: editor.innerHTML.trim()
+    };
+
+    try {
+        let res;
+        let savedNote;
+        if (!noteId) {
+            res = await fetch('/api/notes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('Create failed');
+            savedNote = await res.json();
+            notesState.notes = [savedNote, ...notesState.notes];
+            notesState.activeNoteId = savedNote.id;
+        } else {
+            res = await fetch(`/api/notes/${noteId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('Save failed');
+            savedNote = await res.json();
+            notesState.notes = notesState.notes.map(n => n.id === savedNote.id ? savedNote : n);
+        }
+
+        if (updatedLabel) updatedLabel.textContent = `Saved ${formatNoteDate(savedNote.updated_at)}`;
+        setNoteDirty(false);
+        renderNotesList();
+        // Always clear and reset after any save (new or existing)
+        clearNoteEditor();
+        notesState.activeNoteId = null;
+        notesState.activeSnapshot = null;
+    } catch (err) {
+        console.error('Error saving note:', err);
+    }
+}
+
+async function createNote() {
+    try {
+        const res = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: 'Untitled Note', content: '' })
+        });
+        if (!res.ok) throw new Error('Create failed');
+        const newNote = await res.json();
+        notesState.activeNoteId = newNote.id;
+        notesState.notes = [newNote, ...notesState.notes];
+        renderNotesList();
+        setActiveNote(newNote.id, { skipAutosave: true });
+        const titleInput = document.getElementById('note-title');
+        if (titleInput) titleInput.focus();
+    } catch (err) {
+        console.error('Error creating note:', err);
+    }
+}
+
+async function deleteCurrentNote() {
+    const noteId = notesState.activeNoteId;
+    if (!noteId) return;
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed');
+        notesState.notes = notesState.notes.filter(n => n.id !== noteId);
+        notesState.activeNoteId = null;
+        renderNotesList();
+        clearNoteEditor();
+    } catch (err) {
+        console.error('Error deleting note:', err);
+    }
+}
+
+function clearNoteEditor() {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const updatedLabel = document.getElementById('note-updated-label');
+    if (editor) editor.innerHTML = '';
+    if (titleInput) titleInput.value = '';
+    if (updatedLabel) updatedLabel.textContent = 'No note selected';
+    notesState.activeNoteId = null;
+    notesState.activeSnapshot = null;
+    setNoteDirty(false);
+}
+
 // --- Hub Calculation ---
 function calculateHubProgress() {
     // This is handled by the backend now and rendered in template/API
@@ -1248,6 +1598,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initDragAndDrop();
     normalizePhaseParents();
     restorePhaseVisibility();
+    initNotesPage();
 
     // Add long-press listeners for mobile selection
     document.querySelectorAll('.task-item').forEach(item => {

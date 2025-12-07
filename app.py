@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
-from models import db, User, TodoList, TodoItem
+from models import db, User, TodoList, TodoItem, Note
 from datetime import datetime
 import os
 import re
@@ -334,6 +334,14 @@ def index():
         return redirect(url_for('select_user'))
     return render_template('index.html')
 
+
+@app.route('/notes')
+def notes_page():
+    """Dedicated notes workspace with rich text editor."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('notes.html')
+
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
     user = get_current_user()
@@ -405,6 +413,51 @@ def handle_lists():
         query = query.filter(TodoList.type == list_type)
     lists = query.all()
     return jsonify([l.to_dict() for l in lists])
+
+
+@app.route('/api/notes', methods=['GET', 'POST'])
+def handle_notes():
+    """List or create rich-text notes for the current user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'POST':
+        data = request.json or {}
+        title = (data.get('title') or '').strip() or 'Untitled Note'
+        content = data.get('content') or ''
+        note = Note(title=title, content=content, user_id=user.id)
+        db.session.add(note)
+        db.session.commit()
+        return jsonify(note.to_dict()), 201
+
+    notes = Note.query.filter_by(user_id=user.id).order_by(Note.updated_at.desc()).all()
+    return jsonify([n.to_dict() for n in notes])
+
+
+@app.route('/api/notes/<int:note_id>', methods=['GET', 'PUT', 'DELETE'])
+def handle_note(note_id):
+    """CRUD operations for a single note."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        db.session.delete(note)
+        db.session.commit()
+        return '', 204
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        note.title = (data.get('title') or '').strip() or 'Untitled Note'
+        note.content = data.get('content', note.content)
+        note.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify(note.to_dict())
+
+    return jsonify(note.to_dict())
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_list(list_id):

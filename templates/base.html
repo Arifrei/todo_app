@@ -30,9 +30,20 @@
             </div>
             <div class="nav-row">
                 <ul class="nav-links">
-                    <li><a href="/" class="active"><i class="fa-solid fa-house"></i> Dashboard</a></li>
-                    <!-- We could add more links here later -->
+                    <li>
+                        <a href="/" class="{{ 'active' if request.path == '/' else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-list-check"></i></span>
+                            <span class="nav-label">Tasks</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/notes" class="{{ 'active' if request.path.startswith('/notes') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-note-sticky"></i></span>
+                            <span class="nav-label">Notes</span>
+                        </a>
+                    </li>
                 </ul>
+
                 <div class="user-chip user-trigger" onclick="toggleUserMenu(event)">
                     <i class="fa-solid fa-user"></i>
                     <span id="current-username">Loading...</span>

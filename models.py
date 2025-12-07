@@ -139,3 +139,22 @@ class TodoItem(db.Model):
         if self.linked_list:
             data['linked_list_progress'] = self.linked_list.get_progress()
         return data
+
+
+class Note(db.Model):
+    """Standalone rich-text note owned by a user."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(150), nullable=False, default='Untitled Note')
+    content = db.Column(db.Text, nullable=True)  # Stored as HTML
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'title': self.title,
+            'content': self.content or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
