@@ -133,6 +133,7 @@ class TodoItem(db.Model):
             'list_id': self.list_id,
             'content': self.content,
             'status': self.status,
+            'is_phase': self.is_phase,
             'linked_list_id': self.linked_list_id,
             'order_index': self.order_index
         }

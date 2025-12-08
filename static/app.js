@@ -67,8 +67,9 @@ async function loadDashboard() {
 function renderListCard(list) {
     const cardColorVar = list.type === 'hub' ? 'var(--accent-color)' : 'var(--primary-color)';
     const progress = list.progress || 0;
-    const itemCount = list.items ? list.items.length : 0;
-    const doneCount = list.items ? list.items.filter(i => i.status === 'done').length : 0;
+    const items = (list.items || []).filter(i => !i.is_phase);
+    const itemCount = items.length;
+    const doneCount = items.filter(i => i.status === 'done').length;
 
     return `
         <a href="/list/${list.id}" class="card" style="border-top-color: ${cardColorVar};">
@@ -1598,6 +1599,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initDragAndDrop();
     normalizePhaseParents();
     restorePhaseVisibility();
+    initStickyListHeader();
+    initMobileTopbar();
     initNotesPage();
 
     // Add long-press listeners for mobile selection
@@ -1610,6 +1613,59 @@ document.addEventListener('DOMContentLoaded', () => {
         item.addEventListener('mouseleave', handleMouseHoldEnd);
     });
 });
+
+function initStickyListHeader() {
+    const header = document.querySelector('.list-header');
+    if (!header) return;
+    header.classList.add('sticky-header');
+
+    let lastScroll = window.scrollY;
+    window.addEventListener('scroll', () => {
+        const current = window.scrollY;
+        if (current > lastScroll + 10) {
+            header.classList.add('header-hidden');
+        } else if (current < lastScroll - 10) {
+            header.classList.remove('header-hidden');
+        }
+        lastScroll = current;
+    }, { passive: true });
+}
+
+function initMobileTopbar() {
+    const sidebar = document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    const media = window.matchMedia('(max-width: 1024px)');
+    let lastScroll = window.scrollY;
+
+    const handleScroll = () => {
+        if (!media.matches) {
+            sidebar.classList.remove('topbar-hidden');
+            lastScroll = window.scrollY;
+            return;
+        }
+
+        const current = window.scrollY;
+        if (current > lastScroll + 8) {
+            sidebar.classList.add('topbar-hidden');
+        } else if (current < lastScroll - 8) {
+            sidebar.classList.remove('topbar-hidden');
+        }
+        lastScroll = current;
+    };
+
+    const handleMediaChange = () => {
+        sidebar.classList.remove('topbar-hidden');
+        lastScroll = window.scrollY;
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    if (typeof media.addEventListener === 'function') {
+        media.addEventListener('change', handleMediaChange);
+    } else if (typeof media.addListener === 'function') {
+        media.addListener(handleMediaChange);
+    }
+}
 
 let mouseHoldTimer = null;
 

@@ -7,9 +7,10 @@
     <a href="/list/{{ parent_list.id }}" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to {{
         parent_list.title }}</a>
     {% endif %}
+    <a href="/" class="back-link" style="margin-left: 0.75rem;"><i class="fa-solid fa-house"></i> Home</a>
 </div>
 
-<div class="list-header">
+<div class="list-header sticky-header">
     <div class="card-header">
         <div>
             <h1 id="list-title-display">{{ todo_list.title }}</h1>
