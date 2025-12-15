@@ -39,7 +39,8 @@ class TodoList(db.Model):
     )
 
     def get_progress(self):
-        total = len(self.items)
+        tasks_only = [i.ensure_phase_canonical() for i in self.items if not i.is_phase_header()]
+        total = len(tasks_only)
         if total == 0:
             return 0
 
@@ -48,7 +49,7 @@ class TodoList(db.Model):
         # if status == 'done' else 0.0. This gives the hub a blended progress
         # based on its child projects and simple tasks.
         total_score = 0.0
-        for item in self.items:
+        for item in tasks_only:
             try:
                 if item.linked_list:
                     # Child project contributes its progress (0.0 - 1.0)
@@ -84,7 +85,7 @@ class TodoItem(db.Model):
     content = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
-    status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done', 'phase'
+    status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done'
     order_index = db.Column(db.Integer, default=0)  # For manual ordering
     is_phase = db.Column(db.Boolean, default=False)  # Track if this is a phase header
 
@@ -96,12 +97,23 @@ class TodoItem(db.Model):
     phase_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     phase = db.relationship('TodoItem', remote_side=[id], backref='phase_tasks', foreign_keys=[phase_id])
 
+    def is_phase_header(self):
+        """Canonical check for phase headers. Support legacy records where status was 'phase'."""
+        return self.is_phase or self.status == 'phase'
+
+    def ensure_phase_canonical(self):
+        """Normalize legacy 'phase' status to canonical flag + not_started status (no DB commit)."""
+        if self.status == 'phase':
+            self.is_phase = True
+            self.status = 'not_started'
+        return self
+
     def get_phase_progress(self):
         """Calculate completion percentage for a phase based on its tasks"""
-        if not self.is_phase:
+        if not self.is_phase_header():
             return 0
 
-        tasks = [task for task in self.phase_tasks if not task.is_phase]
+        tasks = [task for task in self.phase_tasks if not task.is_phase_header()]
         if not tasks:
             return 0
 
@@ -110,10 +122,10 @@ class TodoItem(db.Model):
 
     def update_phase_status(self):
         """Automatically update phase status based on child tasks"""
-        if not self.is_phase:
+        if not self.is_phase_header():
             return
 
-        tasks = [task for task in self.phase_tasks if not task.is_phase]
+        tasks = [task for task in self.phase_tasks if not task.is_phase_header()]
         if not tasks:
             return
 
@@ -128,16 +140,21 @@ class TodoItem(db.Model):
             self.status = 'not_started'
 
     def to_dict(self):
+        self.ensure_phase_canonical()
         data = {
             'id': self.id,
             'list_id': self.list_id,
             'content': self.content,
+            'description': self.description,
+            'notes': self.notes,
             'status': self.status,
             'is_phase': self.is_phase,
+            'phase_id': self.phase_id,
             'linked_list_id': self.linked_list_id,
-            'order_index': self.order_index
+            'order_index': self.order_index,
         }
         if self.linked_list:
+            data['linked_list_type'] = self.linked_list.type
             data['linked_list_progress'] = self.linked_list.get_progress()
         return data
 

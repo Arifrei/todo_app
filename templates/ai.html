@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<header class="header-row">
+    <div>
+        <h1>AI Assistant</h1>
+        <p style="color: var(--text-muted);">Ask to add, list, move, or update tasks and projects.</p>
+    </div>
+</header>
+
+<div class="ai-page-container">
+    <div class="ai-messages" id="ai-page-messages"></div>
+    <div class="ai-input-row">
+        <textarea id="ai-page-input" class="form-control" rows="3" placeholder="e.g. Add “Finish onboarding” under Phase Week 1 in Onboarding"></textarea>
+        <button class="btn btn-primary" id="ai-page-send">Send</button>
+    </div>
+    <div class="ai-hint">AI uses your selected user. Data is applied immediately.</div>
+</div>
+{% endblock %}

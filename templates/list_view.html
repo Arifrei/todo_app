@@ -1,7 +1,8 @@
 {% extends 'base.html' %}
 
 {% block content %}
-{% set phases = items|selectattr('status', 'equalto', 'phase')|list %}
+{# Phase headers: anything marked is_phase or legacy status == 'phase' #}
+{% set phases = items|selectattr('is_phase', 'equalto', True)|list + items|selectattr('status', 'equalto', 'phase')|list %}
 <div class="nav-links" style="margin-bottom: 1rem; display: flex; align-items: center;">
     {% if parent_list %}
     <a href="/list/{{ parent_list.id }}" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to {{

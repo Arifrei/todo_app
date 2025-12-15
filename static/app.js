@@ -1602,6 +1602,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initStickyListHeader();
     initMobileTopbar();
     initNotesPage();
+    initAIPage();
 
     // Add long-press listeners for mobile selection
     document.querySelectorAll('.task-item').forEach(item => {
@@ -1612,6 +1613,8 @@ document.addEventListener('DOMContentLoaded', () => {
         item.addEventListener('mouseup', handleMouseHoldEnd);
         item.addEventListener('mouseleave', handleMouseHoldEnd);
     });
+
+    initAIPanel();
 });
 
 function initStickyListHeader() {
@@ -1690,4 +1693,120 @@ function handleMouseHoldStart(e) {
 function handleMouseHoldEnd() {
     clearTimeout(mouseHoldTimer);
     mouseHoldTimer = null;
+}
+
+// --- AI Assistant ---
+let aiMessages = [];
+let aiSending = false;
+let aiTyping = false;
+
+function toggleAIPanel() {
+    const panel = document.getElementById('ai-panel');
+    if (!panel) return;
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) {
+        const input = document.getElementById('ai-input');
+        if (input) input.focus();
+    }
+}
+
+function formatAIMessage(text) {
+    // Convert markdown-style formatting to HTML
+    let formatted = text;
+
+    // Convert **text** to <strong>text</strong>
+    formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Convert newlines to <br>
+    formatted = formatted.replace(/\n/g, '<br>');
+
+    // Convert bullet points at start of lines to proper bullets
+    formatted = formatted.replace(/^•\s/gm, '&nbsp;&nbsp;• ');
+    formatted = formatted.replace(/<br>•\s/g, '<br>&nbsp;&nbsp;• ');
+
+    return formatted;
+}
+
+function renderAIMessages(context = 'panel') {
+    const containerId = context === 'page' ? 'ai-page-messages' : 'ai-messages';
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    aiMessages.forEach(m => {
+        const div = document.createElement('div');
+        div.className = `ai-msg ${m.role === 'user' ? 'user' : 'ai'}`;
+
+        if (m.role === 'assistant') {
+            // Format assistant messages with HTML
+            div.innerHTML = formatAIMessage(m.content);
+        } else {
+            // User messages remain as plain text
+            div.textContent = m.content;
+        }
+
+        container.appendChild(div);
+    });
+    if (aiTyping) {
+        const typing = document.createElement('div');
+        typing.className = 'ai-typing';
+        typing.innerHTML = `<span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span>`;
+        container.appendChild(typing);
+    }
+    container.scrollTop = container.scrollHeight;
+}
+
+async function sendAIPrompt(context = 'panel') {
+    if (aiSending) return;
+    const inputId = context === 'page' ? 'ai-page-input' : 'ai-input';
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const text = (input.value || '').trim();
+    if (!text) return;
+
+    aiSending = true;
+    aiTyping = true;
+    aiMessages.push({ role: 'user', content: text });
+    renderAIMessages(context);
+    input.value = '';
+
+    try {
+        const res = await fetch('/api/ai/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: aiMessages })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            aiMessages.push({ role: 'assistant', content: `Error: ${err.error || 'Request failed'}` });
+        } else {
+            const data = await res.json();
+            const reply = data.reply || 'No reply';
+            aiMessages.push({ role: 'assistant', content: reply });
+        }
+    } catch (e) {
+        aiMessages.push({ role: 'assistant', content: 'Error contacting AI.' });
+    } finally {
+        aiSending = false;
+        aiTyping = false;
+        renderAIMessages(context);
+    }
+}
+
+function initAIPanel() {
+    renderAIMessages('panel');
+}
+
+function initAIPage() {
+    const pageMessages = document.getElementById('ai-page-messages');
+    const pageInput = document.getElementById('ai-page-input');
+    const pageSend = document.getElementById('ai-page-send');
+    if (!pageMessages || !pageInput || !pageSend) return;
+    renderAIMessages('page');
+    pageSend.addEventListener('click', () => sendAIPrompt('page'));
+    pageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            sendAIPrompt('page');
+        }
+    });
 }

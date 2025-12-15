@@ -42,6 +42,12 @@
                             <span class="nav-label">Notes</span>
                         </a>
                     </li>
+                    <li>
+                        <a href="/ai" class="{{ 'active' if request.path.startswith('/ai') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-robot"></i></span>
+                            <span class="nav-label">Assistant</span>
+                        </a>
+                    </li>
                 </ul>
 
                 <div class="user-chip user-trigger" onclick="toggleUserMenu(event)">
@@ -89,6 +95,29 @@
                 <button class="btn btn-danger" id="confirm-yes-button">Confirm</button>
             </div>
         </div>
+    </div>
+
+    <!-- AI Assistant Panel -->
+    <div class="ai-launcher" onclick="toggleAIPanel()">
+        <i class="fa-solid fa-robot"></i>
+        <span>Ask AI</span>
+    </div>
+    <div class="ai-panel" id="ai-panel">
+        <div class="ai-panel-header">
+            <div>
+                <strong>AI Assistant</strong>
+                <div class="ai-subtitle">Ask to add/list/move tasks</div>
+            </div>
+            <button class="btn-icon" onclick="toggleAIPanel()" aria-label="Close AI panel">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="ai-messages" id="ai-messages"></div>
+        <div class="ai-input-row">
+            <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Add ‘Finish onboarding’ under Phase Week 1 in Project Onboarding"></textarea>
+            <button class="btn btn-primary" onclick="sendAIPrompt()">Send</button>
+        </div>
+        <div class="ai-hint">Headers are auto-sent from your session; AI uses your data.</div>
     </div>
 
     <script src="{{ url_for('static', filename='app.js', v='3') }}"></script>

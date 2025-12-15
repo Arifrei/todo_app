@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from models import db, User, TodoList, TodoItem, Note
+from ai_service import run_ai_chat
 from datetime import datetime
 import os
 import re
@@ -9,11 +10,27 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
+app.config['API_SHARED_KEY'] = os.environ.get('API_SHARED_KEY')  # Optional shared key for API callers
 
 db.init_app(app)
 
 def get_current_user():
-    """Get current user from session, or None if not set"""
+    """Resolve the current user from a shared API key + user id header, else fall back to session."""
+    # Header-based auth for AI/service callers
+    api_key = request.headers.get('X-API-Key')
+    api_user_id = request.headers.get('X-User-Id')
+    shared_key = app.config.get('API_SHARED_KEY')
+    if shared_key and api_key and api_user_id:
+        try:
+            api_uid_int = int(api_user_id)
+        except (TypeError, ValueError):
+            api_uid_int = None
+        if api_uid_int and api_key == shared_key:
+            user = User.query.get(api_uid_int)
+            if user:
+                return user
+
+    # Session-based auth for browser users
     user_id = session.get('user_id')
     if user_id:
         return User.query.get(user_id)
@@ -55,12 +72,12 @@ def parse_outline(outline_text, list_type='list'):
         if stripped.startswith('#'):
             title, description, notes = split_fields(stripped.lstrip('#').strip())
             if title:
-                items.append({'content': title, 'status': 'phase', 'description': description, 'notes': notes})
+                items.append({'content': title, 'status': 'not_started', 'is_phase': True, 'description': description, 'notes': notes})
             continue
         if stripped.endswith(':') and len(stripped) > 1:
             title, description, notes = split_fields(stripped[:-1].strip())
             if title:
-                items.append({'content': title, 'status': 'phase', 'description': description, 'notes': notes})
+                items.append({'content': title, 'status': 'not_started', 'is_phase': True, 'description': description, 'notes': notes})
             continue
 
         # Checkbox tasks: "- [ ]", "- [x]", "- [>]", "- [~]"
@@ -77,7 +94,7 @@ def parse_outline(outline_text, list_type='list'):
             if body:
                 content, description, notes = split_fields(body)
                 if content:
-                    items.append({'content': content, 'status': status, 'description': description, 'notes': notes})
+                    items.append({'content': content, 'status': status, 'description': description, 'notes': notes, 'is_phase': False})
             continue
 
         # Bullet tasks: "- task" or "* task"
@@ -87,13 +104,13 @@ def parse_outline(outline_text, list_type='list'):
             if body:
                 content, description, notes = split_fields(body)
                 if content:
-                    items.append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes})
+                    items.append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes, 'is_phase': False})
             continue
 
         # Fallback: treat as a task line
         content, description, notes = split_fields(stripped)
         if content:
-            items.append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes})
+            items.append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes, 'is_phase': False})
 
     return items
 
@@ -138,7 +155,7 @@ def parse_hub_outline(outline_text):
         if stripped.startswith('## '):
             title, description, notes = split_fields(stripped.lstrip('## ').strip())
             if title:
-                current_project['items'].append({'content': title, 'status': 'phase', 'description': description, 'notes': notes})
+                current_project['items'].append({'content': title, 'status': 'not_started', 'is_phase': True, 'description': description, 'notes': notes})
             continue
 
         # Task: Indented list item
@@ -149,7 +166,7 @@ def parse_hub_outline(outline_text):
             status = {'x': 'done', '>': 'in_progress', '~': 'in_progress', ' ': 'not_started'}.get(mark, 'not_started')
             content, description, notes = split_fields(body)
             if content:
-                current_project['items'].append({'content': content, 'status': status, 'description': description, 'notes': notes})
+                current_project['items'].append({'content': content, 'status': status, 'description': description, 'notes': notes, 'is_phase': False})
             continue
 
         bullet_match = re.match(r"^[-*]\s+(?P<body>.+)$", stripped)
@@ -157,7 +174,7 @@ def parse_hub_outline(outline_text):
             body = bullet_match.group('body').strip()
             content, description, notes = split_fields(body)
             if content:
-                current_project['items'].append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes})
+                current_project['items'].append({'content': content, 'status': 'not_started', 'description': description, 'notes': notes, 'is_phase': False})
             continue
 
     return projects
@@ -188,7 +205,7 @@ def export_list_outline(todo_list, indent=0):
 
     if todo_list.type == 'list':
         for item in ordered_items:
-            if item.is_phase:
+            if is_phase_header(item):
                 lines.append(f"{prefix}## {_format_metadata(item.content, item.description, item.notes)}")
                 continue
             line_prefix = prefix + ('  ' if item.phase_id else '')
@@ -215,11 +232,25 @@ def _slugify_filename(value):
     return value or 'list'
 
 
+def is_phase_header(item):
+    """Canonical check for phase headers (supports legacy 'phase' status)."""
+    return getattr(item, 'is_phase', False) or getattr(item, 'status', None) == 'phase'
+
+
+def canonicalize_phase_flags(todo_list):
+    """Normalize legacy phase markers on a list; commits only when changes occur."""
+    changed = False
+    for item in todo_list.items:
+        if item.status == 'phase' and not item.is_phase:
+            item.is_phase = True
+            item.status = 'not_started'
+            changed = True
+    if changed:
+        db.session.commit()
+
+
 def insert_item_in_order(todo_list, new_item, phase_id=None):
     """Place a new item in the ordering, optionally directly under a phase."""
-    def is_phase_header(item):
-        return item.is_phase or item.status == 'phase'
-
     ordered = sorted(list(todo_list.items), key=lambda i: i.order_index or 0)
     if new_item not in ordered:
         ordered.append(new_item)
@@ -246,9 +277,6 @@ def insert_items_under_phase(todo_list, new_items, phase_id=None):
     """Place multiple items under a specific phase (or at end if no phase)."""
     if not new_items:
         return
-
-    def is_phase_header(item):
-        return item.is_phase or item.status == 'phase'
 
     ordered = sorted(list(todo_list.items), key=lambda i: i.order_index or 0)
     new_ids = {i.id for i in new_items if i.id is not None}
@@ -342,12 +370,20 @@ def notes_page():
         return redirect(url_for('select_user'))
     return render_template('notes.html')
 
+@app.route('/ai')
+def ai_page():
+    """AI assistant full page."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('ai.html')
+
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
     user = get_current_user()
     if not user:
         return redirect(url_for('select_user'))
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
+    canonicalize_phase_flags(todo_list)
 
     # Find parent if exists (if this list is linked by an item)
     parent_item = TodoItem.query.filter_by(linked_list_id=list_id).first()
@@ -361,7 +397,7 @@ def list_view(list_id):
 
     # The relationship is already ordered by order_index
     for item in todo_list.items:
-        if item.is_phase:
+        if is_phase_header(item):
             if current_phase_items:
                 phase_groups.append(current_phase_items)
             phase_groups.append([item]) # The phase header itself
@@ -379,7 +415,7 @@ def list_view(list_id):
     db.session.commit()
 
     for group in phase_groups:
-        if len(group) == 1 and group[0].is_phase:
+        if len(group) == 1 and is_phase_header(group[0]):
             sorted_items.extend(group)
         else:
             incomplete = sorted([i for i in group if i.status != 'done'], key=lambda x: x.order_index)
@@ -465,6 +501,7 @@ def handle_list(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
+    canonicalize_phase_flags(todo_list)
     
     if request.method == 'DELETE':
         # Delete any child lists linked from this list (for hubs)
@@ -483,6 +520,39 @@ def handle_list(list_id):
         
     return jsonify(todo_list.to_dict())
 
+
+@app.route('/api/lists/<int:list_id>/items', methods=['GET'])
+def list_items_in_list(list_id):
+    """Return tasks/phases for a list with optional filters for AI/clients."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
+    canonicalize_phase_flags(todo_list)
+
+    status_filter = request.args.get('status')
+    phase_id = request.args.get('phase_id')
+    include_phases = request.args.get('include_phases', 'true').lower() in ['1', 'true', 'yes', 'on']
+
+    allowed_statuses = {'not_started', 'in_progress', 'done'}
+    if status_filter and status_filter not in allowed_statuses:
+        return jsonify({'error': 'Invalid status filter'}), 400
+
+    items = list(todo_list.items)
+    if status_filter:
+        items = [i for i in items if i.status == status_filter]
+    if not include_phases:
+        items = [i for i in items if not is_phase_header(i)]
+    if phase_id is not None:
+        try:
+            phase_id_int = int(phase_id)
+            items = [i for i in items if i.phase_id == phase_id_int or (include_phases and i.id == phase_id_int)]
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid phase_id'}), 400
+
+    items = sorted(items, key=lambda i: i.order_index or 0)
+    return jsonify([i.to_dict() for i in items])
+
 @app.route('/api/lists/<int:list_id>/items', methods=['POST'])
 def create_item(list_id):
     user = get_current_user()
@@ -497,12 +567,11 @@ def create_item(list_id):
     project_type = data.get('project_type', 'list') # Default to 'list'
     phase_id = data.get('phase_id')
     status = data.get('status', 'not_started')
-    is_phase_item = (status == 'phase')
-    if status not in ['not_started', 'in_progress', 'done', 'phase']:
+    is_phase_item = bool(data.get('is_phase')) or status == 'phase'
+    allowed_statuses = {'not_started', 'in_progress', 'done'}
+    if status not in allowed_statuses:
         status = 'not_started'
-    if status == 'phase':
-        status = 'not_started'  # Phases start as not_started
-    if is_project:
+    if is_phase_item or is_project:
         status = 'not_started'
     next_order = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=list_id).scalar() + 1
     new_item = TodoItem(
@@ -512,7 +581,7 @@ def create_item(list_id):
         notes=notes,
         status=status,
         order_index=next_order,
-        phase_id=int(phase_id) if phase_id else None,
+        phase_id=int(phase_id) if (phase_id and not is_phase_item) else None,
         is_phase=is_phase_item
     )
     
@@ -572,6 +641,9 @@ def handle_item(item_id):
         data = request.json
         old_status = item.status
         new_status = data.get('status', item.status)
+        allowed_statuses = {'not_started', 'in_progress', 'done'}
+        if new_status not in allowed_statuses:
+            new_status = item.status
         if new_status == 'done' and item.status != 'done':
             item.completed_at = datetime.utcnow()
         elif new_status != 'done':
@@ -590,6 +662,126 @@ def handle_item(item_id):
         db.session.commit()
         return jsonify(item.to_dict())
 
+
+@app.route('/api/items', methods=['GET'])
+def query_items():
+    """Query items across lists with filters for AI/clients."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    status_filter = request.args.get('status')
+    list_id = request.args.get('list_id')
+    phase_id = request.args.get('phase_id')
+    is_phase_param = request.args.get('is_phase')
+    search = request.args.get('q', '').strip()
+    try:
+        limit = int(request.args.get('limit', 100))
+    except (ValueError, TypeError):
+        limit = 100
+    limit = min(max(limit, 1), 250)
+
+    allowed_statuses = {'not_started', 'in_progress', 'done'}
+    if status_filter and status_filter not in allowed_statuses:
+        return jsonify({'error': 'Invalid status filter'}), 400
+
+    query = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(TodoList.user_id == user.id)
+    if list_id:
+        try:
+            list_id_int = int(list_id)
+            query = query.filter(TodoItem.list_id == list_id_int)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid list_id'}), 400
+    if phase_id:
+        try:
+            phase_id_int = int(phase_id)
+            query = query.filter(TodoItem.phase_id == phase_id_int)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid phase_id'}), 400
+    if status_filter:
+        query = query.filter(TodoItem.status == status_filter)
+    if is_phase_param is not None:
+        is_phase_bool = is_phase_param.lower() in ['1', 'true', 'yes', 'on']
+        query = query.filter(TodoItem.is_phase == is_phase_bool)
+    if search:
+        like_expr = f"%{search}%"
+        query = query.filter(db.or_(TodoItem.content.ilike(like_expr), TodoItem.description.ilike(like_expr)))
+
+    items = query.order_by(TodoItem.list_id, TodoItem.order_index).limit(limit).all()
+    payload = []
+    for item in items:
+        data = item.to_dict()
+        data['list_title'] = item.list.title
+        data['list_type'] = item.list.type
+        payload.append(data)
+    return jsonify(payload)
+
+
+@app.route('/api/search')
+def search_entities():
+    """Simple search across lists and items for AI resolution."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return jsonify({'error': 'Query parameter q is required'}), 400
+
+    try:
+        list_limit = int(request.args.get('list_limit', 20))
+    except (ValueError, TypeError):
+        list_limit = 20
+    list_limit = min(max(list_limit, 1), 100)
+
+    try:
+        item_limit = int(request.args.get('item_limit', 50))
+    except (ValueError, TypeError):
+        item_limit = 50
+    item_limit = min(max(item_limit, 1), 200)
+    like_expr = f"%{q}%"
+
+    lists = TodoList.query.filter(
+        TodoList.user_id == user.id,
+        TodoList.title.ilike(like_expr)
+    ).order_by(TodoList.title.asc()).limit(list_limit).all()
+
+    items = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+        TodoList.user_id == user.id,
+        db.or_(TodoItem.content.ilike(like_expr), TodoItem.description.ilike(like_expr))
+    ).order_by(TodoItem.list_id, TodoItem.order_index).limit(item_limit).all()
+
+    return jsonify({
+        'lists': [{'id': l.id, 'title': l.title, 'type': l.type} for l in lists],
+        'items': [{
+            'id': i.id,
+            'content': i.content,
+            'status': i.status,
+            'is_phase': i.is_phase,
+            'list_id': i.list_id,
+            'list_title': i.list.title,
+            'list_type': i.list.type,
+            'phase_id': i.phase_id
+        } for i in items]
+    })
+
+
+@app.route('/api/ai/chat', methods=['POST'])
+def ai_chat():
+    """AI chat endpoint that routes through OpenAI with function-calling tools."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    messages = data.get('messages', [])
+    model = data.get('model')
+    try:
+        result = run_ai_chat(user.id, messages, model=model)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+    return jsonify(result)
+
 @app.route('/api/items/<int:item_id>/move', methods=['POST'])
 def move_item(item_id):
     user = get_current_user()
@@ -606,7 +798,7 @@ def move_item(item_id):
     dest_phase_id = data.get('destination_phase_id')
 
     # Prevent moving phase headers for now
-    if item.is_phase:
+    if is_phase_header(item):
         return jsonify({'error': 'Cannot move a phase header.'}), 400
 
     # --- Moving a Project to another Hub ---
@@ -649,7 +841,7 @@ def move_item(item_id):
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid destination phase ID'}), 400
         phase_obj = TodoItem.query.get(dest_phase_id_int)
-        if not phase_obj or phase_obj.list_id != dest_list.id or not (phase_obj.is_phase or phase_obj.status == 'phase'):
+        if not phase_obj or phase_obj.list_id != dest_list.id or not is_phase_header(phase_obj):
             return jsonify({'error': 'Destination phase not found in that project'}), 404
         dest_phase_id = dest_phase_id_int
     else:
@@ -687,10 +879,11 @@ def move_destinations(list_id):
     project_lists = TodoList.query.filter_by(user_id=user.id, type='list').all()
     payload = []
     for l in project_lists:
+        canonicalize_phase_flags(l)
         payload.append({
             'id': l.id,
             'title': l.title,
-            'phases': [{'id': i.id, 'content': i.content} for i in l.items if i.is_phase or i.status == 'phase']
+            'phases': [{'id': i.id, 'content': i.content} for i in l.items if is_phase_header(i)]
         })
     return jsonify(payload)
 
@@ -701,7 +894,8 @@ def list_phases(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id, type='list').first_or_404()
-    phases = [{'id': i.id, 'content': i.content} for i in todo_list.items if i.is_phase or i.status == 'phase']
+    canonicalize_phase_flags(todo_list)
+    phases = [{'id': i.id, 'content': i.content} for i in todo_list.items if is_phase_header(i)]
     return jsonify({'id': todo_list.id, 'title': todo_list.title, 'phases': phases})
 
 @app.route('/api/hubs')
@@ -725,6 +919,7 @@ def hub_children(hub_id):
         if not item.linked_list:
             continue
         child_list = item.linked_list
+        canonicalize_phase_flags(child_list)
         entry = {
             'id': child_list.id,
             'title': child_list.title,
@@ -732,7 +927,7 @@ def hub_children(hub_id):
             'has_children': child_list.type == 'hub'
         }
         if child_list.type == 'list':
-            entry['phases'] = [{'id': i.id, 'content': i.content} for i in child_list.items if i.is_phase or i.status == 'phase']
+            entry['phases'] = [{'id': i.id, 'content': i.content} for i in child_list.items if is_phase_header(i)]
         children.append(entry)
     return jsonify({'hub': {'id': hub.id, 'title': hub.title}, 'children': children})
 
@@ -743,6 +938,7 @@ def export_list(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
+    canonicalize_phase_flags(todo_list)
 
     lines = export_list_outline(todo_list)
     content = '\n'.join(lines)
@@ -789,7 +985,9 @@ def bulk_import(list_id):
             # Add phases and tasks to the child list
             for item_data in project_data.get('items', []):
                 status = item_data.get('status', 'not_started')
-                is_phase = status == 'phase'
+                is_phase = bool(item_data.get('is_phase')) or status == 'phase'
+                if status not in ['not_started', 'in_progress', 'done']:
+                    status = 'not_started'
                 if is_phase:
                     status = 'not_started'
                 child_item = TodoItem(
@@ -801,6 +999,7 @@ def bulk_import(list_id):
                     is_phase=is_phase
                 )
                 db.session.add(child_item)
+                created_items.append(child_item)
     else:
         # For simple lists, parsed_items is a flat list of tasks/phases
         for entry in parsed_items:
@@ -808,7 +1007,9 @@ def bulk_import(list_id):
             if not content:
                 continue
             status = entry.get('status', 'not_started')
-            is_phase = status == 'phase'
+            is_phase = bool(entry.get('is_phase')) or status == 'phase'
+            if status not in ['not_started', 'in_progress', 'done']:
+                status = 'not_started'
             if is_phase:
                 status = 'not_started'
             new_item = TodoItem(
@@ -884,7 +1085,7 @@ def bulk_items():
         affected_phases = set()
         for item in items:
             # Avoid changing phases to task statuses inadvertently
-            if item.is_phase:
+            if is_phase_header(item):
                 continue
             item.status = status
             if item.phase_id:
@@ -929,14 +1130,14 @@ def bulk_items():
             except (ValueError, TypeError):
                 return jsonify({'error': 'Invalid destination phase ID'}), 400
             dest_phase_obj = TodoItem.query.get(dest_phase_id_int)
-            if not dest_phase_obj or dest_phase_obj.list_id != dest_list.id or not (dest_phase_obj.is_phase or dest_phase_obj.status == 'phase'):
+            if not dest_phase_obj or dest_phase_obj.list_id != dest_list.id or not is_phase_header(dest_phase_obj):
                 return jsonify({'error': 'Destination phase not found in that project'}), 404
             dest_phase_id = dest_phase_id_int
         else:
             dest_phase_id = None
 
         # Only move regular tasks (no phases or linked projects)
-        movable_items = [i for i in items if not i.is_phase and not i.linked_list]
+        movable_items = [i for i in items if not is_phase_header(i) and not i.linked_list]
         skipped = len(items) - len(movable_items)
         if not movable_items:
             return jsonify({'error': 'No movable tasks found (cannot move phases or projects).'}), 400
