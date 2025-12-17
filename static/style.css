@@ -1628,16 +1628,17 @@ textarea.form-control {
 
     .nav-row {
         flex-direction: row;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 0.5rem;
+        width: 100%;
     }
 
     .nav-links {
         flex: 1 1 auto;
         justify-content: flex-start;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 0.35rem;
     }
 
@@ -1659,9 +1660,41 @@ textarea.form-control {
     }
 
     .user-chip {
-        flex: 0 0 auto;
-        justify-content: center;
+        flex: 1 1 100%;
+        justify-content: flex-start;
         padding: 0.5rem 0.65rem;
+    }
+
+    .phase-add-dropdown .phase-menu {
+        left: 0;
+        right: auto;
+        width: min(260px, 92vw);
+    }
+
+    .sidebar .nav-links {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        width: 100%;
+        flex: 1 1 100%;
+        gap: 0.35rem;
+    }
+
+    .sidebar .nav-links a {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 0.5rem 0.35rem;
+        white-space: normal;
+        font-size: 0.85rem;
+    }
+
+    .sidebar .icon-bubble {
+        width: 30px;
+        height: 30px;
+    }
+
+    .sidebar .nav-label {
+        font-size: 0.85rem;
     }
 
     .user-menu {
@@ -1961,6 +1994,51 @@ textarea.form-control {
     font-weight: 600;
 }
 
+.ai-msg.ai .ai-project-header {
+    color: #0f766e;
+    font-size: 1.05rem;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 0.35rem;
+    margin-top: 0.5rem;
+}
+
+.ai-msg.ai .ai-phase-header {
+    color: #7c3aed;
+    font-size: 1rem;
+    font-weight: 600;
+    display: block;
+    margin-top: 0.4rem;
+    margin-bottom: 0.25rem;
+    margin-left: 0.5rem;
+}
+
+.ai-msg.ai .ai-bullet {
+    color: #475569;
+    margin-left: 1.25rem;
+}
+
+.ai-msg.ai .ai-status {
+    display: inline-block;
+    font-weight: 600;
+    font-size: 1rem;
+    margin-right: 0.4rem;
+    min-width: 1.1rem;
+    text-align: center;
+}
+
+.ai-msg.ai .ai-status-todo {
+    color: #94a3b8;
+}
+
+.ai-msg.ai .ai-status-progress {
+    color: #f59e0b;
+}
+
+.ai-msg.ai .ai-status-done {
+    color: #10b981;
+}
+
 .ai-msg.ai br + br {
     display: block;
     content: "";
@@ -2029,8 +2107,14 @@ textarea.form-control {
 .notes-layout {
     display: grid;
     grid-template-columns: 320px 1fr;
+    grid-template-rows: auto 1fr;
     gap: 1.25rem;
     align-items: flex-start;
+}
+
+.notes-header {
+    grid-column: 1 / -1;
+    margin-bottom: 0;
 }
 
 .notes-header-actions {
@@ -2182,6 +2266,13 @@ textarea.form-control {
     border-color: var(--primary-color);
 }
 
+.note-font-size {
+    min-width: 90px;
+    padding: 0.5rem 0.6rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
 .note-tool-divider {
     width: 1px;
     height: 28px;
@@ -2199,6 +2290,7 @@ textarea.form-control {
     font-size: 1rem;
     line-height: 1.6;
     overflow-y: auto;
+    cursor: text;
 }
 
 .note-editor-surface:focus {
@@ -2247,10 +2339,18 @@ textarea.form-control {
 @media (max-width: 1024px) {
     .notes-layout {
         grid-template-columns: 1fr;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
     }
 
     .notes-sidebar.card {
         max-height: none;
+        order: 1;
+    }
+
+    .notes-header {
+        order: 2;
     }
 
     .note-meta {
@@ -2260,6 +2360,35 @@ textarea.form-control {
 
     .note-meta-right {
         width: 100%;
+    }
+
+    .notes-editor.card {
+        order: 3;
+    }
+}
+
+@media (max-width: 700px) {
+    .notes-header {
+        margin-bottom: 0.75rem;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .notes-header-actions {
+        width: 100%;
+        justify-content: flex-start;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+    }
+
+    .notes-editor.card {
+        padding-top: 1rem;
+    }
+
+    .notes-header-actions .btn {
+        flex: 1 1 48%;
+        min-width: 140px;
     }
 }
 

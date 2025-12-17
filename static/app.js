@@ -25,6 +25,8 @@ let touchDragActive = false;
 let touchDragId = null;
 let touchDragBlock = [];
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null };
+let noteAutoSaveTimer = null;
+let noteAutoSaveInFlight = false;
 
 // --- Dashboard Functions ---
 
@@ -1231,7 +1233,7 @@ function initNotesPage() {
 function bindNoteToolbar() {
     const toolbar = document.getElementById('note-toolbar');
     if (!toolbar) return;
-    toolbar.querySelectorAll('.note-tool').forEach(btn => {
+    toolbar.querySelectorAll('.note-tool[data-command]').forEach(btn => {
         // Keep selection in the editor when clicking toolbar buttons
         btn.addEventListener('mousedown', (e) => e.preventDefault());
         btn.addEventListener('click', (e) => {
@@ -1239,6 +1241,16 @@ function bindNoteToolbar() {
             applyNoteCommand(btn.dataset.command);
         });
     });
+
+    const fontSizeSelect = document.getElementById('note-font-size');
+    if (fontSizeSelect) {
+        fontSizeSelect.addEventListener('change', (e) => {
+            const size = parseInt(e.target.value, 10);
+            if (size) {
+                applyNoteFontSize(size);
+            }
+        });
+    }
 }
 
 function applyNoteCommand(command) {
@@ -1268,6 +1280,25 @@ function applyNoteCommand(command) {
 
     document.execCommand(command, false, null);
     refreshNoteDirtyState();
+}
+
+function applyNoteFontSize(sizePx) {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    editor.focus();
+
+    // Wrap selection using execCommand, then replace with a span that uses pixel sizing
+    document.execCommand('fontSize', false, '7');
+    const fonts = editor.querySelectorAll('font[size="7"]');
+    fonts.forEach(font => {
+        const span = document.createElement('span');
+        span.style.fontSize = `${sizePx}px`;
+        while (font.firstChild) {
+            span.appendChild(font.firstChild);
+        }
+        font.replaceWith(span);
+    });
+    setNoteDirty(true);
 }
 
 function unwrapTag(tagName) {
@@ -1356,6 +1387,14 @@ function setNoteDirty(dirty) {
     if (saveBtn) {
         saveBtn.disabled = !dirty;
     }
+    if (!dirty) {
+        if (noteAutoSaveTimer) {
+            clearTimeout(noteAutoSaveTimer);
+            noteAutoSaveTimer = null;
+        }
+        return;
+    }
+    scheduleNoteAutosave();
 }
 
 function refreshNoteDirtyState() {
@@ -1409,7 +1448,10 @@ function renderNotesList() {
             <div class="note-title">${note.title || 'Untitled'}</div>
             <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
         `;
-        btn.addEventListener('click', () => setActiveNote(note.id));
+        btn.addEventListener('click', async () => {
+            await setActiveNote(note.id);
+            scrollNotesEditorIntoView();
+        });
         listEl.appendChild(btn);
     });
 }
@@ -1451,6 +1493,7 @@ async function setActiveNote(noteId, options = {}) {
 }
 
 async function saveCurrentNote(options = {}) {
+    const { silent = false, keepOpen = false } = options;
     const editor = document.getElementById('note-editor');
     const titleInput = document.getElementById('note-title');
     const updatedLabel = document.getElementById('note-updated-label');
@@ -1458,8 +1501,10 @@ async function saveCurrentNote(options = {}) {
     const noteId = notesState.activeNoteId;
     if (!notesState.dirty && noteId) {
         // No changes: still clear and reset without touching the timestamp
-        clearNoteEditor();
-        renderNotesList();
+        if (!keepOpen) {
+            clearNoteEditor();
+            renderNotesList();
+        }
         return;
     }
 
@@ -1495,7 +1540,17 @@ async function saveCurrentNote(options = {}) {
         if (updatedLabel) updatedLabel.textContent = `Saved ${formatNoteDate(savedNote.updated_at)}`;
         setNoteDirty(false);
         renderNotesList();
-        // Always clear and reset after any save (new or existing)
+
+        if (keepOpen) {
+            notesState.activeNoteId = savedNote.id;
+            notesState.activeSnapshot = {
+                title: payload.title,
+                content: payload.content
+            };
+            return;
+        }
+
+        // Always clear and reset after any save (new or existing) unless kept open
         clearNoteEditor();
         notesState.activeNoteId = null;
         notesState.activeSnapshot = null;
@@ -1549,6 +1604,34 @@ function clearNoteEditor() {
     notesState.activeNoteId = null;
     notesState.activeSnapshot = null;
     setNoteDirty(false);
+}
+
+function scrollNotesEditorIntoView() {
+    if (!window.matchMedia || !window.matchMedia('(max-width: 1024px)').matches) return;
+    const editorCard = document.querySelector('.notes-editor.card');
+    if (!editorCard) return;
+    editorCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function scheduleNoteAutosave() {
+    if (!notesState.activeNoteId) return;
+    if (noteAutoSaveInFlight) return;
+    if (noteAutoSaveTimer) {
+        clearTimeout(noteAutoSaveTimer);
+    }
+    noteAutoSaveTimer = setTimeout(async () => {
+        noteAutoSaveTimer = null;
+        if (!notesState.dirty || !notesState.activeNoteId) return;
+        if (noteAutoSaveInFlight) return;
+        noteAutoSaveInFlight = true;
+        try {
+            await saveCurrentNote({ silent: true, keepOpen: true });
+        } catch (e) {
+            console.error('Auto-save failed', e);
+        } finally {
+            noteAutoSaveInFlight = false;
+        }
+    }, 1200);
 }
 
 // --- Hub Calculation ---
@@ -1714,15 +1797,29 @@ function formatAIMessage(text) {
     // Convert markdown-style formatting to HTML
     let formatted = text;
 
-    // Convert **text** to <strong>text</strong>
+    // Convert **📋 Project:** to styled project header
+    formatted = formatted.replace(/\*\*📋 Project: (.+?)\*\*/g, '<strong class="ai-project-header">📋 Project: $1</strong>');
+
+    // Convert **▶ Phase:** to styled phase header
+    formatted = formatted.replace(/\*\*▶ Phase: (.+?)\*\*/g, '<strong class="ai-phase-header">▶ Phase: $1</strong>');
+
+    // Convert remaining **text** to <strong>text</strong>
     formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
     // Convert newlines to <br>
     formatted = formatted.replace(/\n/g, '<br>');
 
-    // Convert bullet points at start of lines to proper bullets
-    formatted = formatted.replace(/^•\s/gm, '&nbsp;&nbsp;• ');
-    formatted = formatted.replace(/<br>•\s/g, '<br>&nbsp;&nbsp;• ');
+    // Style status badges (must be before bullet conversion)
+    formatted = formatted.replace(/\[○\]/g, '<span class="ai-status ai-status-todo">○</span>');
+    formatted = formatted.replace(/\[◐\]/g, '<span class="ai-status ai-status-progress">◐</span>');
+    formatted = formatted.replace(/\[✓\]/g, '<span class="ai-status ai-status-done">✓</span>');
+
+    // Convert bullet points with proper indentation
+    formatted = formatted.replace(/^•\s/gm, '<span class="ai-bullet">• </span>');
+    formatted = formatted.replace(/<br>•\s/g, '<br><span class="ai-bullet">• </span>');
+
+    // Add spacing for double line breaks
+    formatted = formatted.replace(/(<br>){2,}/g, '<br><br>');
 
     return formatted;
 }

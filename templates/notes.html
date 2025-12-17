@@ -1,25 +1,25 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<header>
-    <div>
-        <h1>Notes</h1>
-        <p style="color: var(--text-muted);">Rich text notes, separate from your task lists</p>
-    </div>
-    <div class="notes-header-actions">
-        <button class="btn btn-secondary" id="note-new-btn">
-            <i class="fa-solid fa-plus"></i> New Note
-        </button>
-        <button class="btn" id="note-delete-btn">
-            <i class="fa-solid fa-trash"></i> Delete
-        </button>
-        <button class="btn btn-primary btn-secondary" id="note-save-btn">
-            <i class="fa-solid fa-floppy-disk"></i> Save
-        </button>
-    </div>
-</header>
-
 <div class="notes-layout">
+    <header class="notes-header">
+        <div>
+            <h1>Notes</h1>
+            <p style="color: var(--text-muted);">Rich text notes, separate from your task lists</p>
+        </div>
+        <div class="notes-header-actions">
+            <button class="btn btn-secondary" id="note-new-btn">
+                <i class="fa-solid fa-plus"></i> New Note
+            </button>
+            <button class="btn" id="note-delete-btn">
+                <i class="fa-solid fa-trash"></i> Delete
+            </button>
+            <button class="btn btn-primary btn-secondary" id="note-save-btn">
+                <i class="fa-solid fa-floppy-disk"></i> Save
+            </button>
+        </div>
+    </header>
+
     <aside class="notes-sidebar card">
         <div class="notes-sidebar-header">
             <div>
@@ -42,6 +42,15 @@
         </div>
 
         <div class="note-toolbar" id="note-toolbar">
+            <select id="note-font-size" class="note-tool note-font-size" title="Font size">
+                <option value="12">12</option>
+                <option value="14">14</option>
+                <option value="16" selected>16</option>
+                <option value="18">18</option>
+                <option value="20">20</option>
+                <option value="24">24</option>
+            </select>
+            <span class="note-tool-divider"></span>
             <button class="note-tool" data-command="bold" title="Bold (Ctrl/Cmd+B)"><i class="fa-solid fa-bold"></i></button>
             <button class="note-tool" data-command="italic" title="Italic (Ctrl/Cmd+I)"><i class="fa-solid fa-italic"></i></button>
             <button class="note-tool" data-command="underline" title="Underline (Ctrl/Cmd+U)"><i class="fa-solid fa-underline"></i></button>
