@@ -27,6 +27,7 @@ let touchDragBlock = [];
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null };
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
+let currentTaskFilter = 'all';
 
 // --- Dashboard Functions ---
 
@@ -268,6 +269,69 @@ function toggleStatusDropdown(itemId) {
     menu.classList.toggle('active');
 }
 
+function initTaskFilters() {
+    const menu = document.getElementById('task-filter-menu');
+    if (!menu) return;
+    menu.querySelectorAll('.task-filter-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            setTaskFilter(btn.dataset.filter);
+            closeTaskFilterMenu();
+        });
+    });
+    setTaskFilter(currentTaskFilter);
+}
+
+function setTaskFilter(filter) {
+    const menu = document.getElementById('task-filter-menu');
+    if (!menu) return;
+    currentTaskFilter = filter || 'all';
+    menu.querySelectorAll('.task-filter-item').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === currentTaskFilter);
+    });
+    const label = document.getElementById('task-filter-label');
+    if (label) {
+        const active = menu.querySelector(`.task-filter-item[data-filter="${currentTaskFilter}"]`);
+        label.textContent = active ? active.textContent.trim() : 'All Tasks';
+    }
+    applyTaskFilter();
+}
+
+function applyTaskFilter() {
+    const items = Array.from(document.querySelectorAll('.task-item'));
+    if (!items.length) return;
+    const phaseVisibility = new Map();
+
+    items.forEach(item => {
+        if (item.classList.contains('phase')) return;
+        const status = item.dataset.status;
+        const matches = currentTaskFilter === 'all' || status === currentTaskFilter;
+        item.classList.toggle('hidden-by-filter', !matches);
+        if (matches) {
+            const phaseParent = item.dataset.phaseParent;
+            if (phaseParent) phaseVisibility.set(phaseParent, true);
+        }
+    });
+
+    items.forEach(item => {
+        if (!item.classList.contains('phase')) return;
+        const phaseId = item.dataset.phaseId;
+        const showPhase = currentTaskFilter === 'all' || phaseVisibility.get(phaseId);
+        item.classList.toggle('hidden-by-filter', !showPhase);
+    });
+}
+
+function toggleTaskFilterMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('task-filter-menu');
+    if (menu) menu.classList.toggle('show');
+}
+
+function closeTaskFilterMenu() {
+    const menu = document.getElementById('task-filter-menu');
+    if (menu) menu.classList.remove('show');
+}
+
 // Toggle task actions dropdown
 function toggleTaskActionsMenu(itemId, event) {
     if (event) event.stopPropagation();
@@ -297,6 +361,10 @@ window.addEventListener('click', function (e) {
         document.querySelectorAll('.status-dropdown-menu').forEach(el => {
             el.classList.remove('active');
         });
+    }
+
+    if (!e.target.closest('.task-filter-dropdown')) {
+        closeTaskFilterMenu();
     }
 
     if (!e.target.closest('.task-actions-dropdown')) {
@@ -959,6 +1027,7 @@ async function refreshListView() {
         updateBulkBar();
         initDragAndDrop(); // Re-initialize drag and drop on new elements
         restorePhaseVisibility();
+        applyTaskFilter();
     } catch (e) {
         console.error('Error refreshing list view:', e);
     }
@@ -1683,6 +1752,7 @@ document.addEventListener('DOMContentLoaded', () => {
     normalizePhaseParents();
     restorePhaseVisibility();
     initStickyListHeader();
+    initTaskFilters();
     initMobileTopbar();
     initNotesPage();
     initAIPage();

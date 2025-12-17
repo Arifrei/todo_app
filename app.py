@@ -1,9 +1,14 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
-from models import db, User, TodoList, TodoItem, Note
-from ai_service import run_ai_chat
-from datetime import datetime
 import os
 import re
+from datetime import datetime
+
+from dotenv import load_dotenv
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+
+load_dotenv()
+
+from ai_service import run_ai_chat
+from models import db, User, TodoList, TodoItem, Note
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'

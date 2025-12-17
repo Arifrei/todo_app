@@ -95,6 +95,22 @@
     </div>
 </div>
 
+<div class="task-filter-row">
+    <div class="task-filter-dropdown" id="task-filter-dropdown">
+        <button class="btn btn-secondary btn-filter-trigger" type="button" onclick="toggleTaskFilterMenu(event)">
+            <i class="fa-solid fa-filter"></i>
+            <span id="task-filter-label">All Tasks</span>
+            <i class="fa-solid fa-caret-down"></i>
+        </button>
+        <div class="task-filter-menu" id="task-filter-menu">
+            <button class="task-filter-item active" data-filter="all">All Tasks</button>
+            <button class="task-filter-item" data-filter="not_started">Not Started</button>
+            <button class="task-filter-item" data-filter="in_progress">Started</button>
+            <button class="task-filter-item" data-filter="done">Done</button>
+        </div>
+    </div>
+</div>
+
 <div class="bulk-actions" id="bulk-actions" style="display: none;">
     <div class="bulk-left">
         <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
