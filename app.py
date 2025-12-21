@@ -33,14 +33,14 @@ def get_current_user():
         except (TypeError, ValueError):
             api_uid_int = None
         if api_uid_int and api_key == shared_key:
-            user = User.query.get(api_uid_int)
+            user = db.session.get(User, api_uid_int)
             if user:
                 return user
 
     # Session-based auth for browser users
     user_id = session.get('user_id')
     if user_id:
-        return User.query.get(user_id)
+        return db.session.get(User, user_id)
     return None
 
 with app.app_context():
@@ -513,7 +513,7 @@ def select_user():
 @app.route('/api/set-user/<int:user_id>', methods=['POST'])
 def set_user(user_id):
     """Set the current user in session"""
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
     session['user_id'] = user.id
     session.permanent = True  # Make session persistent across browser restarts
     return jsonify({'success': True, 'username': user.username})
@@ -716,6 +716,50 @@ def calendar_events():
     if not user:
         return jsonify({'error': 'No user selected'}), 401
 
+    # Range fetch for calendar view (start & end inclusive)
+    if request.method == 'GET' and (request.args.get('start') or request.args.get('end')):
+        start_raw = request.args.get('start')
+        end_raw = request.args.get('end')
+        start_day = _parse_day_value(start_raw) if start_raw else date.today().replace(day=1)
+        if not start_day:
+            return jsonify({'error': 'Invalid start date'}), 400
+        if end_raw:
+            end_day = _parse_day_value(end_raw)
+            if not end_day:
+                return jsonify({'error': 'Invalid end date'}), 400
+        else:
+            # Default end to end-of-month for start_day
+            next_month = (start_day.replace(day=28) + timedelta(days=4)).replace(day=1)
+            end_day = next_month - timedelta(days=1)
+        if end_day < start_day:
+            return jsonify({'error': 'end must be on/after start'}), 400
+
+        events = CalendarEvent.query.filter(
+            CalendarEvent.user_id == user.id,
+            CalendarEvent.day >= start_day,
+            CalendarEvent.day <= end_day
+        ).order_by(CalendarEvent.day.asc(), CalendarEvent.order_index.asc()).all()
+
+        phase_map_by_day = {}
+        for ev in events:
+            if ev.is_phase:
+                day_key = ev.day.isoformat()
+                phase_map_by_day.setdefault(day_key, {})[ev.id] = ev.title
+
+        by_day = {}
+        for ev in events:
+            day_key = ev.day.isoformat()
+            data = ev.to_dict()
+            if ev.phase_id:
+                data['phase_title'] = phase_map_by_day.get(day_key, {}).get(ev.phase_id)
+            by_day.setdefault(day_key, []).append(data)
+
+        return jsonify({
+            'start': start_day.isoformat(),
+            'end': end_day.isoformat(),
+            'events': by_day
+        })
+
     if request.method == 'GET':
         day_str = request.args.get('day') or date.today().isoformat()
         day_obj = _parse_day_value(day_str)
@@ -743,6 +787,7 @@ def calendar_events():
         return jsonify({'error': 'Invalid day'}), 400
 
     is_phase = bool(data.get('is_phase'))
+    is_event = bool(data.get('is_event'))
     priority = (data.get('priority') or 'medium').lower()
     if priority not in ALLOWED_PRIORITIES:
         priority = 'medium'
@@ -781,6 +826,7 @@ def calendar_events():
         status=status,
         priority=priority,
         is_phase=is_phase,
+        is_event=is_event and not is_phase,
         phase_id=resolved_phase_id if not is_phase else None,
         reminder_minutes_before=reminder_minutes if not is_phase else None,
         rollover_enabled=bool(data.get('rollover_enabled', True)),
@@ -819,6 +865,8 @@ def calendar_event_detail(event_id):
         status = data.get('status')
         if status in ALLOWED_STATUSES:
             event.status = status
+    if 'is_event' in data and not event.is_phase:
+        event.is_event = bool(data.get('is_event'))
     if 'rollover_enabled' in data:
         event.rollover_enabled = bool(data.get('rollover_enabled'))
     if 'start_time' in data:
@@ -1012,7 +1060,7 @@ def create_item(list_id):
         insert_item_in_order(todo_list, new_item, phase_id=phase_id_int)
         # Update the phase status (mark as incomplete if it was done)
         if phase_id_int:
-            phase_item = TodoItem.query.get(phase_id_int)
+            phase_item = db.session.get(TodoItem, phase_id_int)
             if phase_item:
                 phase_item.update_phase_status()
     else:
@@ -1063,7 +1111,7 @@ def handle_item(item_id):
 
         # If this task's status changed and it belongs to a phase, update phase status
         if old_status != new_status and item.phase_id:
-            phase_item = TodoItem.query.get(item.phase_id)
+            phase_item = db.session.get(TodoItem, item.phase_id)
             if phase_item:
                 phase_item.update_phase_status()
 
@@ -1248,7 +1296,7 @@ def move_item(item_id):
             dest_phase_id_int = int(dest_phase_id)
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid destination phase ID'}), 400
-        phase_obj = TodoItem.query.get(dest_phase_id_int)
+        phase_obj = db.session.get(TodoItem, dest_phase_id_int)
         if not phase_obj or phase_obj.list_id != dest_list.id or not is_phase_header(phase_obj):
             return jsonify({'error': 'Destination phase not found in that project'}), 404
         dest_phase_id = dest_phase_id_int
@@ -1267,11 +1315,11 @@ def move_item(item_id):
         reindex_list(old_list)
 
     if old_phase_id:
-        old_phase = TodoItem.query.get(old_phase_id)
+        old_phase = db.session.get(TodoItem, old_phase_id)
         if old_phase:
             old_phase.update_phase_status()
     if dest_phase_id:
-        new_phase = TodoItem.query.get(dest_phase_id)
+        new_phase = db.session.get(TodoItem, dest_phase_id)
         if new_phase:
             new_phase.update_phase_status()
 
@@ -1501,7 +1549,7 @@ def bulk_items():
 
         # Update all affected phase statuses
         for phase_id in affected_phases:
-            phase_item = TodoItem.query.get(phase_id)
+            phase_item = db.session.get(TodoItem, phase_id)
             if phase_item:
                 phase_item.update_phase_status()
 
@@ -1537,7 +1585,7 @@ def bulk_items():
                 dest_phase_id_int = int(dest_phase_id)
             except (ValueError, TypeError):
                 return jsonify({'error': 'Invalid destination phase ID'}), 400
-            dest_phase_obj = TodoItem.query.get(dest_phase_id_int)
+            dest_phase_obj = db.session.get(TodoItem, dest_phase_id_int)
             if not dest_phase_obj or dest_phase_obj.list_id != dest_list.id or not is_phase_header(dest_phase_obj):
                 return jsonify({'error': 'Destination phase not found in that project'}), 404
             dest_phase_id = dest_phase_id_int
@@ -1571,16 +1619,16 @@ def bulk_items():
             reindex_list(l)
 
         # Reindex destination list to ensure contiguous ordering after multiple inserts
-        dest_list_refreshed = TodoList.query.get(dest_list.id)
+        dest_list_refreshed = db.session.get(TodoList, dest_list.id)
         if dest_list_refreshed:
             reindex_list(dest_list_refreshed)
 
         for pid in old_phase_ids:
-            phase = TodoItem.query.get(pid)
+            phase = db.session.get(TodoItem, pid)
             if phase:
                 phase.update_phase_status()
         if dest_phase_id:
-            dest_phase_obj = TodoItem.query.get(dest_phase_id)
+            dest_phase_obj = db.session.get(TodoItem, dest_phase_id)
             if dest_phase_obj:
                 dest_phase_obj.update_phase_status()
 

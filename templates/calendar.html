@@ -2,42 +2,69 @@
 
 {% block content %}
 <div id="calendar-page" class="calendar-page">
-    <header class="calendar-header">
-        <div class="calendar-date-nav">
-            <button class="btn-icon" id="calendar-prev-day" aria-label="Previous day"><i class="fa-solid fa-chevron-left"></i></button>
-            <div class="calendar-date-display">
-                <div id="calendar-day-label" class="calendar-day-label"></div>
-                <div class="calendar-day-sub">
-                    <input type="date" id="calendar-date-picker" class="calendar-date-picker">
-                    <button class="btn btn-secondary btn-small" id="calendar-today-btn">Today</button>
-                </div>
+    <section id="calendar-month-card" class="calendar-month card">
+        <div class="calendar-month-nav">
+            <button class="btn-icon" id="calendar-prev-month" aria-label="Previous month"><i class="fa-solid fa-chevron-left"></i></button>
+            <div class="calendar-month-label-wrap">
+                <div id="calendar-month-label" class="calendar-month-label"></div>
+                <div class="calendar-month-sub">Click a day to open its schedule</div>
             </div>
-            <button class="btn-icon" id="calendar-next-day" aria-label="Next day"><i class="fa-solid fa-chevron-right"></i></button>
+            <button class="btn-icon" id="calendar-next-month" aria-label="Next month"><i class="fa-solid fa-chevron-right"></i></button>
         </div>
-        <div class="calendar-actions">
-            <button class="btn btn-secondary btn-small" id="calendar-enable-notify">
-                <i class="fa-solid fa-bell"></i> Enable Notify
-            </button>
-            <button class="btn btn-secondary btn-small" id="calendar-rollover-btn">
-                <i class="fa-solid fa-rotate"></i> Rollover now
-            </button>
-            <button class="btn btn-primary btn-small" id="calendar-send-digest">
-                <i class="fa-solid fa-envelope"></i> Email today's digest
-            </button>
+        <div class="calendar-weekdays">
+            <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
         </div>
-    </header>
-
-    <section class="calendar-quick-add card">
-        <div class="quick-add-row">
-            <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Add event: '@9:30-10:00 Sprint daily !high #Planning @Zoom'"></textarea>
-        </div>
-        <div class="quick-hint">
-            Enter to add. Use <code>!high/!med/!low</code> for priority, <code>@HH:MM</code> or <code>@9-10</code> for time, <code>#Phase</code> to add a phase header, <code>bell 10</code> for reminder minutes. Rollover is on by default (uncheck per item).
-        </div>
+        <div id="calendar-month-grid" class="calendar-month-grid"></div>
     </section>
 
-    <section class="calendar-board card">
-        <div id="calendar-events" class="calendar-events"></div>
+    <section id="calendar-day-view" class="calendar-day-view is-hidden">
+        <header class="calendar-header">
+            <div class="calendar-date-nav">
+                <button class="btn-icon" id="calendar-prev-day" aria-label="Previous day"><i class="fa-solid fa-chevron-left"></i></button>
+                <div class="calendar-date-display">
+                    <div id="calendar-day-label" class="calendar-day-label">Pick a day</div>
+                    <div class="calendar-day-sub">
+                        <input type="date" id="calendar-date-picker" class="calendar-date-picker" disabled>
+                        <button class="btn btn-secondary btn-small" id="calendar-today-btn">Today</button>
+                    </div>
+                </div>
+                <button class="btn-icon" id="calendar-next-day" aria-label="Next day"><i class="fa-solid fa-chevron-right"></i></button>
+            </div>
+            <div class="calendar-actions">
+                <button class="btn btn-secondary btn-small" id="calendar-back-month">
+                    <i class="fa-solid fa-calendar-days"></i> Back to Calendar
+                </button>
+                <button class="btn btn-secondary btn-small" id="calendar-enable-notify">
+                    <i class="fa-solid fa-bell"></i> Enable Notify
+                </button>
+                <button class="btn btn-secondary btn-small" id="calendar-rollover-btn">
+                    <i class="fa-solid fa-rotate"></i> Rollover now
+                </button>
+                <button class="btn btn-primary btn-small" id="calendar-send-digest">
+                    <i class="fa-solid fa-envelope"></i> Email today's digest
+                </button>
+            </div>
+        </header>
+
+        <section class="calendar-quick-add card">
+            <div class="quick-add-row">
+                <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
+            </div>
+            <div class="quick-add-controls">
+                <label class="quick-add-label" for="calendar-entry-type">Type</label>
+                <select id="calendar-entry-type" class="form-control slim" disabled>
+                    <option value="task" selected>Task</option>
+                    <option value="event">Event</option>
+                </select>
+            </div>
+            <div class="quick-hint">
+                Enter to add. Use <code>!high/!med/!low</code> for priority, <code>@HH:MM</code> or <code>@9-10</code> for time, <code>#Phase</code> to add a phase header, <code>bell 10</code> for reminder minutes. Rollover is on by default (uncheck per item).
+            </div>
+        </section>
+
+        <section class="calendar-board card">
+            <div id="calendar-events" class="calendar-events"></div>
+        </section>
     </section>
 </div>
 {% endblock %}

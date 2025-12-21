@@ -193,6 +193,7 @@ class CalendarEvent(db.Model):
     status = db.Column(db.String(20), default='not_started')  # not_started | in_progress | done
     priority = db.Column(db.String(10), default='medium')  # low | medium | high
     is_phase = db.Column(db.Boolean, default=False)
+    is_event = db.Column(db.Boolean, default=False)  # informational event (not a task)
     phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     phase = db.relationship('CalendarEvent', remote_side=[id], backref='phase_events', foreign_keys=[phase_id])
     order_index = db.Column(db.Integer, default=0)
@@ -217,6 +218,7 @@ class CalendarEvent(db.Model):
             'status': self.status,
             'priority': self.priority,
             'is_phase': self.is_phase,
+            'is_event': self.is_event,
             'phase_id': self.phase_id,
             'order_index': self.order_index,
             'reminder_minutes_before': self.reminder_minutes_before,
