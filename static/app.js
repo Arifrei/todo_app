@@ -31,6 +31,7 @@ let currentTaskFilter = 'all';
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false };
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
+let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
 
 // --- Dashboard Functions ---
 
@@ -1739,6 +1740,7 @@ function setDayControlsEnabled(enabled) {
     const picker = document.getElementById('calendar-date-picker');
     const quickInput = document.getElementById('calendar-quick-input');
     const typeSelect = document.getElementById('calendar-entry-type');
+    const groupSelect = document.getElementById('calendar-group-select');
     const prevBtn = document.getElementById('calendar-prev-day');
     const nextBtn = document.getElementById('calendar-next-day');
     const todayBtn = document.getElementById('calendar-today-btn');
@@ -1750,6 +1752,7 @@ function setDayControlsEnabled(enabled) {
             : 'Pick a day, then add events';
     }
     if (typeSelect) typeSelect.disabled = !enabled;
+    if (groupSelect) groupSelect.disabled = !enabled;
     if (prevBtn) prevBtn.disabled = !enabled;
     if (nextBtn) nextBtn.disabled = !enabled;
     if (todayBtn) todayBtn.disabled = false; // keep Today usable as an entry point
@@ -1777,6 +1780,77 @@ function returnToMonthView() {
     if (monthCard) monthCard.classList.remove('is-hidden');
     hideDayView();
     renderCalendarMonth();
+}
+
+function refreshGroupOptionsFromState() {
+    const select = document.getElementById('calendar-group-select');
+    if (!select) return;
+    const prev = select.value;
+    select.innerHTML = '';
+    const optNone = document.createElement('option');
+    optNone.value = '';
+    optNone.textContent = 'Ungrouped';
+    select.appendChild(optNone);
+    const groups = (calendarState.events || []).filter(ev => ev.is_group).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.title || `Group ${g.id}`;
+        select.appendChild(opt);
+    });
+    if (groups.find(g => String(g.id) === prev)) {
+        select.value = prev;
+    } else {
+        select.value = '';
+    }
+}
+
+function openCalendarPrompt({ title = 'Input', message = '', defaultValue = '', type = 'text', onSubmit }) {
+    const modal = document.getElementById('calendar-prompt-modal');
+    const titleEl = document.getElementById('calendar-prompt-title');
+    const msgEl = document.getElementById('calendar-prompt-message');
+    const input = document.getElementById('calendar-prompt-input');
+    const saveBtn = document.getElementById('calendar-prompt-save');
+    const cancelBtn = document.getElementById('calendar-prompt-cancel');
+    if (!modal || !titleEl || !msgEl || !input || !saveBtn || !cancelBtn) return;
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    input.type = type;
+    input.value = defaultValue || '';
+    modal.classList.remove('is-hidden');
+    input.focus();
+    input.select();
+
+    const close = () => {
+        modal.classList.add('is-hidden');
+        saveBtn.onclick = null;
+        cancelBtn.onclick = null;
+        input.onkeydown = null;
+        modal.onclick = null;
+    };
+
+    saveBtn.onclick = () => {
+        const val = input.value;
+        close();
+        if (typeof onSubmit === 'function') onSubmit(val);
+    };
+    cancelBtn.onclick = close;
+    input.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            saveBtn.click();
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            close();
+        }
+    };
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            close();
+        }
+    };
 }
 
 async function setCalendarDay(dayStr, options = {}) {
@@ -1912,6 +1986,7 @@ async function loadCalendarDay(dayStr) {
         const res = await fetch(`/api/calendar/events?day=${dayStr}`);
         if (!res.ok) throw new Error('Failed to load events');
         calendarState.events = await res.json();
+        refreshGroupOptionsFromState();
         renderCalendarEvents();
         scheduleLocalReminders();
     } catch (err) {
@@ -1956,17 +2031,47 @@ function renderCalendarEvents() {
         container.innerHTML = `<div class="calendar-empty">Nothing planned for this day. Use the quick add box to start.</div>`;
         return;
     }
+    refreshGroupOptionsFromState();
     const sorted = [...calendarState.events].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
-    const phasesAndTasks = sorted.filter(ev => !ev.is_event);
-    const dayEvents = sorted.filter(ev => ev.is_event);
+    const groupMap = new Map();
+    const rootItems = [];
 
-    const renderPhaseOrTask = (ev) => {
+    sorted.forEach(ev => {
+        if (ev.is_group) {
+            groupMap.set(ev.id, { header: ev, children: [] });
+            rootItems.push(ev);
+        }
+    });
+
+    sorted.forEach(ev => {
+        if (ev.is_group) return;
+        // Only tasks/phases can be nested under groups (no events)
+        if (!ev.is_event && ev.group_id && groupMap.has(ev.group_id)) {
+            groupMap.get(ev.group_id).children.push(ev);
+        } else {
+            rootItems.push(ev);
+        }
+    });
+
+    const groupsList = sorted.filter(ev => ev.is_group);
+    const phasesAndTasks = rootItems.filter(ev => !ev.is_event && !ev.is_group);
+    const dayEvents = rootItems.filter(ev => ev.is_event && !ev.is_group);
+
+    const renderPhaseOrTask = (ev, isChild = false) => {
         const row = document.createElement('div');
         const doneClass = (!ev.is_phase && ev.status === 'done') ? 'done' : '';
-        row.className = `calendar-row ${ev.is_phase ? 'phase' : ''} ${doneClass}`;
+        row.className = `calendar-row ${ev.is_phase ? 'phase' : ''} ${doneClass} ${isChild ? 'child-row' : ''}`;
         row.dataset.id = ev.id;
+        row.dataset.groupId = ev.group_id || '';
+        row.dataset.type = ev.is_phase ? 'phase' : 'task';
 
         if (ev.is_phase) {
+            const left = document.createElement('div');
+            left.className = 'row-left phase-icon';
+            left.innerHTML = '<i class="fa-solid fa-bars-staggered"></i>';
+
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'calendar-title';
             const titleInput = document.createElement('input');
             titleInput.type = 'text';
             titleInput.value = ev.title;
@@ -1982,6 +2087,8 @@ function renderCalendarEvents() {
                     updateCalendarEvent(ev.id, { title: titleInput.value.trim() || ev.title });
                 }
             });
+            titleWrap.appendChild(titleInput);
+
             const actions = document.createElement('div');
             actions.className = 'calendar-actions-row';
             const deleteBtn = document.createElement('button');
@@ -2000,14 +2107,17 @@ function renderCalendarEvents() {
             moveDown.innerHTML = '<i class="fa-solid fa-arrow-down"></i>';
             moveDown.onclick = () => nudgeCalendarEvent(ev.id, 1);
             actions.append(moveUp, moveDown, deleteBtn);
-            row.append(titleInput, actions);
+            row.append(left, titleWrap, actions);
             return row;
         }
 
+        const left = document.createElement('div');
+        left.className = 'row-left';
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.checked = ev.status === 'done';
         checkbox.onchange = () => updateCalendarEvent(ev.id, { status: checkbox.checked ? 'done' : 'not_started' });
+        left.appendChild(checkbox);
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'calendar-title';
@@ -2067,11 +2177,17 @@ function renderCalendarEvents() {
                 await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
                 return;
             }
-            const minutesStr = window.prompt('Reminder minutes before start', ev.reminder_minutes_before ?? 10);
-            if (minutesStr === null) return;
-            const minutes = parseInt(minutesStr, 10);
-            if (Number.isNaN(minutes) || minutes < 0) return;
-            await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
+            openCalendarPrompt({
+                title: 'Set Reminder',
+                message: 'Minutes before start',
+                type: 'number',
+                defaultValue: ev.reminder_minutes_before ?? 10,
+                onSubmit: async (val) => {
+                    const minutes = parseInt(val, 10);
+                    if (Number.isNaN(minutes) || minutes < 0) return;
+                    await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
+                }
+            });
         };
 
         const rolloverBtn = document.createElement('button');
@@ -2087,24 +2203,19 @@ function renderCalendarEvents() {
         deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
 
         actions.append(priorityDot, reminderBtn, rolloverBtn, deleteBtn);
-        row.append(checkbox, titleWrap, actions);
+        row.append(left, titleWrap, actions);
         return row;
     };
 
-    const renderEvent = (ev) => {
+    const renderEvent = (ev, isChild = false) => {
         const row = document.createElement('div');
-        row.className = 'calendar-row event';
+        row.className = `calendar-row event ${isChild ? 'child-row' : ''}`;
         row.dataset.id = ev.id;
+        row.dataset.groupId = ev.group_id || '';
+        row.dataset.type = 'event';
 
-        const dot = document.createElement('span');
-        dot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
-        dot.title = `Priority: ${(ev.priority || 'medium')}`;
-        dot.onclick = () => {
-            const order = ['low', 'medium', 'high'];
-            const currentIdx = order.indexOf(ev.priority || 'medium');
-            const next = order[(currentIdx + 1) % order.length];
-            updateCalendarEvent(ev.id, { priority: next });
-        };
+        const left = document.createElement('div');
+        left.className = 'row-left';
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'calendar-title';
@@ -2133,10 +2244,20 @@ function renderCalendarEvents() {
             chip.textContent = formatTimeRange(ev) || 'Time';
             meta.appendChild(chip);
         }
-        titleWrap.appendChild(meta);
+        if (meta.childNodes.length) titleWrap.appendChild(meta);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
+
+        const priorityDot = document.createElement('button');
+        priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
+        priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
+        priorityDot.onclick = () => {
+            const order = ['low', 'medium', 'high'];
+            const currentIdx = order.indexOf(ev.priority || 'medium');
+            const next = order[(currentIdx + 1) % order.length];
+            updateCalendarEvent(ev.id, { priority: next });
+        };
 
         const reminderBtn = document.createElement('button');
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
@@ -2148,11 +2269,17 @@ function renderCalendarEvents() {
                 await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
                 return;
             }
-            const minutesStr = window.prompt('Reminder minutes before start', ev.reminder_minutes_before ?? 10);
-            if (minutesStr === null) return;
-            const minutes = parseInt(minutesStr, 10);
-            if (Number.isNaN(minutes) || minutes < 0) return;
-            await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
+            openCalendarPrompt({
+                title: 'Set Reminder',
+                message: 'Minutes before start',
+                type: 'number',
+                defaultValue: ev.reminder_minutes_before ?? 10,
+                onSubmit: async (val) => {
+                    const minutes = parseInt(val, 10);
+                    if (Number.isNaN(minutes) || minutes < 0) return;
+                    await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
+                }
+            });
         };
 
         const deleteBtn = document.createElement('button');
@@ -2161,19 +2288,132 @@ function renderCalendarEvents() {
         deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
         deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
 
-        actions.append(dot, reminderBtn, deleteBtn);
-        row.append(document.createElement('span'), titleWrap, actions);
+        actions.append(priorityDot, reminderBtn, deleteBtn);
+        row.append(left, titleWrap, actions);
         return row;
     };
 
-    phasesAndTasks.forEach(ev => container.appendChild(renderPhaseOrTask(ev)));
-    if (dayEvents.length) {
-        const divider = document.createElement('div');
-        divider.className = 'calendar-event-divider';
-        divider.textContent = 'Events';
-        container.appendChild(divider);
-        dayEvents.forEach(ev => container.appendChild(renderEvent(ev)));
+    const renderGroup = (group) => {
+        const row = document.createElement('div');
+        row.className = 'calendar-row group';
+        row.dataset.id = group.id;
+
+        const grip = document.createElement('span');
+        grip.className = 'group-icon';
+        grip.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
+
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'calendar-title';
+        const titleInput = document.createElement('input');
+        titleInput.type = 'text';
+        titleInput.value = group.title;
+        titleInput.placeholder = 'Group title';
+        titleInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                titleInput.blur();
+            }
+        });
+        titleInput.addEventListener('blur', () => {
+            if (titleInput.value.trim() !== group.title) {
+                updateCalendarEvent(group.id, { title: titleInput.value.trim() || group.title });
+            }
+        });
+        titleWrap.appendChild(titleInput);
+
+        const actions = document.createElement('div');
+        actions.className = 'calendar-actions-row';
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn-icon';
+        deleteBtn.title = 'Delete';
+        deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        deleteBtn.onclick = () => deleteCalendarEvent(group.id);
+        actions.append(deleteBtn);
+
+        row.append(grip, titleWrap, actions);
+        container.appendChild(row);
+
+        const children = groupMap.get(group.id)?.children || [];
+        children.forEach(child => {
+            // indent children slightly
+            const childRow = child.is_event ? renderEvent(child, true) : renderPhaseOrTask(child, true);
+            container.appendChild(childRow);
+        });
+    };
+
+    const eventItems = rootItems.filter(ev => ev.is_event && !ev.is_group);
+    const taskItems = rootItems.filter(ev => ev.is_group || (!ev.is_event && !ev.is_group));
+
+    const addDivider = (label) => {
+        const d = document.createElement('div');
+        d.className = 'calendar-event-divider';
+        d.textContent = label;
+        container.appendChild(d);
+    };
+
+    if (eventItems.length) {
+        addDivider('Events');
+        eventItems.forEach(ev => container.appendChild(renderEvent(ev)));
     }
+
+    if (taskItems.length) {
+        addDivider('Tasks');
+        taskItems.forEach(ev => {
+            if (ev.is_group) {
+                renderGroup(ev);
+            } else {
+                container.appendChild(renderPhaseOrTask(ev));
+            }
+        });
+    }
+
+    enableCalendarDragAndDrop(container);
+}
+
+function enableCalendarDragAndDrop(container) {
+    const rows = Array.from(container.querySelectorAll('.calendar-row'));
+    if (!rows.length) return;
+    let dragSrc = null;
+
+    const typeKey = (row) => `${row.dataset.type || 'task'}|${row.dataset.groupId || ''}`;
+
+    rows.forEach(row => {
+        row.draggable = true;
+        row.addEventListener('dragstart', (e) => {
+            dragSrc = row;
+            row.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        });
+        row.addEventListener('dragend', () => {
+            row.classList.remove('dragging');
+            rows.forEach(r => r.classList.remove('drag-over'));
+            dragSrc = null;
+        });
+        row.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (!dragSrc) return;
+            if (typeKey(dragSrc) !== typeKey(row)) return;
+            row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+        row.addEventListener('drop', (e) => {
+            e.preventDefault();
+            rows.forEach(r => r.classList.remove('drag-over'));
+            if (!dragSrc) return;
+            if (typeKey(dragSrc) !== typeKey(row)) return;
+            if (dragSrc === row) return;
+            const order = Array.from(container.querySelectorAll('.calendar-row'));
+            const srcIdx = order.indexOf(dragSrc);
+            const tgtIdx = order.indexOf(row);
+            if (srcIdx === -1 || tgtIdx === -1) return;
+            order.splice(tgtIdx, 0, order.splice(srcIdx, 1)[0]);
+            // Rebuild events order and commit
+            const idToEvent = new Map(calendarState.events.map(ev => [String(ev.id), ev]));
+            calendarState.events = order.map(r => idToEvent.get(r.dataset.id)).filter(Boolean);
+            commitCalendarOrder();
+            renderCalendarEvents();
+        });
+    });
 }
 
 function parseCalendarQuickInput(text) {
@@ -2244,9 +2484,36 @@ async function handleCalendarQuickAdd() {
     const typeSelect = document.getElementById('calendar-entry-type');
     if (!input || !calendarState.selectedDay || !calendarState.dayViewOpen) return;
     const parsed = parseCalendarQuickInput(input.value || '');
-    if (!parsed) return;
+    if (!parsed && (!typeSelect || typeSelect.value !== 'group')) return;
     input.value = '';
     const isEvent = typeSelect ? (typeSelect.value === 'event') : false;
+    const isGroup = typeSelect ? (typeSelect.value === 'group') : false;
+    const groupSelect = document.getElementById('calendar-group-select');
+    const groupIdVal = groupSelect ? groupSelect.value : '';
+    const groupId = groupIdVal ? parseInt(groupIdVal, 10) : null;
+    if (isGroup) {
+        openCalendarPrompt({
+            title: 'New Group',
+            message: 'Group name',
+            defaultValue: 'New Group',
+            onSubmit: async (val) => {
+                const title = (val || '').trim();
+                if (!title) return;
+                await createCalendarEvent({
+                    title,
+                    is_phase: false,
+                    is_event: false,
+                    is_group: true
+                });
+                if (calendarState.detailsOpen) {
+                    await loadCalendarDay(calendarState.selectedDay);
+                } else {
+                    await loadCalendarMonth();
+                }
+            }
+        });
+        return;
+    }
     if (parsed.is_phase) {
         await createCalendarEvent({ title: parsed.title, is_phase: true });
         if (calendarState.detailsOpen) {
@@ -2278,6 +2545,7 @@ async function handleCalendarQuickAdd() {
         title: parsed.title,
         is_phase: false,
         is_event: isEvent,
+        group_id: isEvent ? null : groupId,
         start_time: parsed.start_time,
         end_time: parsed.end_time,
         priority: parsed.priority,
@@ -2525,6 +2793,8 @@ function initCalendarPage() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
+    const modal = document.getElementById('calendar-prompt-modal');
+    if (modal) modal.classList.add('is-hidden');
 
     // Close modals on outside click
     window.onclick = function (event) {

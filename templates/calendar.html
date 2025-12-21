@@ -55,6 +55,11 @@
                 <select id="calendar-entry-type" class="form-control slim" disabled>
                     <option value="task" selected>Task</option>
                     <option value="event">Event</option>
+                    <option value="group">Group</option>
+                </select>
+                <label class="quick-add-label" for="calendar-group-select">Group</label>
+                <select id="calendar-group-select" class="form-control slim" disabled>
+                    <option value="">Ungrouped</option>
                 </select>
             </div>
             <div class="quick-hint">
@@ -66,5 +71,18 @@
             <div id="calendar-events" class="calendar-events"></div>
         </section>
     </section>
+
+    <!-- Calendar Prompt Modal -->
+    <div id="calendar-prompt-modal" class="calendar-prompt-modal is-hidden">
+        <div class="calendar-prompt-content card">
+            <h3 id="calendar-prompt-title">Input</h3>
+            <p id="calendar-prompt-message" class="calendar-prompt-message"></p>
+            <input id="calendar-prompt-input" class="form-control" type="text" value="">
+            <div class="calendar-prompt-actions">
+                <button class="btn btn-secondary btn-small" id="calendar-prompt-cancel">Cancel</button>
+                <button class="btn btn-primary btn-small" id="calendar-prompt-save">Save</button>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

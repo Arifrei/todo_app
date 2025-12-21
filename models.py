@@ -194,8 +194,11 @@ class CalendarEvent(db.Model):
     priority = db.Column(db.String(10), default='medium')  # low | medium | high
     is_phase = db.Column(db.Boolean, default=False)
     is_event = db.Column(db.Boolean, default=False)  # informational event (not a task)
+    is_group = db.Column(db.Boolean, default=False)  # grouping header
     phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     phase = db.relationship('CalendarEvent', remote_side=[id], backref='phase_events', foreign_keys=[phase_id])
+    group_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    group = db.relationship('CalendarEvent', remote_side=[id], backref='group_items', foreign_keys=[group_id])
     order_index = db.Column(db.Integer, default=0)
     reminder_minutes_before = db.Column(db.Integer, nullable=True)
     rollover_enabled = db.Column(db.Boolean, default=True)
@@ -219,7 +222,9 @@ class CalendarEvent(db.Model):
             'priority': self.priority,
             'is_phase': self.is_phase,
             'is_event': self.is_event,
+            'is_group': self.is_group,
             'phase_id': self.phase_id,
+            'group_id': self.group_id,
             'order_index': self.order_index,
             'reminder_minutes_before': self.reminder_minutes_before,
             'rollover_enabled': self.rollover_enabled,

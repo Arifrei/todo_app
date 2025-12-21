@@ -2694,8 +2694,16 @@ textarea.form-control {
     grid-template-columns: 24px 1fr auto;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.75rem 1rem;
+    padding: 0.65rem 0.9rem;
     border-bottom: 1px solid rgba(0,0,0,0.05);
+}
+
+.calendar-row.dragging {
+    opacity: 0.4;
+}
+
+.calendar-row.drag-over {
+    outline: 2px dashed rgba(59,130,246,0.4);
 }
 
 .calendar-row.phase {
@@ -2707,6 +2715,17 @@ textarea.form-control {
 .calendar-row.event {
     grid-template-columns: 24px 1fr auto;
     background: rgba(0,0,0,0.02);
+}
+
+.calendar-row.group {
+    background: rgba(59,130,246,0.04);
+    border-left: 3px solid rgba(59,130,246,0.3);
+    font-weight: 600;
+}
+
+.calendar-row.child-row {
+    padding-left: 2rem;
+    border-left: 2px dashed rgba(59,130,246,0.18);
 }
 
 .calendar-row.done {
@@ -2732,6 +2751,16 @@ textarea.form-control {
     display: flex;
     flex-direction: column;
     gap: 0.2rem;
+}
+
+.row-left {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.row-left input[type="checkbox"] {
+    margin: 0;
 }
 
 .priority-dot {
@@ -2769,6 +2798,13 @@ textarea.form-control {
     align-items: center;
 }
 
+.group-select {
+    min-width: 120px;
+    max-width: 160px;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.9rem;
+}
+
 .btn-small {
     padding: 0.4rem 0.65rem;
     font-size: 0.9rem;
@@ -2791,6 +2827,48 @@ textarea.form-control {
     letter-spacing: 0.05em;
     font-size: 0.8rem;
     color: var(--text-muted);
+}
+
+.group-icon {
+    color: var(--primary-color);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.event-left {
+    width: 24px;
+}
+
+.calendar-prompt-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+}
+
+.calendar-prompt-modal.is-hidden {
+    display: none !important;
+}
+
+.calendar-prompt-modal .calendar-prompt-content {
+    width: min(420px, 90vw);
+    padding: 1.25rem;
+}
+
+.calendar-prompt-message {
+    color: var(--text-muted);
+    margin: 0.25rem 0 0.75rem;
+}
+
+.calendar-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
 }
 
 .calendar-meta-lite {

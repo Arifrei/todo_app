@@ -788,6 +788,7 @@ def calendar_events():
 
     is_phase = bool(data.get('is_phase'))
     is_event = bool(data.get('is_event'))
+    is_group = bool(data.get('is_group'))
     priority = (data.get('priority') or 'medium').lower()
     if priority not in ALLOWED_PRIORITIES:
         priority = 'medium'
@@ -803,7 +804,7 @@ def calendar_events():
 
     phase_id = data.get('phase_id')
     resolved_phase_id = None
-    if phase_id and not is_phase:
+    if phase_id and not is_phase and not is_group:
         try:
             phase_id_int = int(phase_id)
         except (ValueError, TypeError):
@@ -812,6 +813,18 @@ def calendar_events():
         if not phase_obj:
             return jsonify({'error': 'Phase not found for that day'}), 404
         resolved_phase_id = phase_id_int
+
+    group_id = data.get('group_id')
+    resolved_group_id = None
+    if group_id and not is_group:
+        try:
+            group_id_int = int(group_id)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid group_id'}), 400
+        group_obj = CalendarEvent.query.filter_by(id=group_id_int, user_id=user.id, day=day_obj, is_group=True).first()
+        if not group_obj:
+            return jsonify({'error': 'Group not found for that day'}), 404
+        resolved_group_id = group_id_int
 
     start_time = _parse_time_str(data.get('start_time'))
     end_time = _parse_time_str(data.get('end_time'))
@@ -826,10 +839,12 @@ def calendar_events():
         status=status,
         priority=priority,
         is_phase=is_phase,
-        is_event=is_event and not is_phase,
-        phase_id=resolved_phase_id if not is_phase else None,
-        reminder_minutes_before=reminder_minutes if not is_phase else None,
-        rollover_enabled=bool(data.get('rollover_enabled', True)),
+        is_event=is_event and not is_phase and not is_group,
+        is_group=is_group and not is_phase and not is_event,
+        phase_id=resolved_phase_id if not is_phase and not is_group else None,
+        group_id=resolved_group_id if not is_group else None,
+        reminder_minutes_before=reminder_minutes if not is_phase and not is_group else None,
+        rollover_enabled=bool(data.get('rollover_enabled', True) if not is_group else False),
         order_index=_next_calendar_order(day_obj, user.id)
     )
     db.session.add(new_event)
@@ -867,6 +882,8 @@ def calendar_event_detail(event_id):
             event.status = status
     if 'is_event' in data and not event.is_phase:
         event.is_event = bool(data.get('is_event'))
+    if 'is_group' in data and not event.is_phase and not event.is_event:
+        event.is_group = bool(data.get('is_group'))
     if 'rollover_enabled' in data:
         event.rollover_enabled = bool(data.get('rollover_enabled'))
     if 'start_time' in data:
@@ -897,6 +914,18 @@ def calendar_event_detail(event_id):
             if not phase_obj:
                 return jsonify({'error': 'Phase not found for that day'}), 404
             event.phase_id = pid
+    if 'group_id' in data and not event.is_group:
+        if data.get('group_id') is None:
+            event.group_id = None
+        else:
+            try:
+                gid = int(data.get('group_id'))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid group_id'}), 400
+            group_obj = CalendarEvent.query.filter_by(id=gid, user_id=user.id, day=event.day, is_group=True).first()
+            if not group_obj:
+                return jsonify({'error': 'Group not found for that day'}), 404
+            event.group_id = gid
     db.session.commit()
     return jsonify(event.to_dict())
 

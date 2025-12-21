@@ -17,6 +17,13 @@ def main():
                 conn.execute(db.text("ALTER TABLE calendar_event ADD COLUMN is_event BOOLEAN DEFAULT 0"))
                 conn.execute(db.text("UPDATE calendar_event SET is_event = 0 WHERE is_event IS NULL"))
                 print("Added calendar_event.is_event column")
+            if 'is_group' not in cols:
+                conn.execute(db.text("ALTER TABLE calendar_event ADD COLUMN is_group BOOLEAN DEFAULT 0"))
+                conn.execute(db.text("UPDATE calendar_event SET is_group = 0 WHERE is_group IS NULL"))
+                print("Added calendar_event.is_group column")
+            if 'group_id' not in cols:
+                conn.execute(db.text("ALTER TABLE calendar_event ADD COLUMN group_id INTEGER"))
+                print("Added calendar_event.group_id column")
             print("calendar_event table is ensured.")
         finally:
             conn.close()
