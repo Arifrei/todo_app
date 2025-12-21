@@ -28,6 +28,9 @@ let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: 
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
 let currentTaskFilter = 'all';
+let calendarState = { selectedDay: null, events: [] };
+let calendarReminderTimers = {};
+let calendarNotifyEnabled = false;
 
 // --- Dashboard Functions ---
 
@@ -1710,6 +1713,475 @@ function calculateHubProgress() {
     // For now, we rely on reload for simplicity in this version
 }
 
+// --- Calendar ---
+
+function formatCalendarLabel(dayStr) {
+    const d = new Date(dayStr + 'T00:00:00');
+    return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+async function setCalendarDay(dayStr) {
+    calendarState.selectedDay = dayStr;
+    const label = document.getElementById('calendar-day-label');
+    const picker = document.getElementById('calendar-date-picker');
+    if (label) label.textContent = formatCalendarLabel(dayStr);
+    if (picker) picker.value = dayStr;
+    await loadCalendarDay(dayStr);
+}
+
+async function loadCalendarDay(dayStr) {
+    const container = document.getElementById('calendar-events');
+    if (!container) return;
+    try {
+        const res = await fetch(`/api/calendar/events?day=${dayStr}`);
+        if (!res.ok) throw new Error('Failed to load events');
+        calendarState.events = await res.json();
+        renderCalendarEvents();
+        scheduleLocalReminders();
+    } catch (err) {
+        container.innerHTML = `<div class="calendar-empty">Could not load events.</div>`;
+        console.error(err);
+    }
+}
+
+function formatTimeRange(ev) {
+    if (!ev.start_time) return '';
+    const start = ev.start_time.slice(0, 5);
+    const end = ev.end_time ? ev.end_time.slice(0, 5) : '';
+    return end ? `${start} - ${end}` : start;
+}
+
+function renderCalendarEvents() {
+    const container = document.getElementById('calendar-events');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!calendarState.events || calendarState.events.length === 0) {
+        container.innerHTML = `<div class="calendar-empty">Nothing planned for this day. Use the quick add box to start.</div>`;
+        return;
+    }
+    const sorted = [...calendarState.events].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    sorted.forEach(ev => {
+        const row = document.createElement('div');
+        row.className = `calendar-row ${ev.is_phase ? 'phase' : ''}`;
+        row.dataset.id = ev.id;
+        if (ev.is_phase) {
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.value = ev.title;
+            titleInput.placeholder = 'Phase title';
+            titleInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    titleInput.blur();
+                }
+            });
+            titleInput.addEventListener('blur', () => {
+                if (titleInput.value.trim() !== ev.title) {
+                    updateCalendarEvent(ev.id, { title: titleInput.value.trim() || ev.title });
+                }
+            });
+            const actions = document.createElement('div');
+            actions.className = 'calendar-actions-row';
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'btn-icon';
+            deleteBtn.title = 'Delete';
+            deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
+            const moveUp = document.createElement('button');
+            moveUp.className = 'btn-icon';
+            moveUp.title = 'Move up';
+            moveUp.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+            moveUp.onclick = () => nudgeCalendarEvent(ev.id, -1);
+            const moveDown = document.createElement('button');
+            moveDown.className = 'btn-icon';
+            moveDown.title = 'Move down';
+            moveDown.innerHTML = '<i class="fa-solid fa-arrow-down"></i>';
+            moveDown.onclick = () => nudgeCalendarEvent(ev.id, 1);
+            actions.append(moveUp, moveDown, deleteBtn);
+            row.append(titleInput, actions);
+        } else {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = ev.status === 'done';
+            checkbox.onchange = () => updateCalendarEvent(ev.id, { status: checkbox.checked ? 'done' : 'not_started' });
+
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'calendar-title';
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.value = ev.title;
+            titleInput.placeholder = 'Event title';
+            titleInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    titleInput.blur();
+                }
+            });
+            titleInput.addEventListener('blur', () => {
+                if (titleInput.value.trim() !== ev.title) {
+                    updateCalendarEvent(ev.id, { title: titleInput.value.trim() || ev.title });
+                }
+            });
+            titleWrap.appendChild(titleInput);
+
+            const meta = document.createElement('div');
+            meta.className = 'calendar-meta-chips';
+            if (ev.start_time) {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.textContent = formatTimeRange(ev) || 'Time';
+                meta.appendChild(chip);
+            }
+            if (ev.phase_id) {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.textContent = ev.phase_title ? `# ${ev.phase_title}` : 'Phase';
+                meta.appendChild(chip);
+            }
+            if (ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined) {
+                const chip = document.createElement('span');
+                chip.className = 'chip reminder';
+                chip.textContent = `Reminder ${ev.reminder_minutes_before}m`;
+                meta.appendChild(chip);
+            }
+            if (ev.rollover_enabled) {
+                const chip = document.createElement('span');
+                chip.className = 'chip rollover';
+                chip.textContent = 'Rollover';
+                meta.appendChild(chip);
+            }
+            titleWrap.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'calendar-actions-row';
+
+            const prioritySelect = document.createElement('select');
+            prioritySelect.className = 'form-control';
+            ['low', 'medium', 'high'].forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+                if ((ev.priority || 'medium') === p) opt.selected = true;
+                prioritySelect.appendChild(opt);
+            });
+            prioritySelect.onchange = () => updateCalendarEvent(ev.id, { priority: prioritySelect.value });
+
+            const reminderInput = document.createElement('input');
+            reminderInput.type = 'number';
+            reminderInput.min = 0;
+            reminderInput.placeholder = 'Rem (m)';
+            reminderInput.value = ev.reminder_minutes_before ?? '';
+            reminderInput.style.width = '90px';
+            reminderInput.onchange = () => {
+                const val = reminderInput.value.trim();
+                updateCalendarEvent(ev.id, { reminder_minutes_before: val === '' ? null : parseInt(val, 10) });
+            };
+
+            const rolloverToggle = document.createElement('label');
+            rolloverToggle.style.display = 'flex';
+            rolloverToggle.style.alignItems = 'center';
+            rolloverToggle.style.gap = '4px';
+            const rollCb = document.createElement('input');
+            rollCb.type = 'checkbox';
+            rollCb.checked = !!ev.rollover_enabled;
+            rollCb.onchange = () => updateCalendarEvent(ev.id, { rollover_enabled: rollCb.checked });
+            const rollText = document.createElement('span');
+            rollText.textContent = 'Rollover';
+            rolloverToggle.append(rollCb, rollText);
+
+            const moveUp = document.createElement('button');
+            moveUp.className = 'btn-icon';
+            moveUp.title = 'Move up';
+            moveUp.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+            moveUp.onclick = () => nudgeCalendarEvent(ev.id, -1);
+            const moveDown = document.createElement('button');
+            moveDown.className = 'btn-icon';
+            moveDown.title = 'Move down';
+            moveDown.innerHTML = '<i class="fa-solid fa-arrow-down"></i>';
+            moveDown.onclick = () => nudgeCalendarEvent(ev.id, 1);
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'btn-icon';
+            deleteBtn.title = 'Delete';
+            deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
+
+            actions.append(prioritySelect, reminderInput, rolloverToggle, moveUp, moveDown, deleteBtn);
+            row.append(checkbox, titleWrap, actions);
+        }
+        container.appendChild(row);
+    });
+}
+
+function parseCalendarQuickInput(text) {
+    const raw = text.trim();
+    if (!raw) return null;
+    // Phase creation
+    if (raw.startsWith('#')) {
+        return { is_phase: true, title: raw.replace(/^#+\s*/, '') || 'Untitled Phase' };
+    }
+    let working = raw;
+    let startTime = null;
+    let endTime = null;
+    let priority = 'medium';
+    let reminder = null;
+    let phaseName = null;
+    let rollover = true;
+
+    const timeMatch = working.match(/@(\d{1,2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}(?::\d{2})?))?/);
+    if (timeMatch) {
+        startTime = timeMatch[1];
+        endTime = timeMatch[2] || null;
+        working = working.replace(timeMatch[0], '').trim();
+    }
+
+    const priorityMatch = working.match(/!(high|med|medium|low|1|2|3)/i);
+    if (priorityMatch) {
+        const val = priorityMatch[1].toLowerCase();
+        if (val === 'high' || val === '3') priority = 'high';
+        else if (val === 'low' || val === '1') priority = 'low';
+        else priority = 'medium';
+        working = working.replace(priorityMatch[0], '').trim();
+    }
+
+    const reminderMatch = working.match(/\b(rem|bell)\s*(\d{1,3})/i);
+    if (reminderMatch) {
+        reminder = parseInt(reminderMatch[2], 10);
+        working = working.replace(reminderMatch[0], '').trim();
+    }
+
+    const phaseMatch = working.match(/#([A-Za-z0-9 _-]+)/);
+    if (phaseMatch) {
+        phaseName = phaseMatch[1].trim();
+        working = working.replace(phaseMatch[0], '').trim();
+    }
+
+    if (working.toLowerCase().includes('noroll')) {
+        rollover = false;
+        working = working.replace(/noroll/gi, '').trim();
+    }
+
+    const title = working.trim();
+    if (!title) return null;
+
+    return {
+        title,
+        is_phase: false,
+        start_time: startTime,
+        end_time: endTime,
+        priority,
+        reminder_minutes_before: reminder,
+        phase_name: phaseName,
+        rollover_enabled: rollover
+    };
+}
+
+async function handleCalendarQuickAdd() {
+    const input = document.getElementById('calendar-quick-input');
+    if (!input) return;
+    const parsed = parseCalendarQuickInput(input.value || '');
+    if (!parsed) return;
+    input.value = '';
+    if (parsed.is_phase) {
+        await createCalendarEvent({ title: parsed.title, is_phase: true });
+        await loadCalendarDay(calendarState.selectedDay);
+        return;
+    }
+
+    let phaseId = null;
+    if (parsed.phase_name) {
+        const existing = calendarState.events.find(e => e.is_phase && e.title.toLowerCase() === parsed.phase_name.toLowerCase());
+        if (existing) {
+            phaseId = existing.id;
+        } else {
+            const createdPhase = await createCalendarEvent({ title: parsed.phase_name, is_phase: true });
+            phaseId = createdPhase ? createdPhase.id : null;
+        }
+    } else {
+        // Default to most recent phase if present
+        const phases = calendarState.events.filter(e => e.is_phase).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+        if (phases.length > 0) {
+            phaseId = phases[phases.length - 1].id;
+        }
+    }
+
+    await createCalendarEvent({
+        title: parsed.title,
+        is_phase: false,
+        start_time: parsed.start_time,
+        end_time: parsed.end_time,
+        priority: parsed.priority,
+        reminder_minutes_before: parsed.reminder_minutes_before,
+        phase_id: phaseId,
+        rollover_enabled: parsed.rollover_enabled
+    });
+    await loadCalendarDay(calendarState.selectedDay);
+}
+
+async function createCalendarEvent(payload) {
+    try {
+        const res = await fetch('/api/calendar/events', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...payload, day: calendarState.selectedDay })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            console.error(err);
+            return null;
+        }
+        return await res.json();
+    } catch (err) {
+        console.error(err);
+        return null;
+    }
+}
+
+async function updateCalendarEvent(id, payload) {
+    try {
+        await fetch(`/api/calendar/events/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        await loadCalendarDay(calendarState.selectedDay);
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function deleteCalendarEvent(id) {
+    try {
+        await fetch(`/api/calendar/events/${id}`, { method: 'DELETE' });
+        calendarState.events = calendarState.events.filter(e => e.id !== id);
+        renderCalendarEvents();
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function commitCalendarOrder() {
+    const ids = calendarState.events.map(e => e.id);
+    try {
+        await fetch('/api/calendar/events/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ day: calendarState.selectedDay, ids })
+        });
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+function nudgeCalendarEvent(id, delta) {
+    const idx = calendarState.events.findIndex(e => e.id === id);
+    if (idx === -1) return;
+    const target = idx + delta;
+    if (target < 0 || target >= calendarState.events.length) return;
+    const swapped = [...calendarState.events];
+    const tmp = swapped[idx];
+    swapped[idx] = swapped[target];
+    swapped[target] = tmp;
+    calendarState.events = swapped.map((ev, i) => ({ ...ev, order_index: i + 1 }));
+    renderCalendarEvents();
+    commitCalendarOrder();
+}
+
+function scheduleLocalReminders() {
+    Object.values(calendarReminderTimers).forEach(t => clearTimeout(t));
+    calendarReminderTimers = {};
+    if (!calendarNotifyEnabled) return;
+    const now = new Date();
+    calendarState.events.forEach(ev => {
+        if (ev.status === 'done') return;
+        if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
+        const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
+        const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
+        const delay = reminderAt.getTime() - now.getTime();
+        if (delay > 0) {
+            calendarReminderTimers[ev.id] = setTimeout(() => {
+                triggerLocalNotification(ev);
+            }, delay);
+        }
+    });
+}
+
+function triggerLocalNotification(ev) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    const body = ev.start_time ? `${formatTimeRange(ev)} - ${ev.title}` : ev.title;
+    new Notification('Upcoming event', { body });
+}
+
+async function enableCalendarNotifications() {
+    if (!('Notification' in window)) return;
+    const perm = await Notification.requestPermission();
+    calendarNotifyEnabled = perm === 'granted';
+    if (calendarNotifyEnabled) scheduleLocalReminders();
+}
+
+async function sendCalendarDigest(dayStr) {
+    try {
+        await fetch('/api/calendar/digest/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ day: dayStr })
+        });
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function triggerManualRollover() {
+    try {
+        await fetch('/api/calendar/rollover-now', { method: 'POST' });
+        await loadCalendarDay(calendarState.selectedDay);
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+function initCalendarPage() {
+    const page = document.getElementById('calendar-page');
+    if (!page) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    calendarState.selectedDay = todayStr;
+
+    const prevBtn = document.getElementById('calendar-prev-day');
+    const nextBtn = document.getElementById('calendar-next-day');
+    const picker = document.getElementById('calendar-date-picker');
+    const todayBtn = document.getElementById('calendar-today-btn');
+    const quickInput = document.getElementById('calendar-quick-input');
+    const notifyBtn = document.getElementById('calendar-enable-notify');
+    const digestBtn = document.getElementById('calendar-send-digest');
+    const rolloverBtn = document.getElementById('calendar-rollover-btn');
+
+    if (prevBtn) prevBtn.onclick = () => {
+        const current = new Date(calendarState.selectedDay + 'T00:00:00');
+        current.setDate(current.getDate() - 1);
+        setCalendarDay(current.toISOString().slice(0, 10));
+    };
+    if (nextBtn) nextBtn.onclick = () => {
+        const current = new Date(calendarState.selectedDay + 'T00:00:00');
+        current.setDate(current.getDate() + 1);
+        setCalendarDay(current.toISOString().slice(0, 10));
+    };
+    if (picker) picker.onchange = (e) => setCalendarDay(e.target.value);
+    if (todayBtn) todayBtn.onclick = () => setCalendarDay(todayStr);
+    if (quickInput) {
+        quickInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleCalendarQuickAdd();
+            }
+        });
+    }
+    if (notifyBtn) notifyBtn.onclick = enableCalendarNotifications;
+    if (digestBtn) digestBtn.onclick = () => sendCalendarDigest(calendarState.selectedDay);
+    if (rolloverBtn) rolloverBtn.onclick = triggerManualRollover;
+
+    setCalendarDay(todayStr);
+}
+
 // --- Initialization ---
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1756,6 +2228,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initMobileTopbar();
     initNotesPage();
     initAIPage();
+    initCalendarPage();
 
     // Add long-press listeners for mobile selection
     document.querySelectorAll('.task-item').forEach(item => {
@@ -1885,8 +2358,8 @@ function formatAIMessage(text) {
     formatted = formatted.replace(/\[✓\]/g, '<span class="ai-status ai-status-done">✓</span>');
 
     // Convert bullet points with proper indentation
-    formatted = formatted.replace(/^•\s/gm, '<span class="ai-bullet">• </span>');
-    formatted = formatted.replace(/<br>•\s/g, '<br><span class="ai-bullet">• </span>');
+    formatted = formatted.replace(/^-\s/gm, '<span class="ai-bullet">- </span>');
+    formatted = formatted.replace(/<br>-\s/g, '<br><span class="ai-bullet">- </span>');
 
     // Add spacing for double line breaks
     formatted = formatted.replace(/(<br>){2,}/g, '<br><br>');

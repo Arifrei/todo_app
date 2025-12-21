@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date, time, timedelta
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
@@ -8,7 +8,8 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 load_dotenv()
 
 from ai_service import run_ai_chat
-from models import db, User, TodoList, TodoItem, Note
+from models import db, User, TodoList, TodoItem, Note, CalendarEvent
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'
@@ -18,6 +19,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in secon
 app.config['API_SHARED_KEY'] = os.environ.get('API_SHARED_KEY')  # Optional shared key for API callers
 
 db.init_app(app)
+scheduler = None
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -313,6 +315,194 @@ def reindex_list(todo_list):
     for idx, item in enumerate(ordered, start=1):
         item.order_index = idx
 
+# --- Calendar Helpers ---
+
+def _parse_time_str(val):
+    """Parse 'HH' or 'HH:MM' into a time object; return None on failure."""
+    if not val:
+        return None
+    if isinstance(val, time):
+        return val
+    try:
+        parts = str(val).split(':')
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        return time(hour=hour, minute=minute)
+    except Exception:
+        return None
+
+
+def _next_calendar_order(day_value, user_id):
+    """Return next order index for a given day/user."""
+    current_max = db.session.query(db.func.max(CalendarEvent.order_index)).filter(
+        CalendarEvent.user_id == user_id,
+        CalendarEvent.day == day_value
+    ).scalar()
+    return (current_max or 0) + 1
+
+
+def _rollover_incomplete_events():
+    """Clone yesterday's incomplete events with rollover enabled into today."""
+    with app.app_context():
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+
+        # Build a map of phases that need to be recreated
+        phases_yesterday = CalendarEvent.query.filter(
+            CalendarEvent.day == yesterday,
+            CalendarEvent.is_phase.is_(True)
+        ).all()
+
+        # For each user, roll their events independently
+        user_ids = [u.id for u in User.query.all()]
+        for uid in user_ids:
+            phase_map = {}
+            # Collect phases by title to recreate only if needed
+            for ph in phases_yesterday:
+                if ph.user_id == uid:
+                    phase_map[ph.id] = None  # placeholder
+
+            events = CalendarEvent.query.filter(
+                CalendarEvent.user_id == uid,
+                CalendarEvent.day == yesterday,
+                CalendarEvent.status != 'done',
+                CalendarEvent.rollover_enabled.is_(True),
+                CalendarEvent.is_phase.is_(False)
+            ).order_by(CalendarEvent.order_index.asc()).all()
+
+            if not events:
+                continue
+
+            for ev in events:
+                new_phase_id = None
+                if ev.phase_id:
+                    if ev.phase_id not in phase_map or phase_map[ev.phase_id] is None:
+                        orig_phase = next((p for p in phases_yesterday if p.id == ev.phase_id and p.user_id == uid), None)
+                        if orig_phase:
+                            copy_phase = CalendarEvent(
+                                user_id=uid,
+                                title=orig_phase.title,
+                                description=orig_phase.description,
+                                day=today,
+                                is_phase=True,
+                                status='not_started',
+                                priority=orig_phase.priority,
+                                order_index=_next_calendar_order(today, uid),
+                                reminder_minutes_before=None,
+                                rollover_enabled=orig_phase.rollover_enabled,
+                                rolled_from_id=orig_phase.id
+                            )
+                            db.session.add(copy_phase)
+                            db.session.flush()
+                            phase_map[orig_phase.id] = copy_phase.id
+                    new_phase_id = phase_map.get(ev.phase_id)
+
+                copy_event = CalendarEvent(
+                    user_id=uid,
+                    title=ev.title,
+                    description=ev.description,
+                    day=today,
+                    start_time=ev.start_time,
+                    end_time=ev.end_time,
+                    status='not_started',
+                    priority=ev.priority,
+                    is_phase=False,
+                    phase_id=new_phase_id,
+                    order_index=_next_calendar_order(today, uid),
+                    reminder_minutes_before=ev.reminder_minutes_before,
+                    rollover_enabled=ev.rollover_enabled,
+                    rolled_from_id=ev.id
+                )
+                db.session.add(copy_event)
+
+            db.session.commit()
+
+
+def _send_email(to_addr, subject, body):
+    """Lightweight SMTP sender using environment variables."""
+    host = os.environ.get('SMTP_HOST')
+    port = int(os.environ.get('SMTP_PORT', 587))
+    user = os.environ.get('SMTP_USER')
+    password = os.environ.get('SMTP_PASSWORD')
+    from_addr = os.environ.get('SMTP_FROM') or user
+    if not host or not from_addr:
+        return False
+    import smtplib
+    from email.mime.text import MIMEText
+
+    msg = MIMEText(body, 'plain')
+    msg['Subject'] = subject
+    msg['From'] = from_addr
+    msg['To'] = to_addr
+
+    with smtplib.SMTP(host, port) as server:
+        server.starttls()
+        if user and password:
+            server.login(user, password)
+        server.sendmail(from_addr, [to_addr], msg.as_string())
+    return True
+
+
+def _build_daily_digest_body(events_for_day):
+    lines = []
+    for ev in events_for_day:
+        prefix = '[x]' if ev.status == 'done' else '[ ]'
+        time_block = ''
+        if ev.start_time:
+            end_str = ev.end_time.isoformat() if ev.end_time else ''
+            time_block = f" @ {ev.start_time.isoformat()}{('-' + end_str) if end_str else ''}"
+        priority = ev.priority or 'medium'
+        lines.append(f"{prefix} {ev.title} ({priority}){time_block}")
+    return '\n'.join(lines)
+
+
+def _send_daily_email_digest(target_day=None):
+    """Send daily digest emails to users who have an email set."""
+    if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '0') != '1':
+        return
+    with app.app_context():
+        target_day = target_day or date.today()
+        users = User.query.filter(User.email != None).all()  # noqa: E711
+        for user_obj in users:
+            events = CalendarEvent.query.filter(
+                CalendarEvent.user_id == user_obj.id,
+                CalendarEvent.day == target_day
+            ).order_by(CalendarEvent.order_index.asc()).all()
+            if not events:
+                continue
+            body = _build_daily_digest_body(events)
+            try:
+                _send_email(user_obj.email, f"Your tasks for {target_day.isoformat()}", body)
+            except Exception:
+                continue
+
+
+def _start_scheduler():
+    """Start background scheduler for rollover and optional digest."""
+    global scheduler
+    if os.environ.get('ENABLE_CALENDAR_JOBS', '1') != '1':
+        return
+    if scheduler and scheduler.running:
+        return
+    # Avoid double-start in Flask debug reloader
+    if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+        return
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
+    # Optional daily digest at 7:00 local time
+    scheduler.add_job(_send_daily_email_digest, 'cron', hour=int(os.environ.get('DIGEST_HOUR', 7)), minute=0)
+    scheduler.start()
+
+_jobs_bootstrapped = False
+
+@app.before_request
+def _bootstrap_background_jobs():
+    global _jobs_bootstrapped
+    if _jobs_bootstrapped:
+        return
+    _start_scheduler()
+    _jobs_bootstrapped = True
+
 # User Selection Routes
 @app.route('/select-user')
 def select_user():
@@ -381,6 +571,13 @@ def ai_page():
     if not get_current_user():
         return redirect(url_for('select_user'))
     return render_template('ai.html')
+
+@app.route('/calendar')
+def calendar_page():
+    """Calendar day-first UI."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('calendar.html')
 
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
@@ -499,6 +696,212 @@ def handle_note(note_id):
         return jsonify(note.to_dict())
 
     return jsonify(note.to_dict())
+
+# Calendar API
+ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
+ALLOWED_STATUSES = {'not_started', 'in_progress', 'done'}
+
+def _parse_day_value(raw):
+    if isinstance(raw, date):
+        return raw
+    try:
+        return datetime.strptime(str(raw), '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+@app.route('/api/calendar/events', methods=['GET', 'POST'])
+def calendar_events():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        day_str = request.args.get('day') or date.today().isoformat()
+        day_obj = _parse_day_value(day_str)
+        if not day_obj:
+            return jsonify({'error': 'Invalid day'}), 400
+        events = CalendarEvent.query.filter_by(user_id=user.id, day=day_obj).order_by(
+            CalendarEvent.order_index.asc()
+        ).all()
+        payload = []
+        for ev in events:
+            data = ev.to_dict()
+            if ev.phase_id:
+                parent = next((e for e in events if e.id == ev.phase_id), None)
+                data['phase_title'] = parent.title if parent else None
+            payload.append(data)
+        return jsonify(payload)
+
+    data = request.json or {}
+    title = (data.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'Title is required'}), 400
+
+    day_obj = _parse_day_value(data.get('day') or date.today().isoformat())
+    if not day_obj:
+        return jsonify({'error': 'Invalid day'}), 400
+
+    is_phase = bool(data.get('is_phase'))
+    priority = (data.get('priority') or 'medium').lower()
+    if priority not in ALLOWED_PRIORITIES:
+        priority = 'medium'
+    status = (data.get('status') or 'not_started')
+    if status not in ALLOWED_STATUSES:
+        status = 'not_started'
+
+    reminder_minutes = data.get('reminder_minutes_before')
+    try:
+        reminder_minutes = int(reminder_minutes) if reminder_minutes is not None else None
+    except (TypeError, ValueError):
+        reminder_minutes = None
+
+    phase_id = data.get('phase_id')
+    resolved_phase_id = None
+    if phase_id and not is_phase:
+        try:
+            phase_id_int = int(phase_id)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid phase_id'}), 400
+        phase_obj = CalendarEvent.query.filter_by(id=phase_id_int, user_id=user.id, day=day_obj, is_phase=True).first()
+        if not phase_obj:
+            return jsonify({'error': 'Phase not found for that day'}), 404
+        resolved_phase_id = phase_id_int
+
+    start_time = _parse_time_str(data.get('start_time'))
+    end_time = _parse_time_str(data.get('end_time'))
+
+    new_event = CalendarEvent(
+        user_id=user.id,
+        title=title,
+        description=(data.get('description') or '').strip() or None,
+        day=day_obj,
+        start_time=start_time,
+        end_time=end_time,
+        status=status,
+        priority=priority,
+        is_phase=is_phase,
+        phase_id=resolved_phase_id if not is_phase else None,
+        reminder_minutes_before=reminder_minutes if not is_phase else None,
+        rollover_enabled=bool(data.get('rollover_enabled', True)),
+        order_index=_next_calendar_order(day_obj, user.id)
+    )
+    db.session.add(new_event)
+    db.session.commit()
+    return jsonify(new_event.to_dict()), 201
+
+
+@app.route('/api/calendar/events/<int:event_id>', methods=['PUT', 'DELETE'])
+def calendar_event_detail(event_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    event = CalendarEvent.query.filter_by(id=event_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        db.session.delete(event)
+        db.session.commit()
+        return '', 204
+
+    data = request.json or {}
+    if 'title' in data:
+        title = (data.get('title') or '').strip()
+        if title:
+            event.title = title
+    if 'description' in data:
+        event.description = (data.get('description') or '').strip() or None
+    if 'priority' in data:
+        priority = (data.get('priority') or '').lower()
+        if priority in ALLOWED_PRIORITIES:
+            event.priority = priority
+    if 'status' in data:
+        status = data.get('status')
+        if status in ALLOWED_STATUSES:
+            event.status = status
+    if 'rollover_enabled' in data:
+        event.rollover_enabled = bool(data.get('rollover_enabled'))
+    if 'start_time' in data:
+        event.start_time = _parse_time_str(data.get('start_time'))
+    if 'end_time' in data:
+        event.end_time = _parse_time_str(data.get('end_time'))
+    if 'reminder_minutes_before' in data:
+        try:
+            event.reminder_minutes_before = int(data.get('reminder_minutes_before'))
+        except (TypeError, ValueError):
+            event.reminder_minutes_before = None
+    if 'day' in data:
+        new_day = _parse_day_value(data.get('day'))
+        if not new_day:
+            return jsonify({'error': 'Invalid day'}), 400
+        if new_day != event.day:
+            event.day = new_day
+            event.order_index = _next_calendar_order(new_day, user.id)
+    if 'phase_id' in data and not event.is_phase:
+        if data.get('phase_id') is None:
+            event.phase_id = None
+        else:
+            try:
+                pid = int(data.get('phase_id'))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid phase_id'}), 400
+            phase_obj = CalendarEvent.query.filter_by(id=pid, user_id=user.id, day=event.day, is_phase=True).first()
+            if not phase_obj:
+                return jsonify({'error': 'Phase not found for that day'}), 404
+            event.phase_id = pid
+    db.session.commit()
+    return jsonify(event.to_dict())
+
+
+@app.route('/api/calendar/events/reorder', methods=['POST'])
+def reorder_calendar_events():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    ids = data.get('ids') or []
+    day_obj = _parse_day_value(data.get('day') or date.today().isoformat())
+    if not ids or not isinstance(ids, list):
+        return jsonify({'error': 'ids array required'}), 400
+    if not day_obj:
+        return jsonify({'error': 'Invalid day'}), 400
+
+    items = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user.id,
+        CalendarEvent.id.in_(ids),
+        CalendarEvent.day == day_obj
+    ).all()
+    position = 1
+    for eid in ids:
+        try:
+            eid_int = int(eid)
+        except (TypeError, ValueError):
+            continue
+        item = next((i for i in items if i.id == eid_int), None)
+        if item:
+            item.order_index = position
+            position += 1
+    db.session.commit()
+    return jsonify({'updated': position - 1})
+
+
+@app.route('/api/calendar/rollover-now', methods=['POST'])
+def manual_rollover():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    _rollover_incomplete_events()
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/calendar/digest/email', methods=['POST'])
+def send_digest_now():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    day_obj = _parse_day_value(request.json.get('day') if request.json else None) or date.today()
+    _send_daily_email_digest(target_day=day_obj)
+    return jsonify({'status': 'sent', 'day': day_obj.isoformat()})
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_list(list_id):

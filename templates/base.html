@@ -37,6 +37,12 @@
                         </a>
                     </li>
                     <li>
+                        <a href="/calendar" class="{{ 'active' if request.path.startswith('/calendar') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-calendar-day"></i></span>
+                            <span class="nav-label">Calendar</span>
+                        </a>
+                    </li>
+                    <li>
                         <a href="/notes" class="{{ 'active' if request.path.startswith('/notes') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-note-sticky"></i></span>
                             <span class="nav-label">Notes</span>

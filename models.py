@@ -1,7 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+from datetime import datetime, date, time
 
 db = SQLAlchemy()
 
@@ -175,4 +175,51 @@ class Note(db.Model):
             'content': self.content or '',
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class CalendarEvent(db.Model):
+    """
+    Single-day calendar entry. Supports phases (is_phase) and tasks nested via phase_id.
+    All dates/times are stored as naive dates/times in server local timezone.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    day = db.Column(db.Date, nullable=False, default=date.today)
+    start_time = db.Column(db.Time, nullable=True)
+    end_time = db.Column(db.Time, nullable=True)
+    status = db.Column(db.String(20), default='not_started')  # not_started | in_progress | done
+    priority = db.Column(db.String(10), default='medium')  # low | medium | high
+    is_phase = db.Column(db.Boolean, default=False)
+    phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    phase = db.relationship('CalendarEvent', remote_side=[id], backref='phase_events', foreign_keys=[phase_id])
+    order_index = db.Column(db.Integer, default=0)
+    reminder_minutes_before = db.Column(db.Integer, nullable=True)
+    rollover_enabled = db.Column(db.Boolean, default=True)
+    rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def is_phase_header(self):
+        return self.is_phase
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'description': self.description,
+            'day': self.day.isoformat() if self.day else None,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'status': self.status,
+            'priority': self.priority,
+            'is_phase': self.is_phase,
+            'phase_id': self.phase_id,
+            'order_index': self.order_index,
+            'reminder_minutes_before': self.reminder_minutes_before,
+            'rollover_enabled': self.rollover_enabled,
+            'rolled_from_id': self.rolled_from_id,
         }
