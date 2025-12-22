@@ -4,7 +4,8 @@
       "Bash(python migrate.py:*)",
       "Bash(python:*)",
       "Bash(dir:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []

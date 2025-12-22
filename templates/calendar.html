@@ -47,23 +47,12 @@
         </header>
 
         <section class="calendar-quick-add card">
-            <div class="quick-add-row">
+            <div class="quick-add-input-wrapper">
                 <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
+                <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
             </div>
-            <div class="quick-add-controls">
-                <label class="quick-add-label" for="calendar-entry-type">Type</label>
-                <select id="calendar-entry-type" class="form-control slim" disabled>
-                    <option value="task" selected>Task</option>
-                    <option value="event">Event</option>
-                    <option value="group">Group</option>
-                </select>
-                <label class="quick-add-label" for="calendar-group-select">Group</label>
-                <select id="calendar-group-select" class="form-control slim" disabled>
-                    <option value="">Ungrouped</option>
-                </select>
-            </div>
-            <div class="quick-hint">
-                Enter to add. Use <code>!high/!med/!low</code> for priority, <code>@HH:MM</code> or <code>@9-10</code> for time, <code>#Phase</code> to add a phase header, <code>bell 10</code> for reminder minutes. Rollover is on by default (uncheck per item).
+            <div class="quick-hint" id="calendar-syntax-hint">
+                Start typing... Press <kbd>Ctrl+Space</kbd> for syntax help
             </div>
         </section>
 

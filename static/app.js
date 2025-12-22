@@ -1739,8 +1739,6 @@ function getMonthRange(dateObj) {
 function setDayControlsEnabled(enabled) {
     const picker = document.getElementById('calendar-date-picker');
     const quickInput = document.getElementById('calendar-quick-input');
-    const typeSelect = document.getElementById('calendar-entry-type');
-    const groupSelect = document.getElementById('calendar-group-select');
     const prevBtn = document.getElementById('calendar-prev-day');
     const nextBtn = document.getElementById('calendar-next-day');
     const todayBtn = document.getElementById('calendar-today-btn');
@@ -1748,11 +1746,9 @@ function setDayControlsEnabled(enabled) {
     if (quickInput) {
         quickInput.disabled = !enabled;
         quickInput.placeholder = enabled
-            ? "Add event: '@9:30-10:00 Sprint daily !high #Planning @Zoom'"
-            : 'Pick a day, then add events';
+            ? "Type your task and press Enter. Use $ for events, #Phase, >Group"
+            : 'Pick a day to open its schedule';
     }
-    if (typeSelect) typeSelect.disabled = !enabled;
-    if (groupSelect) groupSelect.disabled = !enabled;
     if (prevBtn) prevBtn.disabled = !enabled;
     if (nextBtn) nextBtn.disabled = !enabled;
     if (todayBtn) todayBtn.disabled = false; // keep Today usable as an entry point
@@ -1986,7 +1982,6 @@ async function loadCalendarDay(dayStr) {
         const res = await fetch(`/api/calendar/events?day=${dayStr}`);
         if (!res.ok) throw new Error('Failed to load events');
         calendarState.events = await res.json();
-        refreshGroupOptionsFromState();
         renderCalendarEvents();
         scheduleLocalReminders();
     } catch (err) {
@@ -2031,7 +2026,6 @@ function renderCalendarEvents() {
         container.innerHTML = `<div class="calendar-empty">Nothing planned for this day. Use the quick add box to start.</div>`;
         return;
     }
-    refreshGroupOptionsFromState();
     const sorted = [...calendarState.events].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
     const groupMap = new Map();
     const rootItems = [];
@@ -2138,14 +2132,17 @@ function renderCalendarEvents() {
         });
         titleWrap.appendChild(titleInput);
 
+        // Add time inline with title
+        if (ev.start_time) {
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'calendar-time-inline';
+            timeSpan.textContent = formatTimeRange(ev) || 'Time';
+            titleWrap.appendChild(timeSpan);
+        }
+
+        // Keep phase chip in meta-lite (will show on hover)
         const meta = document.createElement('div');
         meta.className = 'calendar-meta-lite';
-        if (ev.start_time) {
-            const chip = document.createElement('span');
-            chip.className = 'meta-chip time';
-            chip.textContent = formatTimeRange(ev) || 'Time';
-            meta.appendChild(chip);
-        }
         if (ev.phase_id) {
             const chip = document.createElement('span');
             chip.className = 'meta-chip phase';
@@ -2236,15 +2233,13 @@ function renderCalendarEvents() {
         });
         titleWrap.appendChild(titleInput);
 
-        const meta = document.createElement('div');
-        meta.className = 'calendar-meta-lite';
+        // Add time inline with title
         if (ev.start_time) {
-            const chip = document.createElement('span');
-            chip.className = 'meta-chip time';
-            chip.textContent = formatTimeRange(ev) || 'Time';
-            meta.appendChild(chip);
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'calendar-time-inline';
+            timeSpan.textContent = formatTimeRange(ev) || 'Time';
+            titleWrap.appendChild(timeSpan);
         }
-        if (meta.childNodes.length) titleWrap.appendChild(meta);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
@@ -2297,10 +2292,32 @@ function renderCalendarEvents() {
         const row = document.createElement('div');
         row.className = 'calendar-row group';
         row.dataset.id = group.id;
+        row.dataset.groupCollapsed = 'false';
 
         const grip = document.createElement('span');
         grip.className = 'group-icon';
-        grip.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
+        const children = groupMap.get(group.id)?.children || [];
+        grip.innerHTML = `
+            <i class="fa-solid fa-chevron-down" style="font-size: 0.75rem; margin-right: 0.25rem;"></i>
+            <i class="fa-solid fa-layer-group"></i>
+            <span class="count-badge" style="margin-left: 0.35rem;">${children.length}</span>
+        `;
+        grip.style.cursor = 'pointer';
+        grip.onclick = () => {
+            const isCollapsed = row.dataset.groupCollapsed === 'true';
+            row.dataset.groupCollapsed = isCollapsed ? 'false' : 'true';
+            const chevron = grip.querySelector('.fa-chevron-down');
+            if (chevron) {
+                chevron.style.transform = isCollapsed ? 'rotate(0deg)' : 'rotate(-90deg)';
+            }
+            // Toggle children visibility
+            children.forEach(child => {
+                const childRow = container.querySelector(`[data-id="${child.id}"]`);
+                if (childRow && childRow !== row) {
+                    childRow.style.display = isCollapsed ? '' : 'none';
+                }
+            });
+        };
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'calendar-title';
@@ -2333,7 +2350,6 @@ function renderCalendarEvents() {
         row.append(grip, titleWrap, actions);
         container.appendChild(row);
 
-        const children = groupMap.get(group.id)?.children || [];
         children.forEach(child => {
             // indent children slightly
             const childRow = child.is_event ? renderEvent(child, true) : renderPhaseOrTask(child, true);
@@ -2344,27 +2360,55 @@ function renderCalendarEvents() {
     const eventItems = rootItems.filter(ev => ev.is_event && !ev.is_group);
     const taskItems = rootItems.filter(ev => ev.is_group || (!ev.is_event && !ev.is_group));
 
-    const addDivider = (label) => {
+    const toggleSection = (sectionId) => {
+        const section = document.getElementById(`calendar-section-${sectionId}`);
+        const divider = document.querySelector(`[data-section="${sectionId}"]`);
+        if (section && divider) {
+            section.classList.toggle('collapsed');
+            divider.classList.toggle('collapsed');
+        }
+    };
+
+    const addDivider = (label, count, sectionId) => {
         const d = document.createElement('div');
         d.className = 'calendar-event-divider';
-        d.textContent = label;
+        d.dataset.section = sectionId;
+        d.innerHTML = `
+            <span>
+                ${label}
+                <span class="count-badge">${count}</span>
+            </span>
+            <i class="fa-solid fa-chevron-down divider-icon"></i>
+        `;
+        d.onclick = () => toggleSection(sectionId);
         container.appendChild(d);
     };
 
+    const createSection = (id) => {
+        const section = document.createElement('div');
+        section.id = `calendar-section-${id}`;
+        section.className = 'calendar-section';
+        return section;
+    };
+
     if (eventItems.length) {
-        addDivider('Events');
-        eventItems.forEach(ev => container.appendChild(renderEvent(ev)));
+        addDivider('Events', eventItems.length, 'events');
+        const eventSection = createSection('events');
+        eventItems.forEach(ev => eventSection.appendChild(renderEvent(ev)));
+        container.appendChild(eventSection);
     }
 
     if (taskItems.length) {
-        addDivider('Tasks');
+        addDivider('Tasks', taskItems.length, 'tasks');
+        const taskSection = createSection('tasks');
         taskItems.forEach(ev => {
             if (ev.is_group) {
                 renderGroup(ev);
             } else {
-                container.appendChild(renderPhaseOrTask(ev));
+                taskSection.appendChild(renderPhaseOrTask(ev));
             }
         });
+        container.appendChild(taskSection);
     }
 
     enableCalendarDragAndDrop(container);
@@ -2430,6 +2474,13 @@ function parseCalendarQuickInput(text) {
     let reminder = null;
     let phaseName = null;
     let rollover = true;
+    let isEvent = false;
+
+    // Event marker ($)
+    if (working.includes('$')) {
+        isEvent = true;
+        working = working.replace(/\$/g, '').trim();
+    }
 
     const timeMatch = working.match(/@(\d{1,2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}(?::\d{2})?))?/);
     if (timeMatch) {
@@ -2459,6 +2510,13 @@ function parseCalendarQuickInput(text) {
         working = working.replace(phaseMatch[0], '').trim();
     }
 
+    let groupName = null;
+    const groupMatch = working.match(/>([A-Za-z0-9 _-]+)/);
+    if (groupMatch) {
+        groupName = groupMatch[1].trim();
+        working = working.replace(groupMatch[0], '').trim();
+    }
+
     if (working.toLowerCase().includes('noroll')) {
         rollover = false;
         working = working.replace(/noroll/gi, '').trim();
@@ -2470,50 +2528,208 @@ function parseCalendarQuickInput(text) {
     return {
         title,
         is_phase: false,
+        is_event: isEvent,
         start_time: startTime,
         end_time: endTime,
         priority,
         reminder_minutes_before: reminder,
         phase_name: phaseName,
+        group_name: groupName,
         rollover_enabled: rollover
     };
 }
 
-async function handleCalendarQuickAdd() {
-    const input = document.getElementById('calendar-quick-input');
-    const typeSelect = document.getElementById('calendar-entry-type');
-    if (!input || !calendarState.selectedDay || !calendarState.dayViewOpen) return;
-    const parsed = parseCalendarQuickInput(input.value || '');
-    if (!parsed && (!typeSelect || typeSelect.value !== 'group')) return;
-    input.value = '';
-    const isEvent = typeSelect ? (typeSelect.value === 'event') : false;
-    const isGroup = typeSelect ? (typeSelect.value === 'group') : false;
-    const groupSelect = document.getElementById('calendar-group-select');
-    const groupIdVal = groupSelect ? groupSelect.value : '';
-    const groupId = groupIdVal ? parseInt(groupIdVal, 10) : null;
-    if (isGroup) {
-        openCalendarPrompt({
-            title: 'New Group',
-            message: 'Group name',
-            defaultValue: 'New Group',
-            onSubmit: async (val) => {
-                const title = (val || '').trim();
-                if (!title) return;
-                await createCalendarEvent({
-                    title,
-                    is_phase: false,
-                    is_event: false,
-                    is_group: true
-                });
-                if (calendarState.detailsOpen) {
-                    await loadCalendarDay(calendarState.selectedDay);
-                } else {
-                    await loadCalendarMonth();
-                }
-            }
+// Autocomplete state
+const autocompleteState = {
+    visible: false,
+    selectedIndex: 0,
+    suggestions: []
+};
+
+function getSyntaxSuggestions(text, cursorPosition) {
+    const suggestions = [];
+    const beforeCursor = text.substring(0, cursorPosition);
+    const lastWord = beforeCursor.split(/\s/).pop();
+
+    // Time syntax
+    if (lastWord.startsWith('@') || !beforeCursor.includes('@')) {
+        suggestions.push({
+            syntax: '@HH:MM',
+            description: 'Set start time',
+            example: '@9:30 or @14:00'
         });
+        suggestions.push({
+            syntax: '@HH:MM-HH:MM',
+            description: 'Set start and end time',
+            example: '@9:30-10:00'
+        });
+    }
+
+    // Priority syntax
+    if (lastWord.startsWith('!') || !beforeCursor.includes('!')) {
+        suggestions.push({
+            syntax: '!high',
+            description: 'High priority (red)',
+            example: '!high or !3'
+        });
+        suggestions.push({
+            syntax: '!med',
+            description: 'Medium priority (orange)',
+            example: '!med or !2'
+        });
+        suggestions.push({
+            syntax: '!low',
+            description: 'Low priority (green)',
+            example: '!low or !1'
+        });
+    }
+
+    // Phase syntax
+    if (lastWord.startsWith('#') || (!beforeCursor.includes('#') && calendarState.events)) {
+        const phases = calendarState.events?.filter(e => e.is_phase) || [];
+        if (phases.length > 0) {
+            suggestions.push({
+                syntax: '#PhaseName',
+                description: 'Add to existing phase',
+                example: phases.slice(0, 2).map(p => `#${p.title}`).join(' or ')
+            });
+        } else {
+            suggestions.push({
+                syntax: '#NewPhase',
+                description: 'Create a phase header',
+                example: '#Planning or #Development'
+            });
+        }
+    }
+
+    // Group syntax
+    if (lastWord.startsWith('>') || (!beforeCursor.includes('>') && calendarState.events)) {
+        const groups = calendarState.events?.filter(e => e.is_group) || [];
+        if (groups.length > 0) {
+            suggestions.push({
+                syntax: '>GroupName',
+                description: 'Add to existing group',
+                example: groups.slice(0, 2).map(g => `>${g.title}`).join(' or ')
+            });
+        } else {
+            suggestions.push({
+                syntax: '>NewGroup',
+                description: 'Add to a group (creates if needed)',
+                example: '>Work or >Personal'
+            });
+        }
+    }
+
+    // Event marker
+    if (!beforeCursor.includes('$')) {
+        suggestions.push({
+            syntax: '$',
+            description: 'Mark as event (not a task)',
+            example: 'Team meeting $ or Birthday party $'
+        });
+    }
+
+    // Reminder syntax
+    if ((lastWord.toLowerCase().startsWith('bell') || lastWord.toLowerCase().startsWith('rem')) ||
+        !beforeCursor.toLowerCase().includes('bell')) {
+        suggestions.push({
+            syntax: 'bell X',
+            description: 'Reminder X minutes before',
+            example: 'bell 10 or bell 30'
+        });
+    }
+
+    // Rollover syntax
+    if (!beforeCursor.toLowerCase().includes('noroll')) {
+        suggestions.push({
+            syntax: 'noroll',
+            description: 'Disable auto-rollover',
+            example: 'noroll'
+        });
+    }
+
+    return suggestions;
+}
+
+function renderAutocompleteSuggestions(suggestions) {
+    const container = document.getElementById('calendar-autocomplete');
+    if (!container) return;
+
+    if (suggestions.length === 0) {
+        container.classList.add('is-hidden');
+        autocompleteState.visible = false;
         return;
     }
+
+    container.innerHTML = '';
+    suggestions.forEach((sug, index) => {
+        const item = document.createElement('div');
+        item.className = `autocomplete-item ${index === autocompleteState.selectedIndex ? 'selected' : ''}`;
+        item.innerHTML = `
+            <div class="autocomplete-syntax">${sug.syntax}</div>
+            <div class="autocomplete-description">${sug.description}</div>
+            <div class="autocomplete-example">e.g., ${sug.example}</div>
+        `;
+        item.onclick = () => insertSuggestion(sug.syntax);
+        container.appendChild(item);
+    });
+
+    container.classList.remove('is-hidden');
+    autocompleteState.visible = true;
+    autocompleteState.suggestions = suggestions;
+}
+
+function insertSuggestion(syntax) {
+    const input = document.getElementById('calendar-quick-input');
+    if (!input) return;
+
+    const cursorPos = input.selectionStart;
+    const text = input.value;
+    const beforeCursor = text.substring(0, cursorPos);
+    const afterCursor = text.substring(cursorPos);
+
+    // Find where to insert (replace partial token or append)
+    const lastWord = beforeCursor.split(/\s/).pop();
+    const hasPartial = lastWord.startsWith('@') || lastWord.startsWith('!') ||
+                       lastWord.startsWith('#') || lastWord.startsWith('>') ||
+                       lastWord === '$' || lastWord.toLowerCase().startsWith('bell');
+
+    let newText;
+    let newCursorPos;
+    if (hasPartial) {
+        const replaceStart = cursorPos - lastWord.length;
+        newText = text.substring(0, replaceStart) + syntax + ' ' + afterCursor;
+        newCursorPos = replaceStart + syntax.length + 1;
+    } else {
+        newText = beforeCursor + syntax + ' ' + afterCursor;
+        newCursorPos = cursorPos + syntax.length + 1;
+    }
+
+    input.value = newText;
+    input.setSelectionRange(newCursorPos, newCursorPos);
+    input.focus();
+
+    hideAutocomplete();
+}
+
+function hideAutocomplete() {
+    const container = document.getElementById('calendar-autocomplete');
+    if (container) container.classList.add('is-hidden');
+    autocompleteState.visible = false;
+    autocompleteState.selectedIndex = 0;
+}
+
+function updateDynamicHint(text) {
+    // No dynamic hint updates - keep it simple
+}
+
+async function handleCalendarQuickAdd() {
+    const input = document.getElementById('calendar-quick-input');
+    if (!input || !calendarState.selectedDay || !calendarState.dayViewOpen) return;
+    const parsed = parseCalendarQuickInput(input.value || '');
+    if (!parsed) return;
+    input.value = '';
+    const isEvent = parsed.is_event || false;
     if (parsed.is_phase) {
         await createCalendarEvent({ title: parsed.title, is_phase: true });
         if (calendarState.detailsOpen) {
@@ -2541,16 +2757,27 @@ async function handleCalendarQuickAdd() {
         }
     }
 
+    let finalGroupId = null;
+    if (parsed.group_name) {
+        const existing = calendarState.events.find(e => e.is_group && e.title.toLowerCase() === parsed.group_name.toLowerCase());
+        if (existing) {
+            finalGroupId = existing.id;
+        } else {
+            const createdGroup = await createCalendarEvent({ title: parsed.group_name, is_group: true, is_event: false, is_phase: false });
+            finalGroupId = createdGroup ? createdGroup.id : null;
+        }
+    }
+
     await createCalendarEvent({
         title: parsed.title,
         is_phase: false,
         is_event: isEvent,
-        group_id: isEvent ? null : groupId,
+        group_id: finalGroupId,
         start_time: parsed.start_time,
         end_time: parsed.end_time,
         priority: parsed.priority,
         reminder_minutes_before: parsed.reminder_minutes_before,
-        phase_id: phaseId,
+        phase_id: isEvent ? null : phaseId,
         rollover_enabled: parsed.rollover_enabled
     });
     if (calendarState.detailsOpen) {
@@ -2764,6 +2991,42 @@ function initCalendarPage() {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 handleCalendarQuickAdd();
+            }
+
+            // Navigation in autocomplete
+            if (autocompleteState.visible) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    autocompleteState.selectedIndex =
+                        Math.min(autocompleteState.selectedIndex + 1, autocompleteState.suggestions.length - 1);
+                    renderAutocompleteSuggestions(autocompleteState.suggestions);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    autocompleteState.selectedIndex = Math.max(autocompleteState.selectedIndex - 1, 0);
+                    renderAutocompleteSuggestions(autocompleteState.suggestions);
+                } else if (e.key === 'Tab') {
+                    e.preventDefault();
+                    const selected = autocompleteState.suggestions[autocompleteState.selectedIndex];
+                    if (selected) insertSuggestion(selected.syntax);
+                } else if (e.key === 'Escape') {
+                    hideAutocomplete();
+                }
+            }
+
+            // Trigger autocomplete with Ctrl+Space
+            if (e.key === ' ' && e.ctrlKey) {
+                e.preventDefault();
+                const suggestions = getSyntaxSuggestions(quickInput.value, quickInput.selectionStart);
+                renderAutocompleteSuggestions(suggestions);
+            }
+        });
+
+        // No auto-suggestions - user must trigger with Ctrl+Space
+
+        // Hide autocomplete when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.quick-add-input-wrapper')) {
+                hideAutocomplete();
             }
         });
     }
