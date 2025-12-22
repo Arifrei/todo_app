@@ -88,6 +88,7 @@ class TodoItem(db.Model):
     status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done'
     order_index = db.Column(db.Integer, default=0)  # For manual ordering
     is_phase = db.Column(db.Boolean, default=False)  # Track if this is a phase header
+    due_date = db.Column(db.Date, nullable=True)
 
     # If this item represents a child project, this links to that list
     linked_list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=True)
@@ -96,6 +97,7 @@ class TodoItem(db.Model):
     # If this task belongs to a phase, track it here
     phase_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     phase = db.relationship('TodoItem', remote_side=[id], backref='phase_tasks', foreign_keys=[phase_id])
+    linked_notes = db.relationship('Note', backref='task', lazy=True, foreign_keys='Note.todo_item_id')
 
     def is_phase_header(self):
         """Canonical check for phase headers. Support legacy records where status was 'phase'."""
@@ -152,10 +154,13 @@ class TodoItem(db.Model):
             'phase_id': self.phase_id,
             'linked_list_id': self.linked_list_id,
             'order_index': self.order_index,
+            'due_date': self.due_date.isoformat() if self.due_date else None,
         }
         if self.linked_list:
             data['linked_list_type'] = self.linked_list.type
             data['linked_list_progress'] = self.linked_list.get_progress()
+        if hasattr(self, 'linked_notes'):
+            data['linked_note_ids'] = [n.id for n in self.linked_notes]
         return data
 
 
@@ -163,6 +168,7 @@ class Note(db.Model):
     """Standalone rich-text note owned by a user."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     title = db.Column(db.String(150), nullable=False, default='Untitled Note')
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -173,6 +179,7 @@ class Note(db.Model):
             'id': self.id,
             'title': self.title,
             'content': self.content or '',
+            'todo_item_id': self.todo_item_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

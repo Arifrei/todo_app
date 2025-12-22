@@ -47,12 +47,17 @@
         </header>
 
         <section class="calendar-quick-add card">
-            <div class="quick-add-input-wrapper">
-                <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
-                <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
+            <div class="calendar-input-row">
+                <div class="quick-add-input-wrapper">
+                    <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
+                    <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
+                </div>
+                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help">
+                    <i class="fa-solid fa-circle-question"></i>
+                </button>
             </div>
             <div class="quick-hint" id="calendar-syntax-hint">
-                Start typing... Press <kbd>Ctrl+Space</kbd> for syntax help
+                Start typing... Tap <i class="fa-solid fa-circle-question"></i> or press <kbd>Ctrl+Space</kbd> for syntax help
             </div>
         </section>
 

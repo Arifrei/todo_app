@@ -664,7 +664,21 @@ def handle_notes():
         data = request.json or {}
         title = (data.get('title') or '').strip() or 'Untitled Note'
         content = data.get('content') or ''
-        note = Note(title=title, content=content, user_id=user.id)
+        todo_item_id = data.get('todo_item_id')
+        linked_item = None
+        if todo_item_id:
+            try:
+                todo_item_id_int = int(todo_item_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid todo_item_id'}), 400
+            linked_item = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                TodoItem.id == todo_item_id_int,
+                TodoList.user_id == user.id
+            ).first()
+            if not linked_item:
+                return jsonify({'error': 'Task not found for this user'}), 404
+
+        note = Note(title=title, content=content, user_id=user.id, todo_item_id=linked_item.id if linked_item else None)
         db.session.add(note)
         db.session.commit()
         return jsonify(note.to_dict()), 201
@@ -692,6 +706,22 @@ def handle_note(note_id):
         note.title = (data.get('title') or '').strip() or 'Untitled Note'
         note.content = data.get('content', note.content)
         note.updated_at = datetime.utcnow()
+        if 'todo_item_id' in data:
+            todo_item_id = data.get('todo_item_id')
+            if todo_item_id is None:
+                note.todo_item_id = None
+            else:
+                try:
+                    todo_item_id_int = int(todo_item_id)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'Invalid todo_item_id'}), 400
+                linked_item = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                    TodoItem.id == todo_item_id_int,
+                    TodoList.user_id == user.id
+                ).first()
+                if not linked_item:
+                    return jsonify({'error': 'Task not found for this user'}), 404
+                note.todo_item_id = todo_item_id_int
         db.session.commit()
         return jsonify(note.to_dict())
 
@@ -775,6 +805,24 @@ def calendar_events():
                 parent = next((e for e in events if e.id == ev.phase_id), None)
                 data['phase_title'] = parent.title if parent else None
             payload.append(data)
+
+        # Also include tasks due on this day (from main task lists) as linkable entries
+        due_items = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+            TodoList.user_id == user.id,
+            TodoItem.due_date == day_obj,
+            TodoItem.is_phase == False
+        ).all()
+        for idx, item in enumerate(due_items):
+            payload.append({
+                'id': -100000 - idx,  # synthetic id to avoid collisions
+                'title': item.content,
+                'status': item.status,
+                'is_task_link': True,
+                'task_id': item.id,
+                'task_list_id': item.list_id,
+                'task_list_title': item.list.title if item.list else '',
+                'order_index': 100000 + idx
+            })
         return jsonify(payload)
 
     data = request.json or {}
@@ -1053,6 +1101,8 @@ def create_item(list_id):
     phase_id = data.get('phase_id')
     status = data.get('status', 'not_started')
     is_phase_item = bool(data.get('is_phase')) or status == 'phase'
+    due_date_raw = data.get('due_date')
+    due_date = _parse_day_value(due_date_raw) if due_date_raw else None
     allowed_statuses = {'not_started', 'in_progress', 'done'}
     if status not in allowed_statuses:
         status = 'not_started'
@@ -1067,7 +1117,8 @@ def create_item(list_id):
         status=status,
         order_index=next_order,
         phase_id=int(phase_id) if (phase_id and not is_phase_item) else None,
-        is_phase=is_phase_item
+        is_phase=is_phase_item,
+        due_date=due_date
     )
     
     if is_project:
@@ -1137,6 +1188,9 @@ def handle_item(item_id):
         item.content = data.get('content', item.content)
         item.description = data.get('description', item.description)
         item.notes = data.get('notes', item.notes)
+        if 'due_date' in data:
+            due_date_raw = data.get('due_date')
+            item.due_date = _parse_day_value(due_date_raw) if due_date_raw else None
 
         # If this task's status changed and it belongs to a phase, update phase status
         if old_status != new_status and item.phase_id:

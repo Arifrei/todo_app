@@ -23,6 +23,19 @@
     </div>
 
     <div class="app-container">
+        <div class="mobile-topbar">
+            <button class="hamburger-btn" id="mobile-menu-btn" aria-label="Open navigation">
+                <span></span><span></span><span></span>
+            </button>
+            <div class="mobile-brand">
+                <i class="fa-solid fa-layer-group"></i>
+                <span>TaskFlow</span>
+            </div>
+            <div class="mobile-user" onclick="toggleUserMenu(event)">
+                <i class="fa-solid fa-user"></i>
+                <span id="mobile-username">User</span>
+            </div>
+        </div>
         <nav class="sidebar">
             <div class="logo">
                 <i class="fa-solid fa-layer-group"></i>
@@ -70,7 +83,11 @@
                 fetch('/api/current-user')
                     .then(r => r.json())
                     .then(data => {
-                        document.getElementById('current-username').textContent = data.username || 'None';
+                        const name = data.username || 'None';
+                        const desktop = document.getElementById('current-username');
+                        const mobile = document.getElementById('mobile-username');
+                        if (desktop) desktop.textContent = name;
+                        if (mobile) mobile.textContent = name;
                     });
 
                 function toggleUserMenu(event) {
@@ -85,6 +102,7 @@
                 });
             </script>
         </nav>
+        <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebarDrawer(false)"></div>
 
         <main class="content">
             {% block content %}{% endblock %}

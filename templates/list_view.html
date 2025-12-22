@@ -164,6 +164,16 @@
                     style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; font-style: italic;">{{
                     item.notes }}</div>
                 {% endif %}
+                {% if item.due_date or (item.linked_notes|length) %}
+                <div class="task-meta-lite" style="margin-top: 6px; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    {% if item.due_date %}
+                    <span class="meta-chip time">Due {{ item.due_date }}</span>
+                    {% endif %}
+                    {% if item.linked_notes|length %}
+                    <span class="meta-chip note">{{ item.linked_notes|length }} note{{ 's' if item.linked_notes|length > 1 }}</span>
+                    {% endif %}
+                </div>
+                {% endif %}
 
                 {% if todo_list.type == 'hub' and item.linked_list %}
                 <div class="progress-container" style="height: 6px; margin-top: 0.5rem; width: 150px;">
@@ -222,16 +232,22 @@
                     <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
                 </div>
 
-                <div class="task-actions-dropdown">
-                    <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
-                        <i class="fa-solid fa-ellipsis-vertical"></i>
-                    </button>
-                    <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                        <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
-                            <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
+                    <div class="task-actions-dropdown">
+                        <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                            <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
-                        <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
-                            <i class="fa-solid fa-pen"></i> Edit
+                        <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
+                            <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-calendar-day"></i> Set Date
+                            </button>
+                            <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-note-sticky"></i> Link Note
+                            </button>
+                            <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
+                            </button>
+                            <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-pen"></i> Edit
                         </button>
                         <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
                             <i class="fa-solid fa-trash"></i> Delete

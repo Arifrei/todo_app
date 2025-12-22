@@ -5,7 +5,9 @@
       "Bash(python:*)",
       "Bash(dir:*)",
       "Bash(pip install:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(ipconfig:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []
