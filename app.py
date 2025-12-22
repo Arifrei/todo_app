@@ -1,15 +1,13 @@
 import os
 import re
 from datetime import datetime, date, time, timedelta
-
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from ai_service import run_ai_chat
+from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting
+from apscheduler.schedulers.background import BackgroundScheduler
 
 load_dotenv()
-
-from ai_service import run_ai_chat
-from models import db, User, TodoList, TodoItem, Note, CalendarEvent
-from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'
@@ -17,6 +15,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
 app.config['API_SHARED_KEY'] = os.environ.get('API_SHARED_KEY')  # Optional shared key for API callers
+app.config['DEFAULT_TIMEZONE'] = os.environ.get('DEFAULT_TIMEZONE', 'America/New_York')  # EST/EDT
 
 db.init_app(app)
 scheduler = None
@@ -443,7 +442,7 @@ def _send_email(to_addr, subject, body):
     return True
 
 
-def _build_daily_digest_body(events_for_day):
+def _build_daily_digest_body(events_for_day, tasks_due):
     lines = []
     for ev in events_for_day:
         prefix = '[x]' if ev.status == 'done' else '[ ]'
@@ -453,12 +452,18 @@ def _build_daily_digest_body(events_for_day):
             time_block = f" @ {ev.start_time.isoformat()}{('-' + end_str) if end_str else ''}"
         priority = ev.priority or 'medium'
         lines.append(f"{prefix} {ev.title} ({priority}){time_block}")
+    if tasks_due:
+        lines.append("")
+        lines.append("Due tasks:")
+        for item in tasks_due:
+            prefix = '[x]' if item.status == 'done' else '[ ]'
+            lines.append(f"{prefix} {item.content} (list: {item.list.title if item.list else ''})")
     return '\n'.join(lines)
 
 
 def _send_daily_email_digest(target_day=None):
     """Send daily digest emails to users who have an email set."""
-    if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '0') != '1':
+    if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '1') != '1':
         return
     with app.app_context():
         target_day = target_day or date.today()
@@ -468,9 +473,14 @@ def _send_daily_email_digest(target_day=None):
                 CalendarEvent.user_id == user_obj.id,
                 CalendarEvent.day == target_day
             ).order_by(CalendarEvent.order_index.asc()).all()
-            if not events:
+            tasks_due = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                TodoList.user_id == user_obj.id,
+                TodoItem.due_date == target_day,
+                TodoItem.is_phase == False
+            ).all()
+            if not events and not tasks_due:
                 continue
-            body = _build_daily_digest_body(events)
+            body = _build_daily_digest_body(events, tasks_due)
             try:
                 _send_email(user_obj.email, f"Your tasks for {target_day.isoformat()}", body)
             except Exception:
@@ -487,7 +497,7 @@ def _start_scheduler():
     # Avoid double-start in Flask debug reloader
     if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         return
-    scheduler = BackgroundScheduler()
+    scheduler = BackgroundScheduler(timezone=app.config.get('DEFAULT_TIMEZONE', 'UTC'))
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
     # Optional daily digest at 7:00 local time
     scheduler.add_job(_send_daily_email_digest, 'cron', hour=int(os.environ.get('DIGEST_HOUR', 7)), minute=0)
@@ -572,6 +582,14 @@ def ai_page():
         return redirect(url_for('select_user'))
     return render_template('ai.html')
 
+
+@app.route('/settings')
+def settings_page():
+    """Settings page (notification preferences placeholder)."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('settings.html')
+
 @app.route('/calendar')
 def calendar_page():
     """Calendar day-first UI."""
@@ -624,7 +642,7 @@ def list_view(list_id):
             complete = sorted([i for i in group if i.status == 'done'], key=lambda x: x.order_index)
             sorted_items.extend(incomplete + complete)
 
-    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list, items=sorted_items)
+    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list, items=sorted_items, default_timezone=app.config.get('DEFAULT_TIMEZONE'))
 
 # API Routes
 @app.route('/api/lists', methods=['GET', 'POST'])
@@ -665,7 +683,11 @@ def handle_notes():
         title = (data.get('title') or '').strip() or 'Untitled Note'
         content = data.get('content') or ''
         todo_item_id = data.get('todo_item_id')
+        calendar_event_id = data.get('calendar_event_id')
+        if todo_item_id and calendar_event_id:
+            return jsonify({'error': 'Provide either todo_item_id or calendar_event_id, not both'}), 400
         linked_item = None
+        linked_event = None
         if todo_item_id:
             try:
                 todo_item_id_int = int(todo_item_id)
@@ -678,7 +700,22 @@ def handle_notes():
             if not linked_item:
                 return jsonify({'error': 'Task not found for this user'}), 404
 
-        note = Note(title=title, content=content, user_id=user.id, todo_item_id=linked_item.id if linked_item else None)
+        if calendar_event_id:
+            try:
+                calendar_event_id_int = int(calendar_event_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid calendar_event_id'}), 400
+            linked_event = CalendarEvent.query.filter_by(id=calendar_event_id_int, user_id=user.id).first()
+            if not linked_event:
+                return jsonify({'error': 'Calendar event not found for this user'}), 404
+
+        note = Note(
+            title=title,
+            content=content,
+            user_id=user.id,
+            todo_item_id=linked_item.id if linked_item else None,
+            calendar_event_id=linked_event.id if linked_event else None
+        )
         db.session.add(note)
         db.session.commit()
         return jsonify(note.to_dict()), 201
@@ -722,6 +759,21 @@ def handle_note(note_id):
                 if not linked_item:
                     return jsonify({'error': 'Task not found for this user'}), 404
                 note.todo_item_id = todo_item_id_int
+                note.calendar_event_id = None  # keep note linked to a single target
+        if 'calendar_event_id' in data:
+            calendar_event_id = data.get('calendar_event_id')
+            if calendar_event_id is None:
+                note.calendar_event_id = None
+            else:
+                try:
+                    calendar_event_id_int = int(calendar_event_id)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'Invalid calendar_event_id'}), 400
+                linked_event = CalendarEvent.query.filter_by(id=calendar_event_id_int, user_id=user.id).first()
+                if not linked_event:
+                    return jsonify({'error': 'Calendar event not found for this user'}), 404
+                note.calendar_event_id = calendar_event_id_int
+                note.todo_item_id = None  # keep note linked to a single target
         db.session.commit()
         return jsonify(note.to_dict())
 
@@ -1027,6 +1079,88 @@ def send_digest_now():
     day_obj = _parse_day_value(request.json.get('day') if request.json else None) or date.today()
     _send_daily_email_digest(target_day=day_obj)
     return jsonify({'status': 'sent', 'day': day_obj.isoformat()})
+
+
+def _get_or_create_notification_settings(user_id):
+    prefs = NotificationSetting.query.filter_by(user_id=user_id).first()
+    if not prefs:
+        prefs = NotificationSetting(user_id=user_id)
+        db.session.add(prefs)
+        db.session.commit()
+    return prefs
+
+
+@app.route('/api/notifications', methods=['GET', 'POST'])
+def api_list_notifications():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    if request.method == 'POST':
+        data = request.json or {}
+        title = (data.get('title') or '').strip() or 'Notification'
+        body = (data.get('body') or '').strip() or None
+        notif = Notification(
+            user_id=user.id,
+            type=(data.get('type') or 'general'),
+            title=title,
+            body=body,
+            link=data.get('link'),
+            channel=data.get('channel') or 'in_app'
+        )
+        db.session.add(notif)
+        db.session.commit()
+        return jsonify(notif.to_dict()), 201
+    limit = min(int(request.args.get('limit', 50)), 200)
+    items = Notification.query.filter_by(user_id=user.id).order_by(Notification.created_at.desc()).limit(limit).all()
+    return jsonify([n.to_dict() for n in items])
+
+
+@app.route('/api/notifications/read_all', methods=['POST'])
+def api_mark_notifications_read():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    now = datetime.utcnow()
+    updated = Notification.query.filter_by(user_id=user.id, read_at=None).update({"read_at": now})
+    db.session.commit()
+    return jsonify({'updated': updated})
+
+
+@app.route('/api/notifications/<int:notification_id>/read', methods=['POST'])
+def api_mark_notification_read(notification_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    notif = Notification.query.filter_by(id=notification_id, user_id=user.id).first()
+    if not notif:
+        return jsonify({'error': 'Not found'}), 404
+    notif.read_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(notif.to_dict())
+
+
+@app.route('/api/notifications/settings', methods=['GET', 'PUT'])
+def api_notification_settings():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    prefs = _get_or_create_notification_settings(user.id)
+    if request.method == 'GET':
+        return jsonify(prefs.to_dict())
+    data = request.json or {}
+    prefs.in_app_enabled = bool(data.get('in_app_enabled', prefs.in_app_enabled))
+    prefs.email_enabled = bool(data.get('email_enabled', prefs.email_enabled))
+    prefs.push_enabled = bool(data.get('push_enabled', prefs.push_enabled))
+    prefs.reminders_enabled = bool(data.get('reminders_enabled', prefs.reminders_enabled))
+    prefs.digest_enabled = bool(data.get('digest_enabled', prefs.digest_enabled))
+    try:
+        hour = int(data.get('digest_hour', prefs.digest_hour))
+        if 0 <= hour <= 23:
+            prefs.digest_hour = hour
+    except (TypeError, ValueError):
+        pass
+    db.session.commit()
+    return jsonify(prefs.to_dict())
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_list(list_id):

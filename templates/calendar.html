@@ -78,5 +78,30 @@
             </div>
         </div>
     </div>
+
+    <!-- Link Note Modal (shared with list view) -->
+    <div class="modal" id="link-note-modal">
+        <div class="modal-content">
+            <h2>Link Note</h2>
+            <p id="link-note-task-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+            <div class="form-group">
+                <label>Choose an existing note</label>
+                <div id="link-note-list" class="note-chooser"></div>
+            </div>
+            <div class="form-group">
+                <label>Create a new note</label>
+                <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeLinkNoteModal()">Cancel</button>
+                <button class="btn btn-secondary" onclick="createAndLinkNote()">Create & Link</button>
+                <button class="btn btn-primary" onclick="saveLinkedNote()">Attach Selected</button>
+            </div>
+        </div>
+    </div>
 </div>
+
+<script>
+    window.USER_TIMEZONE = '{{ default_timezone or "America/New_York" }}';
+</script>
 {% endblock %}

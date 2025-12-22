@@ -170,7 +170,12 @@
                     <span class="meta-chip time">Due {{ item.due_date }}</span>
                     {% endif %}
                     {% if item.linked_notes|length %}
-                    <span class="meta-chip note">{{ item.linked_notes|length }} note{{ 's' if item.linked_notes|length > 1 }}</span>
+                        {% for note in item.linked_notes %}
+                        <a class="meta-chip note linked-note-chip" href="/notes?note={{ note.id }}" title="Open note {{ note.title or ('#' ~ note.id) }}">
+                            <i class="fa-solid fa-note-sticky"></i>
+                            {{ note.title or ('Note #' ~ note.id) }}
+                        </a>
+                        {% endfor %}
                     {% endif %}
                 </div>
                 {% endif %}
@@ -237,7 +242,7 @@
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                            <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-calendar-day"></i> Set Date
                             </button>
                             <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
@@ -406,10 +411,49 @@
     </div>
 </div>
 
+<!-- Attach Date Modal -->
+<div class="modal" id="date-picker-modal">
+    <div class="modal-content" id="date-picker-modal-content">
+        <h2>Attach Date</h2>
+        <p id="date-picker-task-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+        <div class="form-group">
+            <label>Select a date</label>
+            <input type="date" id="date-picker-input" class="form-control">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeDatePickerModal()">Cancel</button>
+            <button class="btn btn-ghost" onclick="saveDatePickerSelection(true)">Remove Date</button>
+            <button class="btn btn-primary" onclick="saveDatePickerSelection()">Attach Date</button>
+        </div>
+    </div>
+</div>
+
+<!-- Link Note Modal -->
+<div class="modal" id="link-note-modal">
+    <div class="modal-content">
+        <h2>Link Note</h2>
+        <p id="link-note-task-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+        <div class="form-group">
+            <label>Choose an existing note</label>
+            <div id="link-note-list" class="note-chooser"></div>
+        </div>
+        <div class="form-group">
+            <label>Create a new note</label>
+            <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeLinkNoteModal()">Cancel</button>
+            <button class="btn btn-secondary" onclick="createAndLinkNote()">Create & Link</button>
+            <button class="btn btn-primary" onclick="saveLinkedNote()">Attach Selected</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const CURRENT_LIST_ID = {{ todo_list.id }};
     const CURRENT_LIST_TYPE = '{{ todo_list.type }}';
     const CURRENT_LIST_TITLE = `{{ todo_list.title }}`;
+    const USER_TIMEZONE = '{{ default_timezone or "America/New_York" }}';
 
     // Initial progress calculation for Hub
     {% if todo_list.type == 'hub' %}

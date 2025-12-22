@@ -1,0 +1,68 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Settings</h1>
+        <p style="color: var(--text-muted); margin: 0;">Notification preferences (UI scaffold).</p>
+    </div>
+</div>
+
+<div class="card" style="max-width: 800px;">
+    <h3>Notification Preferences</h3>
+    <p style="color: var(--text-muted); margin-top: 0;">Choose where and what to notify.</p>
+    <div class="settings-grid">
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">In-app notifications</div>
+                <div class="setting-sub">Show alerts in the bell feed.</div>
+            </div>
+            <input type="checkbox" id="pref-in-app">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Email notifications</div>
+                <div class="setting-sub">Daily digest and reminders.</div>
+            </div>
+            <input type="checkbox" id="pref-email">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Push notifications</div>
+                <div class="setting-sub">Requires browser permission.</div>
+            </div>
+            <input type="checkbox" id="pref-push">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Reminders</div>
+                <div class="setting-sub">Calendar/task reminders.</div>
+            </div>
+            <input type="checkbox" id="pref-reminders">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Daily digest</div>
+                <div class="setting-sub">Summary email each morning.</div>
+            </div>
+            <input type="checkbox" id="pref-digest">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Digest hour</div>
+                <div class="setting-sub">Local hour to send the daily digest.</div>
+            </div>
+            <input type="number" id="pref-digest-hour" min="0" max="23" style="width:80px;">
+        </label>
+    </div>
+    <div style="margin-top: 1rem; display: flex; gap: 0.75rem;">
+        <button class="btn btn-secondary btn-small" id="pref-save-btn">
+            <i class="fa-solid fa-floppy-disk"></i> Save
+        </button>
+        <button class="btn btn-ghost btn-small" id="pref-test-btn">
+            <i class="fa-solid fa-paper-plane"></i> Send test (in-app)
+        </button>
+    </div>
+</div>
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}

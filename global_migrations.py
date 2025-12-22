@@ -1,17 +1,15 @@
 """
-Baseline migration for a fresh database.
+Post-baseline migrations for databases created at commit c4b057d2c4fcbf07a778584c20b741946cf33a0a.
 
-Run once on a new install:
-    python migrate.py
+Run when upgrading an existing deployment:
+    python global_migrations.py
 
-Creates/aligns all core tables to the current models:
-- user
-- todo_list
-- todo_item
-- note
-- calendar_event
-The script is idempotent: it only adds missing tables/columns and backfills
-order indexes and legacy statuses.
+Idempotent updates:
+- Ensure todo_item has description, notes, order_index, is_phase, phase_id, due_date, linked_list_id
+- Normalize legacy pending -> not_started and backfill order_index
+- Ensure todo_list has user_id
+- Ensure note has todo_item_id, calendar_event_id, title/content timestamps
+- Ensure calendar_event table exists with all current columns (is_event, is_group, group_id, priority, status, reminder_minutes_before, rollover_enabled, timestamps)
 """
 import sqlite3
 from pathlib import Path
@@ -39,64 +37,17 @@ def add_column(cur, table: str, column: str, col_type: str, default_sql: str | N
     print(f"[add] {table}.{column}")
 
 
-def ensure_user_table(cur):
-    if table_exists(cur, "user"):
-        print("[ok] user table exists")
-        return
-    cur.execute(
-        """
-        CREATE TABLE user (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username VARCHAR(80) UNIQUE NOT NULL,
-            email VARCHAR(120) UNIQUE,
-            password_hash VARCHAR(200) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    print("[add] user table created")
-
-
-def ensure_todo_list_table(cur):
+def ensure_todo_list(cur):
     if not table_exists(cur, "todo_list"):
-        cur.execute(
-            """
-            CREATE TABLE todo_list (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title VARCHAR(100) NOT NULL,
-                type VARCHAR(20) DEFAULT 'list',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                user_id INTEGER NOT NULL
-            )
-            """
-        )
-        print("[add] todo_list table created")
+        print("[warn] todo_list missing; run baseline migrate.py first")
         return
     add_column(cur, "todo_list", "user_id", "INTEGER", default_sql="1")
 
 
-def ensure_todo_item_table(cur):
+def ensure_todo_item(cur):
     if not table_exists(cur, "todo_item"):
-        cur.execute(
-            """
-            CREATE TABLE todo_item (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                list_id INTEGER NOT NULL,
-                content VARCHAR(200) NOT NULL,
-                description TEXT,
-                notes TEXT,
-                status VARCHAR(20) DEFAULT 'not_started',
-                order_index INTEGER DEFAULT 0,
-                is_phase BOOLEAN DEFAULT 0,
-                due_date DATE,
-                linked_list_id INTEGER,
-                phase_id INTEGER
-            )
-            """
-        )
-        print("[add] todo_item table created")
+        print("[warn] todo_item missing; run baseline migrate.py first")
         return
-
     add_column(cur, "todo_item", "description", "TEXT")
     add_column(cur, "todo_item", "notes", "TEXT")
     add_column(cur, "todo_item", "order_index", "INTEGER DEFAULT 0")
@@ -105,9 +56,7 @@ def ensure_todo_item_table(cur):
     add_column(cur, "todo_item", "due_date", "DATE")
     add_column(cur, "todo_item", "linked_list_id", "INTEGER")
 
-    # Normalize legacy status
     cur.execute("UPDATE todo_item SET status='not_started' WHERE status='pending'")
-    # Backfill order_index per list
     rows = cur.execute("SELECT id, list_id FROM todo_item ORDER BY list_id, id").fetchall()
     counters = {}
     for item_id, list_id in rows:
@@ -117,23 +66,9 @@ def ensure_todo_item_table(cur):
     print("[update] todo_item order_index backfilled")
 
 
-def ensure_note_table(cur):
+def ensure_note(cur):
     if not table_exists(cur, "note"):
-        cur.execute(
-            """
-            CREATE TABLE note (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                todo_item_id INTEGER,
-                calendar_event_id INTEGER,
-                title VARCHAR(150) NOT NULL DEFAULT 'Untitled Note',
-                content TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        print("[add] note table created")
+        print("[warn] note table missing; run baseline migrate.py first")
         return
     add_column(cur, "note", "todo_item_id", "INTEGER")
     add_column(cur, "note", "calendar_event_id", "INTEGER")
@@ -143,7 +78,7 @@ def ensure_note_table(cur):
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
-def ensure_calendar_event_table(cur):
+def ensure_calendar_event(cur):
     if not table_exists(cur, "calendar_event"):
         cur.execute(
             """
@@ -190,7 +125,7 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
-def ensure_notification_tables(cur):
+def ensure_notifications(cur):
     if not table_exists(cur, "notification"):
         cur.execute(
             """
@@ -247,18 +182,19 @@ def ensure_notification_tables(cur):
 
 
 def main():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not DB_PATH.exists():
+        print("Database not found. Run baseline migrate.py first.")
+        return
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
-        ensure_user_table(cur)
-        ensure_todo_list_table(cur)
-        ensure_todo_item_table(cur)
-        ensure_note_table(cur)
-        ensure_calendar_event_table(cur)
-        ensure_notification_tables(cur)
+        ensure_todo_list(cur)
+        ensure_todo_item(cur)
+        ensure_note(cur)
+        ensure_calendar_event(cur)
+        ensure_notifications(cur)
         conn.commit()
-        print("Baseline migration complete.")
+        print("Global migrations complete.")
     finally:
         conn.close()
 

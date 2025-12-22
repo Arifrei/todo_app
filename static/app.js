@@ -32,6 +32,10 @@ let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEve
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
+let datePickerState = { itemId: null };
+let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
+const USER_TIMEZONE = window.USER_TIMEZONE || 'America/New_York'; // EST/EDT
+let notificationsState = { items: [], unread: 0, open: false };
 
 // --- Dashboard Functions ---
 
@@ -214,17 +218,117 @@ async function createItem(listId, listType) {
     }
 }
 
-async function setItemDate(itemId, currentDate) {
-    const val = prompt('Set date (YYYY-MM-DD). Leave blank to clear.', currentDate || '');
-    if (val === null) return;
-    const payload = { due_date: val.trim() || null };
+function setItemDate(itemId, currentDate, itemTitle) {
+    openDatePickerModal(itemId, currentDate, itemTitle);
+}
+
+// --- Notifications ---
+
+async function loadNotifications() {
     try {
-        const res = await fetch(`/api/items/${itemId}`, {
+        const res = await fetch('/api/notifications');
+        if (!res.ok) throw new Error('Failed to load notifications');
+        const data = await res.json();
+        notificationsState.items = data || [];
+        notificationsState.unread = notificationsState.items.filter(n => !n.read_at).length;
+        renderNotifications();
+    } catch (e) {
+        console.error('Error loading notifications:', e);
+    }
+}
+
+function renderNotifications() {
+    const badge = document.getElementById('notif-badge');
+    const list = document.getElementById('notif-list');
+    if (badge) {
+        if (notificationsState.unread > 0) {
+            badge.textContent = notificationsState.unread;
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+    if (!list) return;
+    list.innerHTML = '';
+    if (!notificationsState.items.length) {
+        list.innerHTML = `<div class="empty-state">
+            <i class="fa-solid fa-bell-slash" style="font-size: 1.5rem; color: var(--text-muted);"></i>
+            <p style="margin: 0.5rem 0 0 0; color: var(--text-muted);">No notifications yet.</p>
+        </div>`;
+        return;
+    }
+    notificationsState.items.forEach(n => {
+        const item = document.createElement('div');
+        item.className = `notif-item ${n.read_at ? '' : 'unread'}`;
+        const body = n.body ? `<p class="notif-body">${n.body}</p>` : '';
+        const time = n.created_at ? `<div class="notif-time">${formatNoteDate(n.created_at)}</div>` : '';
+        const link = n.link ? `<a href="${n.link}" class="btn btn-secondary btn-small" style="margin-top:0.5rem;">Open</a>` : '';
+        item.innerHTML = `
+            <div class="notif-title">${n.title || 'Notification'}</div>
+            ${body}
+            ${link}
+            ${time}
+        `;
+        list.appendChild(item);
+    });
+}
+
+async function markAllNotificationsRead() {
+    try {
+        const res = await fetch('/api/notifications/read_all', { method: 'POST' });
+        if (!res.ok) throw new Error('Failed to mark read');
+        notificationsState.items = notificationsState.items.map(n => ({ ...n, read_at: n.read_at || new Date().toISOString() }));
+        notificationsState.unread = 0;
+        renderNotifications();
+    } catch (e) {
+        console.error('Error marking read:', e);
+    }
+}
+
+function toggleNotificationsPanel(forceOpen = null) {
+    const panel = document.getElementById('notif-panel');
+    if (!panel) return;
+    const open = forceOpen !== null ? forceOpen : !panel.classList.contains('open');
+    if (open) {
+        panel.classList.add('open');
+        notificationsState.open = true;
+        loadNotifications();
+    } else {
+        panel.classList.remove('open');
+        notificationsState.open = false;
+    }
+}
+
+function openDatePickerModal(itemId, currentDate, itemTitle) {
+    const modal = document.getElementById('date-picker-modal');
+    const input = document.getElementById('date-picker-input');
+    const label = document.getElementById('date-picker-task-label');
+    if (!modal || !input) return;
+    datePickerState.itemId = itemId;
+    input.value = currentDate || '';
+    if (label) label.textContent = itemTitle ? `For "${itemTitle}"` : '';
+    modal.classList.add('active');
+    input.focus();
+}
+
+function closeDatePickerModal() {
+    const modal = document.getElementById('date-picker-modal');
+    if (modal) modal.classList.remove('active');
+    datePickerState = { itemId: null };
+}
+
+async function saveDatePickerSelection(remove = false) {
+    const input = document.getElementById('date-picker-input');
+    if (!datePickerState.itemId || !input) return;
+    const payload = { due_date: remove ? null : (input.value || null) };
+    try {
+        const res = await fetch(`/api/items/${datePickerState.itemId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (!res.ok) throw new Error('Failed to set date');
+        closeDatePickerModal();
         window.location.reload();
     } catch (e) {
         console.error('Error setting date:', e);
@@ -232,45 +336,130 @@ async function setItemDate(itemId, currentDate) {
     }
 }
 
-async function linkNoteToItem(itemId, itemTitle) {
+async function linkNoteToItem(itemId, itemTitle, existingNoteIds = []) {
+    openLinkNoteModal('task', itemId, itemTitle, existingNoteIds);
+}
+
+async function linkNoteToCalendarEvent(eventId, eventTitle, existingNoteIds = []) {
+    openLinkNoteModal('calendar', eventId, eventTitle, existingNoteIds);
+}
+
+async function openLinkNoteModal(targetType, targetId, targetTitle, existingNoteIds = []) {
+    const modal = document.getElementById('link-note-modal');
+    const listEl = document.getElementById('link-note-list');
+    const label = document.getElementById('link-note-task-label');
+    const newTitleInput = document.getElementById('link-note-new-title');
+    if (!modal || !listEl) return;
+
+    linkNoteModalState = {
+        targetType,
+        targetId,
+        targetTitle,
+        selectedNoteId: existingNoteIds && existingNoteIds.length ? existingNoteIds[0] : null,
+        notes: [],
+        existingNoteIds: existingNoteIds || []
+    };
+    if (label) label.textContent = targetTitle ? `For "${targetTitle}"` : '';
+    if (newTitleInput) newTitleInput.value = `${targetTitle || 'New'} note`;
+    listEl.innerHTML = '<div class="note-chooser-empty">Loading notes...</div>';
+    modal.classList.add('active');
+
     try {
         const res = await fetch('/api/notes');
         if (!res.ok) throw new Error('Failed to fetch notes');
         const notes = await res.json();
-        const list = notes.length ? notes.map(n => `${n.id}: ${n.title || 'Untitled'}`).join('\n') : 'No notes yet.';
-        const input = prompt(
-            `Link a note to "${itemTitle}".\nEnter an existing note ID to link, or leave blank to create a new note for this task.\n\n${list}`
-        );
-        if (input === null) return;
-        const trimmed = input.trim();
-        if (!trimmed) {
-            const createRes = await fetch('/api/notes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    title: `${itemTitle} note`,
-                    content: '',
-                    todo_item_id: itemId
-                })
-            });
-            if (!createRes.ok) throw new Error('Failed to create note');
-        } else {
-            const noteId = parseInt(trimmed, 10);
-            if (Number.isNaN(noteId)) {
-                alert('Invalid note id');
-                return;
-            }
-            const updateRes = await fetch(`/api/notes/${noteId}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ todo_item_id: itemId })
-            });
-            if (!updateRes.ok) throw new Error('Failed to link note');
-        }
+        linkNoteModalState.notes = notes;
+        renderLinkNoteList(notes);
+    } catch (e) {
+        console.error('Error loading notes:', e);
+        listEl.innerHTML = '<div class="note-chooser-empty">Could not load notes.</div>';
+    }
+}
+
+function renderLinkNoteList(notes) {
+    const listEl = document.getElementById('link-note-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (!notes || !notes.length) {
+        listEl.innerHTML = '<div class="note-chooser-empty">No notes yet. Create one below.</div>';
+        return;
+    }
+    notes.forEach(note => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isSelected = linkNoteModalState.selectedNoteId === note.id;
+        const isLinked = linkNoteModalState.existingNoteIds.includes(note.id);
+        btn.className = `note-chooser-item ${isSelected ? 'active' : ''}`;
+        btn.innerHTML = `
+            <span>${note.title || 'Untitled'}</span>
+            <span class="note-chooser-meta">#${note.id}${isLinked ? ' • linked' : ''}</span>
+        `;
+        btn.onclick = () => {
+            linkNoteModalState.selectedNoteId = note.id;
+            renderLinkNoteList(notes);
+        };
+        listEl.appendChild(btn);
+    });
+}
+
+function closeLinkNoteModal() {
+    const modal = document.getElementById('link-note-modal');
+    if (modal) modal.classList.remove('active');
+    linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
+    const listEl = document.getElementById('link-note-list');
+    if (listEl) listEl.innerHTML = '';
+    const newTitleInput = document.getElementById('link-note-new-title');
+    if (newTitleInput) newTitleInput.value = '';
+}
+
+async function saveLinkedNote() {
+    if (!linkNoteModalState.targetId) return;
+    if (!linkNoteModalState.selectedNoteId) {
+        alert('Select a note or create a new one first.');
+        return;
+    }
+    try {
+        const updateRes = await fetch(`/api/notes/${linkNoteModalState.selectedNoteId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+                linkNoteModalState.targetType === 'calendar'
+                    ? { calendar_event_id: linkNoteModalState.targetId }
+                    : { todo_item_id: linkNoteModalState.targetId }
+            )
+        });
+        if (!updateRes.ok) throw new Error('Failed to link note');
+        closeLinkNoteModal();
         window.location.reload();
     } catch (e) {
         console.error('Error linking note:', e);
         alert('Could not link note. Please try again.');
+    }
+}
+
+async function createAndLinkNote() {
+    if (!linkNoteModalState.targetId) return;
+    const newTitleInput = document.getElementById('link-note-new-title');
+    const title = newTitleInput ? newTitleInput.value.trim() : '';
+    const finalTitle = title || (linkNoteModalState.targetTitle ? `${linkNoteModalState.targetTitle} note` : 'New note');
+    try {
+        const createRes = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: finalTitle,
+                content: '',
+                ...(linkNoteModalState.targetType === 'calendar'
+                    ? { calendar_event_id: linkNoteModalState.targetId }
+                    : { todo_item_id: linkNoteModalState.targetId })
+            })
+        });
+        if (!createRes.ok) throw new Error('Failed to create note');
+        closeLinkNoteModal();
+        window.location.reload();
+    } catch (e) {
+        console.error('Error creating note:', e);
+        alert('Could not create note. Please try again.');
     }
 }
 
@@ -1373,6 +1562,9 @@ function initNotesPage() {
     const titleInput = document.getElementById('note-title');
     if (!editor || !listEl || !titleInput) return; // Not on notes page
 
+    const params = new URLSearchParams(window.location.search);
+    const targetNoteId = parseInt(params.get('note'), 10) || parseInt(params.get('note_id'), 10) || null;
+
     const saveBtn = document.getElementById('note-save-btn');
     const newBtn = document.getElementById('note-new-btn');
     const deleteBtn = document.getElementById('note-delete-btn');
@@ -1387,7 +1579,16 @@ function initNotesPage() {
     titleInput.addEventListener('input', refreshNoteDirtyState);
 
     bindNoteToolbar();
-    loadNotes({ keepSelection: false });
+    loadNotes({ keepSelection: false, targetNoteId });
+}
+
+function initNotificationsUI() {
+    const bell = document.getElementById('notif-launcher');
+    const closeBtn = document.getElementById('notif-close-btn');
+    const markBtn = document.getElementById('notif-mark-read');
+    if (bell) bell.addEventListener('click', () => toggleNotificationsPanel());
+    if (closeBtn) closeBtn.addEventListener('click', () => toggleNotificationsPanel(false));
+    if (markBtn) markBtn.addEventListener('click', () => markAllNotificationsRead());
 }
 
 function bindNoteToolbar() {
@@ -1568,7 +1769,7 @@ function refreshNoteDirtyState() {
 }
 
 async function loadNotes(options = {}) {
-    const { keepSelection = false } = options;
+    const { keepSelection = false, targetNoteId = null } = options;
     const listEl = document.getElementById('notes-list');
     if (!listEl) return;
     try {
@@ -1578,10 +1779,22 @@ async function loadNotes(options = {}) {
         notesState.notes = notes;
         renderNotesList();
 
+        if (targetNoteId) {
+            const target = notes.find(n => n.id === targetNoteId);
+            if (target) {
+                await setActiveNote(target.id, { skipAutosave: true });
+                scrollNotesEditorIntoView();
+                return;
+            }
+        }
+
         if (keepSelection && notesState.activeNoteId) {
             const nextNote = notes.find(n => n.id === notesState.activeNoteId);
-            if (nextNote) setActiveNote(nextNote.id, { skipAutosave: true });
-            else clearNoteEditor();
+            if (nextNote) {
+                await setActiveNote(nextNote.id, { skipAutosave: true });
+            } else {
+                clearNoteEditor();
+            }
         } else {
             clearNoteEditor();
         }
@@ -1619,7 +1832,7 @@ function renderNotesList() {
 function formatNoteDate(dateStr) {
     if (!dateStr) return 'New note';
     const date = new Date(dateStr);
-    return date.toLocaleString('en-US', { timeZone: 'Etc/GMT+5' });
+    return date.toLocaleString('en-US', { timeZone: USER_TIMEZONE });
 }
 
 async function setActiveNote(noteId, options = {}) {
@@ -1805,11 +2018,11 @@ function calculateHubProgress() {
 
 function formatCalendarLabel(dayStr) {
     const d = new Date(dayStr + 'T00:00:00');
-    return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+    return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric', timeZone: USER_TIMEZONE });
 }
 
 function formatMonthLabel(dateObj) {
-    return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: USER_TIMEZONE });
 }
 
 function getMonthRange(dateObj) {
@@ -2292,7 +2505,17 @@ function renderCalendarEvents() {
             chip.textContent = ev.phase_title ? `# ${ev.phase_title}` : 'Phase';
             meta.appendChild(chip);
         }
+        const noteChips = document.createElement('div');
+        noteChips.className = 'calendar-note-chips';
+        (ev.linked_notes || []).forEach(note => {
+            const link = document.createElement('a');
+            link.className = 'meta-chip note';
+            link.href = `/notes?note=${note.id}`;
+            link.textContent = note.title || `Note #${note.id}`;
+            noteChips.appendChild(link);
+        });
         if (meta.childNodes.length) titleWrap.appendChild(meta);
+        if (noteChips.childNodes.length) titleWrap.appendChild(noteChips);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
@@ -2300,7 +2523,8 @@ function renderCalendarEvents() {
         const priorityDot = document.createElement('button');
         priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
         priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
-        priorityDot.onclick = () => {
+        priorityDot.onclick = (e) => {
+            e.stopPropagation();
             openPriorityMenu(priorityDot, ev.priority || 'medium', async (val) => {
                 await updateCalendarEvent(ev.id, { priority: val });
                 ev.priority = val;
@@ -2331,6 +2555,12 @@ function renderCalendarEvents() {
             });
         };
 
+        const noteBtn = document.createElement('button');
+        noteBtn.className = 'calendar-icon-btn';
+        noteBtn.title = 'Link note';
+        noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
+        noteBtn.onclick = () => linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+
         const rolloverBtn = document.createElement('button');
         rolloverBtn.className = `calendar-icon-btn ${ev.rollover_enabled ? 'active' : ''}`;
         rolloverBtn.title = ev.rollover_enabled ? 'Rollover enabled' : 'Rollover disabled';
@@ -2343,7 +2573,7 @@ function renderCalendarEvents() {
         deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
         deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
 
-        actions.append(priorityDot, reminderBtn, rolloverBtn, deleteBtn);
+        actions.append(priorityDot, reminderBtn, noteBtn, rolloverBtn, deleteBtn);
         row.append(left, titleWrap, actions);
         return row;
     };
@@ -2385,13 +2615,25 @@ function renderCalendarEvents() {
             titleWrap.appendChild(timeSpan);
         }
 
+        const noteChips = document.createElement('div');
+        noteChips.className = 'calendar-note-chips';
+        (ev.linked_notes || []).forEach(note => {
+            const link = document.createElement('a');
+            link.className = 'meta-chip note';
+            link.href = `/notes?note=${note.id}`;
+            link.textContent = note.title || `Note #${note.id}`;
+            noteChips.appendChild(link);
+        });
+        if (noteChips.childNodes.length) titleWrap.appendChild(noteChips);
+
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
 
         const priorityDot = document.createElement('button');
         priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
         priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
-        priorityDot.onclick = () => {
+        priorityDot.onclick = (e) => {
+            e.stopPropagation();
             openPriorityMenu(priorityDot, ev.priority || 'medium', async (val) => {
                 await updateCalendarEvent(ev.id, { priority: val });
                 ev.priority = val;
@@ -2422,13 +2664,19 @@ function renderCalendarEvents() {
             });
         };
 
+        const noteBtn = document.createElement('button');
+        noteBtn.className = 'calendar-icon-btn';
+        noteBtn.title = 'Link note';
+        noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
+        noteBtn.onclick = () => linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn-icon';
         deleteBtn.title = 'Delete';
         deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
         deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
 
-        actions.append(priorityDot, reminderBtn, deleteBtn);
+        actions.append(priorityDot, reminderBtn, noteBtn, deleteBtn);
         row.append(left, titleWrap, actions);
         return row;
     };
@@ -3162,6 +3410,7 @@ async function sendCalendarDigest(dayStr) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ day: dayStr })
         });
+        window.dispatchEvent(new Event('notifications:refresh'));
     } catch (err) {
         console.error(err);
     }
@@ -3333,6 +3582,9 @@ function initCalendarPage() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
+    initNotificationsUI();
+    loadNotifications();
+    window.addEventListener('notifications:refresh', loadNotifications);
     const modal = document.getElementById('calendar-prompt-modal');
     if (modal) modal.classList.add('is-hidden');
 

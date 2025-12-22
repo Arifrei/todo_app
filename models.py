@@ -14,6 +14,8 @@ class User(UserMixin, db.Model):
 
     # Relationships
     lists = db.relationship('TodoList', backref='owner', lazy=True, cascade="all, delete-orphan")
+    notifications = db.relationship('Notification', backref='user', lazy=True, cascade="all, delete-orphan")
+    notification_settings = db.relationship('NotificationSetting', backref='user', lazy=True, cascade="all, delete-orphan")
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -169,6 +171,7 @@ class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
+    calendar_event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     title = db.Column(db.String(150), nullable=False, default='Untitled Note')
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -180,6 +183,7 @@ class Note(db.Model):
             'title': self.title,
             'content': self.content or '',
             'todo_item_id': self.todo_item_id,
+            'calendar_event_id': self.calendar_event_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -210,6 +214,7 @@ class CalendarEvent(db.Model):
     reminder_minutes_before = db.Column(db.Integer, nullable=True)
     rollover_enabled = db.Column(db.Boolean, default=True)
     rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -236,4 +241,55 @@ class CalendarEvent(db.Model):
             'reminder_minutes_before': self.reminder_minutes_before,
             'rollover_enabled': self.rollover_enabled,
             'rolled_from_id': self.rolled_from_id,
+            'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
+        }
+
+
+class Notification(db.Model):
+    """In-app/push/email notification record."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    type = db.Column(db.String(50), nullable=False, default='general')  # e.g., reminder, digest
+    title = db.Column(db.String(200), nullable=False)
+    body = db.Column(db.Text, nullable=True)
+    link = db.Column(db.String(300), nullable=True)  # optional deep link (relative URL)
+    channel = db.Column(db.String(20), nullable=True)  # in_app | email | push | mixed
+    read_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'type': self.type,
+            'title': self.title,
+            'body': self.body,
+            'link': self.link,
+            'channel': self.channel,
+            'read_at': self.read_at.isoformat() if self.read_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class NotificationSetting(db.Model):
+    """Per-user notification preferences."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, unique=True)
+    in_app_enabled = db.Column(db.Boolean, default=True)
+    email_enabled = db.Column(db.Boolean, default=True)
+    push_enabled = db.Column(db.Boolean, default=False)
+    reminders_enabled = db.Column(db.Boolean, default=True)
+    digest_enabled = db.Column(db.Boolean, default=True)
+    digest_hour = db.Column(db.Integer, default=7)  # local hour for daily digest
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'in_app_enabled': self.in_app_enabled,
+            'email_enabled': self.email_enabled,
+            'push_enabled': self.push_enabled,
+            'reminders_enabled': self.reminders_enabled,
+            'digest_enabled': self.digest_enabled,
+            'digest_hour': self.digest_hour,
         }

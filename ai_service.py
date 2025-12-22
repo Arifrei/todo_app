@@ -1,13 +1,15 @@
 import json
 import os
+from datetime import datetime, date, time
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 from flask import current_app
-from models import db, TodoList, TodoItem
+from models import db, TodoList, TodoItem, CalendarEvent
 
 
 ALLOWED_STATUSES = {"not_started", "in_progress", "done"}
+ALLOWED_PRIORITIES = {"low", "medium", "high"}
 ORDINAL_MAP = {
     "first": 1,
     "second": 2,
@@ -376,6 +378,111 @@ def _insert_item_in_order(todo_list: TodoList, new_item: TodoItem, phase_id: Opt
         item.order_index = idx
 
 
+def _parse_day_str(raw: str) -> date:
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except Exception as exc:
+        raise ValueError("Invalid day (expected YYYY-MM-DD)") from exc
+
+
+def _parse_time_str(raw: Optional[str]) -> Optional[time]:
+    if not raw:
+        return None
+    try:
+        parts = raw.split(":")
+        if len(parts) == 1:
+            return time(hour=int(parts[0]), minute=0)
+        return time(hour=int(parts[0]), minute=int(parts[1]))
+    except Exception as exc:
+        raise ValueError("Invalid time (expected HH or HH:MM 24h)") from exc
+
+
+def _calendar_event_dict(ev: CalendarEvent) -> Dict[str, Any]:
+    data = ev.to_dict()
+    # Flatten linked notes for convenience
+    data["linked_note_ids"] = [n.id for n in ev.notes] if getattr(ev, "notes", None) else []
+    return data
+
+
+def _list_calendar_events(
+    user_id: int,
+    day: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    query = CalendarEvent.query.filter_by(user_id=user_id)
+    if day:
+        day_obj = _parse_day_str(day)
+        query = query.filter(CalendarEvent.day == day_obj)
+    if start:
+        start_day = _parse_day_str(start)
+        query = query.filter(CalendarEvent.day >= start_day)
+    if end:
+        end_day = _parse_day_str(end)
+        query = query.filter(CalendarEvent.day <= end_day)
+    events = query.order_by(CalendarEvent.day.asc(), CalendarEvent.order_index.asc()).all()
+    return [_calendar_event_dict(e) for e in events]
+
+
+def _create_calendar_event(
+    user_id: int,
+    title: str,
+    day: str,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    status: str = "not_started",
+    priority: str = "medium",
+    is_phase: bool = False,
+    is_event: bool = False,
+    is_group: bool = False,
+    phase_id: Optional[int] = None,
+    group_id: Optional[int] = None,
+    reminder_minutes_before: Optional[int] = None,
+    description: Optional[str] = None,
+) -> Dict[str, Any]:
+    if status not in ALLOWED_STATUSES:
+        raise ValueError("Invalid status")
+    if priority not in ALLOWED_PRIORITIES:
+        raise ValueError("Invalid priority")
+    day_obj = _parse_day_str(day)
+    start_t = _parse_time_str(start_time)
+    end_t = _parse_time_str(end_time)
+
+    if phase_id and (is_phase or is_group):
+        raise ValueError("phase_id not allowed when creating a phase or group")
+
+    event = CalendarEvent(
+        user_id=user_id,
+        title=title.strip(),
+        description=(description or "").strip() or None,
+        day=day_obj,
+        start_time=start_t,
+        end_time=end_t,
+        status=status,
+        priority=priority,
+        is_phase=bool(is_phase),
+        is_event=bool(is_event and not is_phase and not is_group),
+        is_group=bool(is_group and not is_phase and not is_event),
+        phase_id=phase_id if phase_id and not is_phase and not is_group else None,
+        group_id=group_id if group_id and not is_group else None,
+        reminder_minutes_before=int(reminder_minutes_before) if reminder_minutes_before is not None else None,
+        rollover_enabled=not is_group,
+        order_index=0,
+    )
+    db.session.add(event)
+    db.session.flush()
+
+    # Place at end of day ordering
+    max_order = (
+        db.session.query(db.func.coalesce(db.func.max(CalendarEvent.order_index), 0))
+        .filter_by(user_id=user_id, day=day_obj)
+        .scalar()
+    )
+    event.order_index = max_order + 1
+    db.session.commit()
+    return _calendar_event_dict(event)
+
+
 TOOLS = [
     {
         "type": "function",
@@ -514,11 +621,55 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_calendar_events",
+            "description": "List calendar events/tasks for a specific day or date range",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "day": {"type": "string", "description": "Day in YYYY-MM-DD"},
+                    "start": {"type": "string", "description": "Start date (YYYY-MM-DD)"},
+                    "end": {"type": "string", "description": "End date (YYYY-MM-DD)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_calendar_event",
+            "description": "Create a calendar entry (task/event/phase/group) with full properties",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "day": {"type": "string", "description": "YYYY-MM-DD"},
+                    "start_time": {"type": "string", "description": "HH or HH:MM 24h"},
+                    "end_time": {"type": "string", "description": "HH or HH:MM 24h"},
+                    "status": {"type": "string", "enum": ["not_started", "in_progress", "done"]},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "is_phase": {"type": "boolean"},
+                    "is_event": {"type": "boolean"},
+                    "is_group": {"type": "boolean"},
+                    "phase_id": {"type": "integer", "description": "Parent phase id"},
+                    "group_id": {"type": "integer", "description": "Parent group id"},
+                    "reminder_minutes_before": {"type": "integer"},
+                    "description": {"type": "string"},
+                },
+                "required": ["title", "day"],
+            },
+        },
+    },
 ]
 
 
-SYSTEM_PROMPT = """You are a task/project assistant. Follow these rules:
+def _build_system_prompt(today_iso: str, timezone: str) -> str:
+    return f"""You are a task/project assistant. Follow these rules:
+- Today's date is {today_iso} (timezone: {timezone}). When the user says things like "today", "tomorrow", "next Monday", convert them to an explicit YYYY-MM-DD in that timezone before calling tools. If ambiguous, ask a short clarifying question.
 - Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content.
+- You can also manage the calendar: list calendar entries by day/range and create new entries (tasks/events/phases/groups). Always set day (YYYY-MM-DD) and use precise fields (start_time/end_time HH:MM 24h, status, priority, flags is_event/is_phase/is_group, phase_id/group_id when nesting, reminder_minutes_before, description).
 - Always use tools to fetch ids before mutating. Do not guess ids.
 - When user refers to names, search then pick the closest; if multiple matches, ask a short clarifying question.
 - If user says "first/second/third/last phase", choose that phase by order_index (1-based; last = final phase).
@@ -603,6 +754,30 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
             notes=args.get("notes"),
             list_type=args.get("list_type"),
         )
+    if name == "list_calendar_events":
+        return _list_calendar_events(
+            user_id=user_id,
+            day=args.get("day"),
+            start=args.get("start"),
+            end=args.get("end"),
+        )
+    if name == "create_calendar_event":
+        return _create_calendar_event(
+            user_id=user_id,
+            title=args.get("title", ""),
+            day=args.get("day", ""),
+            start_time=args.get("start_time"),
+            end_time=args.get("end_time"),
+            status=args.get("status", "not_started"),
+            priority=args.get("priority", "medium"),
+            is_phase=bool(args.get("is_phase")),
+            is_event=bool(args.get("is_event")),
+            is_group=bool(args.get("is_group")),
+            phase_id=args.get("phase_id"),
+            group_id=args.get("group_id"),
+            reminder_minutes_before=args.get("reminder_minutes_before"),
+            description=args.get("description"),
+        )
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -611,7 +786,9 @@ def run_ai_chat(user_id: int, messages: List[Dict[str, Any]], model: Optional[st
     model_name = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
     # Build message list with system prompt
-    convo = [{"role": "system", "content": SYSTEM_PROMPT}]
+    today_iso = date.today().isoformat()
+    timezone = os.environ.get("DEFAULT_TIMEZONE", "UTC")
+    convo = [{"role": "system", "content": _build_system_prompt(today_iso, timezone)}]
     for m in messages:
         role = m.get("role")
         content = m.get("content")
