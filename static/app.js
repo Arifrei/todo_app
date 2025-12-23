@@ -3390,17 +3390,47 @@ function scheduleLocalReminders() {
 }
 
 function triggerLocalNotification(ev) {
-    if (!('Notification' in window)) return;
-    if (Notification.permission !== 'granted') return;
     const body = ev.start_time ? `${formatTimeRange(ev)} - ${ev.title}` : ev.title;
-    new Notification('Upcoming event', { body });
+    showNativeNotification('Upcoming event', { body, data: { url: '/calendar' } });
 }
 
 async function enableCalendarNotifications() {
     if (!('Notification' in window)) return;
     const perm = await Notification.requestPermission();
-    calendarNotifyEnabled = perm === 'granted';
-    if (calendarNotifyEnabled) scheduleLocalReminders();
+    if (perm !== 'granted') {
+        calendarNotifyEnabled = false;
+        return;
+    }
+    await ensureServiceWorkerRegistered();
+    calendarNotifyEnabled = true;
+    scheduleLocalReminders();
+}
+
+async function ensureServiceWorkerRegistered() {
+    if (!('serviceWorker' in navigator)) return null;
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        return reg;
+    } catch (e) {
+        console.error('Service worker registration not ready', e);
+        return null;
+    }
+}
+
+async function showNativeNotification(title, options = {}) {
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+        const reg = await ensureServiceWorkerRegistered();
+        if (reg?.showNotification) {
+            await reg.showNotification(title, options);
+            return;
+        }
+    } catch (e) {
+        console.error('SW showNotification failed, falling back', e);
+    }
+    // Fallback to page notification
+    new Notification(title, options);
 }
 
 async function sendCalendarDigest(dayStr) {
@@ -3585,6 +3615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initNotificationsUI();
     loadNotifications();
     window.addEventListener('notifications:refresh', loadNotifications);
+    ensureServiceWorkerRegistered();
     const modal = document.getElementById('calendar-prompt-modal');
     if (modal) modal.classList.add('is-hidden');
 

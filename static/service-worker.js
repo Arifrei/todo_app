@@ -36,3 +36,28 @@ self.addEventListener('fetch', event => {
     })
   );
 });
+
+// Listen for explicit notify messages from the page
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+  if (event.data.type === 'notify' && event.data.payload) {
+    const { title, options } = event.data.payload;
+    self.registration.showNotification(title || 'TaskFlow', options || {});
+  }
+});
+
+// Make notification clicks focus or open the app
+self.addEventListener('notificationclick', (event) => {
+  const url = event.notification?.data?.url || '/';
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      const client = list.find(c => c.url.includes(url));
+      if (client) {
+        client.focus();
+        return;
+      }
+      return clients.openWindow(url);
+    })
+  );
+});
