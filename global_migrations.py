@@ -180,6 +180,27 @@ def ensure_notifications(cur):
         add_column(cur, "notification_setting", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_column(cur, "notification_setting", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
+    if not table_exists(cur, "push_subscription"):
+        cur.execute(
+            """
+            CREATE TABLE push_subscription (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                endpoint VARCHAR(500) NOT NULL UNIQUE,
+                p256dh VARCHAR(255) NOT NULL,
+                auth VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] push_subscription table created")
+    else:
+        add_column(cur, "push_subscription", "user_id", "INTEGER")
+        add_column(cur, "push_subscription", "endpoint", "VARCHAR(500)")
+        add_column(cur, "push_subscription", "p256dh", "VARCHAR(255)")
+        add_column(cur, "push_subscription", "auth", "VARCHAR(255)")
+        add_column(cur, "push_subscription", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
 
 def main():
     if not DB_PATH.exists():

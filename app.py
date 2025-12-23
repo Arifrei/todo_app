@@ -1,11 +1,13 @@
 import os
 import re
+import json
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from ai_service import run_ai_chat
-from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting
+from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription
 from apscheduler.schedulers.background import BackgroundScheduler
+from pywebpush import webpush, WebPushException
 
 load_dotenv()
 
@@ -16,6 +18,8 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-i
 app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
 app.config['API_SHARED_KEY'] = os.environ.get('API_SHARED_KEY')  # Optional shared key for API callers
 app.config['DEFAULT_TIMEZONE'] = os.environ.get('DEFAULT_TIMEZONE', 'America/New_York')  # EST/EDT
+app.config['VAPID_PUBLIC_KEY'] = os.environ.get('VAPID_PUBLIC_KEY', '')
+app.config['VAPID_PRIVATE_KEY'] = os.environ.get('VAPID_PRIVATE_KEY', '')
 
 db.init_app(app)
 scheduler = None
@@ -590,6 +594,12 @@ def settings_page():
         return redirect(url_for('select_user'))
     return render_template('settings.html')
 
+
+@app.route('/service-worker.js')
+def service_worker():
+    """Serve service worker at root scope."""
+    return send_from_directory('static', 'service-worker.js', mimetype='application/javascript')
+
 @app.route('/calendar')
 def calendar_page():
     """Calendar day-first UI."""
@@ -1109,6 +1119,8 @@ def api_list_notifications():
         )
         db.session.add(notif)
         db.session.commit()
+        if notif.channel in ('push', 'mixed'):
+            _send_push_to_user(user, title, body, link=notif.link)
         return jsonify(notif.to_dict()), 201
     limit = min(int(request.args.get('limit', 50)), 200)
     items = Notification.query.filter_by(user_id=user.id).order_by(Notification.created_at.desc()).limit(limit).all()
@@ -1161,6 +1173,117 @@ def api_notification_settings():
         pass
     db.session.commit()
     return jsonify(prefs.to_dict())
+
+
+def _send_push_to_user(user, title, body=None, link=None):
+    public_key = app.config.get('VAPID_PUBLIC_KEY')
+    private_key = app.config.get('VAPID_PRIVATE_KEY')
+    if not public_key or not private_key:
+        return 0
+    subs = PushSubscription.query.filter_by(user_id=user.id).all()
+    if not subs:
+        return 0
+    app.logger.info("Sending push to %s subs for user %s", len(subs), user.id)
+    payload = json.dumps({
+        'title': title,
+        'body': body or '',
+        'data': {'url': link or '/'}
+    })
+    sent = 0
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info={
+                    'endpoint': sub.endpoint,
+                    'keys': {'p256dh': sub.p256dh, 'auth': sub.auth}
+                },
+                data=payload,
+                vapid_private_key=private_key,
+                vapid_claims={"sub": "mailto:{}".format(os.environ.get('VAPID_SUBJECT', 'admin@example.com'))}
+            )
+            sent += 1
+        except WebPushException as exc:
+            # Clean up invalid subscriptions
+            if exc.response and exc.response.status_code in (404, 410):
+                app.logger.warning("Deleting invalid push subscription %s due to %s", sub.endpoint, exc.response.status_code)
+                db.session.delete(sub)
+                db.session.commit()
+            continue
+        except Exception:
+            app.logger.exception("Push send error")
+            continue
+    return sent
+
+
+@app.route('/api/push/subscribe', methods=['POST'])
+def api_push_subscribe():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    sub = data.get('subscription') or {}
+    endpoint = sub.get('endpoint')
+    keys = sub.get('keys') or {}
+    p256dh = keys.get('p256dh')
+    auth = keys.get('auth')
+    if not endpoint or not p256dh or not auth:
+        app.logger.warning("Push subscribe missing fields: endpoint=%s p256dh=%s auth=%s", bool(endpoint), bool(p256dh), bool(auth))
+        return jsonify({'error': 'Invalid subscription'}), 400
+    app.logger.info("Push subscribe for user %s endpoint %s", user.id, endpoint)
+    # Remove existing subs for this user to avoid duplicates
+    PushSubscription.query.filter_by(user_id=user.id).delete()
+    db.session.commit()
+    db.session.add(PushSubscription(user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth))
+    db.session.commit()
+    # Ensure push setting is on
+    prefs = _get_or_create_notification_settings(user.id)
+    prefs.push_enabled = True
+    db.session.commit()
+    return jsonify({'status': 'subscribed'})
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+def api_push_unsubscribe():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    endpoint = data.get('endpoint')
+    if not endpoint:
+        return jsonify({'error': 'endpoint required'}), 400
+    PushSubscription.query.filter_by(endpoint=endpoint, user_id=user.id).delete()
+    db.session.commit()
+    return jsonify({'status': 'unsubscribed'})
+
+
+@app.route('/api/push/subscriptions', methods=['GET'])
+def api_push_list():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    subs = PushSubscription.query.filter_by(user_id=user.id).all()
+    return jsonify([s.to_dict() for s in subs])
+
+
+@app.route('/api/push/subscriptions/clear', methods=['POST'])
+def api_push_clear():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    deleted = PushSubscription.query.filter_by(user_id=user.id).delete()
+    db.session.commit()
+    return jsonify({'deleted': deleted})
+
+
+@app.route('/api/push/test', methods=['POST'])
+def api_push_test():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    title = 'Test push'
+    body = 'This is a test push notification.'
+    sent = _send_push_to_user(user, title, body, link='/')
+    return jsonify({'sent': sent})
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_list(list_id):

@@ -13,6 +13,9 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='3') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+    <script>
+        window.VAPID_PUBLIC_KEY = "{{ config.get('VAPID_PUBLIC_KEY', '') }}";
+    </script>
 </head>
 <body>
     <div class="gradient-bg"></div>

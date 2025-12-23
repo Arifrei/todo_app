@@ -3409,14 +3409,32 @@ async function enableCalendarNotifications() {
 async function ensureServiceWorkerRegistered() {
     if (!('serviceWorker' in navigator)) return null;
     try {
-        const reg = await navigator.serviceWorker.ready;
-        return reg;
+        console.log('[sw] registering service worker');
+        const reg = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+        console.log('[sw] registered with scope', reg.scope);
+        const ready = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise((resolve) => setTimeout(() => resolve(null), 5000))
+        ]);
+        if (!ready) {
+            console.warn('[sw] navigator.serviceWorker.ready timed out');
+            return reg;
+        }
+        console.log('[sw] service worker ready');
+        return ready || reg;
     } catch (e) {
         console.error('Service worker registration not ready', e);
         return null;
     }
 }
 
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'push-debug') {
+            console.log('[push] message from service worker', event.data.payload);
+        }
+    });
+}
 async function showNativeNotification(title, options = {}) {
     if (!('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;

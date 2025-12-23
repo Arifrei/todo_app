@@ -11,6 +11,7 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll(CORE_ASSETS))
   );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
@@ -19,6 +20,7 @@ self.addEventListener('activate', event => {
       Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
     )
   );
+  self.clients.claim();
 });
 
 self.addEventListener('fetch', event => {
@@ -59,5 +61,27 @@ self.addEventListener('notificationclick', (event) => {
       }
       return clients.openWindow(url);
     })
+  );
+});
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (e) {
+    payload = { title: 'Notification', body: event.data ? event.data.text() : '' };
+  }
+  const title = payload.title || 'Notification';
+  const options = {
+    body: payload.body || '',
+    data: payload.data || {},
+  };
+  // Broadcast to open clients for debugging
+  event.waitUntil(
+    (async () => {
+      const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+      allClients.forEach((c) => c.postMessage({ type: 'push-debug', payload }));
+      await self.registration.showNotification(title, options);
+    })()
   );
 });

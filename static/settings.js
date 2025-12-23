@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('[push] settings script loaded');
     const prefsInputs = {
         in_app_enabled: document.getElementById('pref-in-app'),
         email_enabled: document.getElementById('pref-email'),
@@ -21,6 +22,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (prefsInputs.reminders_enabled) prefsInputs.reminders_enabled.checked = !!data.reminders_enabled;
             if (prefsInputs.digest_enabled) prefsInputs.digest_enabled.checked = !!data.digest_enabled;
             if (prefsInputs.digest_hour && data.digest_hour !== undefined) prefsInputs.digest_hour.value = data.digest_hour;
+            if (prefsInputs.push_enabled && prefsInputs.push_enabled.checked) {
+                ensurePushSubscribed();
+            }
         } catch (e) {
             console.error('Error loading preferences', e);
         }
@@ -54,6 +58,74 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 300);
     }
 
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+    }
+
+    async function subscribePush() {
+        console.log('[push] subscribePush start');
+        const vapidKey = window.VAPID_PUBLIC_KEY || '';
+        if (!vapidKey) throw new Error('VAPID public key missing');
+        const reg = await ensureServiceWorkerRegistered();
+        if (!reg) throw new Error('Service worker not available');
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) {
+            console.log('[push] existing subscription found');
+            return existing;
+        }
+        console.log('[push] subscribing with VAPID key', vapidKey.slice(0, 8) + '...');
+        let sub = null;
+        try {
+            sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(vapidKey)
+            });
+        } catch (err) {
+            console.error('[push] subscribe error', err);
+            throw err;
+        }
+        console.log('[push] new subscription created', sub);
+        return sub;
+    }
+
+    async function unsubscribePush() {
+        const reg = await ensureServiceWorkerRegistered();
+        if (!reg) return;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+            const endpoint = sub.endpoint;
+            await sub.unsubscribe();
+            await fetch('/api/push/unsubscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint })
+            });
+        }
+    }
+
+    async function saveSubscription(sub) {
+        if (!sub) return;
+        const payload = { subscription: sub.toJSON ? sub.toJSON() : sub };
+        console.log('[push] saving subscription to server', payload);
+        const res = await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(`Subscribe failed: ${res.status} ${txt}`);
+        }
+        console.log('[push] subscription stored on server', res.status);
+    }
+
     async function sendTest() {
         try {
             await fetch('/api/notifications', {
@@ -63,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     type: 'test',
                     title: 'Test notification',
                     body: 'This is a test notification.',
-                    channel: 'in_app'
+                    channel: 'push'
                 })
             });
             await loadPrefs();
@@ -73,15 +145,44 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function ensurePushSubscribed() {
+        try {
+            console.log('[push] ensurePushSubscribed start');
+            const sub = await subscribePush();
+            await saveSubscription(sub);
+            const serverSubs = await fetch('/api/push/subscriptions').then(r => r.json());
+            console.log('[push] server subscriptions after save', serverSubs);
+        } catch (e) {
+            console.error('Push subscription failed', e);
+        }
+    }
+
     const saveBtn = document.getElementById('pref-save-btn');
     if (saveBtn) saveBtn.addEventListener('click', savePrefs);
     const testBtn = document.getElementById('pref-test-btn');
     if (testBtn) testBtn.addEventListener('click', sendTest);
 
     // Auto-save on change
-    Object.values(prefsInputs).forEach(input => {
+    Object.entries(prefsInputs).forEach(([key, input]) => {
         if (!input) return;
-        input.addEventListener('change', scheduleSave);
+        input.addEventListener('change', async () => {
+            console.log('[push] change detected', key, input.checked);
+            if (key === 'push_enabled') {
+                if (input.checked) {
+                    try {
+                        await ensurePushSubscribed();
+                        console.log('[push] push toggle save starting');
+                    } catch (e) {
+                        console.error('Push subscription failed', e);
+                        input.checked = false;
+                    }
+                } else {
+                    await unsubscribePush();
+                    console.log('[push] push toggle save starting (off)');
+                }
+            }
+            scheduleSave();
+        });
         input.addEventListener('input', scheduleSave);
     });
 
