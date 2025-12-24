@@ -3541,20 +3541,8 @@ function autoEnableCalendarNotificationsIfGranted() {
 }
 
 async function ensureServiceWorkerRegistered() {
-    if (!('serviceWorker' in navigator)) return null;
-    try {
-        const reg = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-        const ready = await Promise.race([
-            navigator.serviceWorker.ready,
-            new Promise((resolve) => setTimeout(() => resolve(null), 5000))
-        ]);
-        if (!ready) {
-            return reg;
-        }
-        return ready || reg;
-    } catch (e) {
-        return null;
-    }
+    // Service workers disabled to prevent caching issues
+    return null;
 }
 
 async function showNativeNotification(title, options = {}) {

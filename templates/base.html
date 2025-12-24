@@ -177,10 +177,9 @@
 
     <script src="{{ url_for('static', filename='app.js', v='3') }}"></script>
     <script>
+        // Disable all service workers to avoid caching issues
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('{{ url_for('static', filename='service-worker.js') }}');
-            });
+            navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(reg => reg.unregister()));
         }
     </script>
 </body>
