@@ -453,7 +453,8 @@
     const CURRENT_LIST_ID = {{ todo_list.id }};
     const CURRENT_LIST_TYPE = '{{ todo_list.type }}';
     const CURRENT_LIST_TITLE = `{{ todo_list.title }}`;
-    const USER_TIMEZONE = '{{ default_timezone or "America/New_York" }}';
+    // Expose timezone for app.js without redeclaring the constant there
+    window.USER_TIMEZONE = window.USER_TIMEZONE || '{{ default_timezone or "America/New_York" }}';
 
     // Initial progress calculation for Hub
     {% if todo_list.type == 'hub' %}

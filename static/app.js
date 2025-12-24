@@ -3421,12 +3421,38 @@ async function createCalendarEvent(payload) {
 
 async function updateCalendarEvent(id, payload) {
     try {
-        await fetch(`/api/calendar/events/${id}`, {
+        const res = await fetch(`/api/calendar/events/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        await loadCalendarDay(calendarState.selectedDay);
+        if (!res.ok) throw new Error('Failed to update event');
+
+        let updated = null;
+        try {
+            updated = await res.json();
+        } catch (_) {
+            // Some updates may not return JSON; skip in that case
+        }
+
+        // Optimistically update local state so the UI reflects changes without waiting on a reload
+        if (updated && Array.isArray(calendarState.events)) {
+            calendarState.events = calendarState.events.map(ev => ev.id === id ? { ...ev, ...updated } : ev);
+        }
+
+        const dayKey = updated?.day || calendarState.selectedDay;
+        if (dayKey && calendarState.monthEventsByDay && Array.isArray(calendarState.monthEventsByDay[dayKey])) {
+            calendarState.monthEventsByDay[dayKey] = calendarState.monthEventsByDay[dayKey].map(ev => ev.id === id ? { ...ev, ...updated } : ev);
+        }
+
+        if (calendarState.detailsOpen && calendarState.selectedDay) {
+            await loadCalendarDay(calendarState.selectedDay);
+        } else if (updated) {
+            renderCalendarEvents();
+        }
+        if (calendarState.monthCursor) {
+            renderCalendarMonth();
+        }
     } catch (err) {
         console.error(err);
     }
