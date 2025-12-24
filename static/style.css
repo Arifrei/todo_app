@@ -2869,6 +2869,7 @@ textarea.form-control {
 
 .calendar-quick-add {
     margin-bottom: 1rem;
+    overflow: visible;
 }
 
 .quick-add-row textarea {
@@ -2884,11 +2885,13 @@ textarea.form-control {
 /* Autocomplete styles */
 .calendar-input-row {
     position: relative;
+    overflow: visible;
 }
 
 .quick-add-input-wrapper {
     position: relative;
     padding-right: 34px;
+    overflow: visible;
 }
 
 .calendar-help-btn {
@@ -3104,10 +3107,59 @@ textarea.form-control {
 }
 
 .calendar-time-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     color: var(--text-muted);
     font-size: 0.85rem;
     white-space: nowrap;
-    font-weight: 500;
+    font-weight: 600;
+    border: 1px solid var(--border-color);
+    padding: 0 0.6rem;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--bg-light);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.calendar-time-inline .fa-clock { font-size: 0.95rem; }
+.calendar-time-inline span { line-height: 1; }
+.calendar-time-inline:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: rgba(59,130,246,0.08);
+}
+.calendar-time-inline.no-time {
+    color: var(--primary-color);
+    border: 1px dashed var(--primary-color);
+    background: rgba(59, 130, 246, 0.08);
+    padding: 0 0.5rem;
+    position: relative;
+}
+.calendar-time-inline.no-time span {
+    display: none;
+}
+.calendar-time-inline.no-time::after {
+    content: attr(data-label);
+    position: absolute;
+    left: 50%;
+    bottom: -1.75rem;
+    transform: translateX(-50%) translateY(4px);
+    background: #0f172a;
+    color: #fff;
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    line-height: 1;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.15s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+.calendar-time-inline.no-time:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 }
 
 .row-left {
@@ -3293,6 +3345,15 @@ textarea.form-control {
     border-radius: 999px;
     background: rgba(0,0,0,0.04);
     color: var(--text-muted);
+}
+.meta-chip.task-link {
+    cursor: pointer;
+    color: var(--primary-color);
+    text-decoration: none;
+}
+.meta-chip.task-link:hover {
+    background: rgba(59,130,246,0.12);
+    color: var(--primary-color);
 }
 
 .meta-chip.phase {

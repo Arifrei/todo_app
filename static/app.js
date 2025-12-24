@@ -36,6 +36,7 @@ let datePickerState = { itemId: null };
 let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
 const USER_TIMEZONE = window.USER_TIMEZONE || 'America/New_York'; // EST/EDT
 let notificationsState = { items: [], unread: 0, open: false };
+let timeModalState = { eventId: null };
 
 // --- Dashboard Functions ---
 
@@ -2303,10 +2304,62 @@ function ensureMonthMatchesSelectedDay() {
     }
 }
 
+function formatTimeDisplay(timeStr) {
+    if (!timeStr) return '';
+    const parts = timeStr.split(':').map(Number);
+    const hour = parts[0] || 0;
+    const minute = parts[1] || 0;
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = ((hour + 11) % 12) + 1;
+    return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+// --- Calendar Time Modal ---
+
+function openCalendarTimeModal(ev) {
+    const modal = document.getElementById('calendar-time-modal');
+    const title = document.getElementById('calendar-time-title');
+    const startInput = document.getElementById('calendar-time-start');
+    const endInput = document.getElementById('calendar-time-end');
+    if (!modal || !startInput || !endInput) return;
+    timeModalState.eventId = ev.id;
+    if (title) title.textContent = ev.title || 'Calendar item';
+    const normalize = (t) => {
+        if (!t) return '';
+        const friendly = formatTimeDisplay(String(t));
+        if (friendly) return friendly; // e.g., 6:10 PM
+        const parts = String(t).split(':');
+        if (parts.length >= 2) return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+        return String(t);
+    };
+    startInput.value = normalize(ev.start_time);
+    endInput.value = normalize(ev.end_time);
+    modal.classList.add('active');
+}
+
+function closeCalendarTimeModal() {
+    const modal = document.getElementById('calendar-time-modal');
+    if (modal) modal.classList.remove('active');
+    timeModalState.eventId = null;
+}
+
+async function saveCalendarTimeModal() {
+    if (!timeModalState.eventId) return;
+    const startInput = document.getElementById('calendar-time-start');
+    const endInput = document.getElementById('calendar-time-end');
+    const startVal = startInput ? startInput.value.trim() : '';
+    const endVal = endInput ? endInput.value.trim() : '';
+    await updateCalendarEvent(timeModalState.eventId, {
+        start_time: startVal || null,
+        end_time: endVal || null
+    });
+    closeCalendarTimeModal();
+}
+
 function formatTimeRange(ev) {
     if (!ev.start_time) return '';
-    const start = ev.start_time.slice(0, 5);
-    const end = ev.end_time ? ev.end_time.slice(0, 5) : '';
+    const start = formatTimeDisplay(ev.start_time);
+    const end = ev.end_time ? formatTimeDisplay(ev.end_time) : '';
     return end ? `${start} - ${end}` : start;
 }
 
@@ -2380,10 +2433,15 @@ function renderCalendarEvents() {
 
             const meta = document.createElement('div');
             meta.className = 'calendar-meta-lite';
-            meta.innerHTML = `
-                <span class="meta-chip">${ev.task_list_title || 'Task list'}</span>
-                <span class="meta-chip status-chip status-${ev.status || 'not_started'}">${ev.status || 'not_started'}</span>
-            `;
+            const listChip = document.createElement('a');
+            listChip.className = 'meta-chip task-link';
+            listChip.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
+            listChip.textContent = ev.task_list_title || 'Task list';
+            listChip.title = 'Open task';
+            const statusChip = document.createElement('span');
+            statusChip.className = `meta-chip status-chip status-${ev.status || 'not_started'}`;
+            statusChip.textContent = ev.status || 'not_started';
+            meta.append(listChip, statusChip);
             titleWrap.appendChild(meta);
 
             const actions = document.createElement('div');
@@ -2488,13 +2546,21 @@ function renderCalendarEvents() {
         });
         titleWrap.appendChild(titleInput);
 
-        // Add time inline with title
-        if (ev.start_time) {
-            const timeSpan = document.createElement('span');
-            timeSpan.className = 'calendar-time-inline';
-            timeSpan.textContent = formatTimeRange(ev) || 'Time';
-            titleWrap.appendChild(timeSpan);
+        // Add time inline with title (clickable to edit)
+        const timeBtn = document.createElement('button');
+        timeBtn.type = 'button';
+        timeBtn.className = 'calendar-time-inline';
+        const timeLabel = formatTimeRange(ev);
+        timeBtn.innerHTML = timeLabel
+            ? `<i class="fa-regular fa-clock"></i><span>${timeLabel}</span>`
+            : `<i class="fa-regular fa-clock"></i>`;
+        if (!timeLabel) {
+            timeBtn.classList.add('no-time');
+            timeBtn.setAttribute('data-label', 'Add time');
         }
+        timeBtn.title = timeLabel || 'Add time';
+        timeBtn.onclick = () => openCalendarTimeModal(ev);
+        titleWrap.appendChild(timeBtn);
 
         // Keep phase chip in meta-lite (will show on hover)
         const meta = document.createElement('div');
@@ -2565,7 +2631,17 @@ function renderCalendarEvents() {
         rolloverBtn.className = `calendar-icon-btn ${ev.rollover_enabled ? 'active' : ''}`;
         rolloverBtn.title = ev.rollover_enabled ? 'Rollover enabled' : 'Rollover disabled';
         rolloverBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
-        rolloverBtn.onclick = () => updateCalendarEvent(ev.id, { rollover_enabled: !ev.rollover_enabled });
+        rolloverBtn.onclick = async () => {
+            const next = !ev.rollover_enabled;
+            try {
+                await updateCalendarEvent(ev.id, { rollover_enabled: next });
+                ev.rollover_enabled = next;
+                rolloverBtn.classList.toggle('active', next);
+                rolloverBtn.title = next ? 'Rollover enabled' : 'Rollover disabled';
+            } catch (err) {
+                console.error('Failed to toggle rollover', err);
+            }
+        };
 
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn-icon';
@@ -2608,12 +2684,20 @@ function renderCalendarEvents() {
         titleWrap.appendChild(titleInput);
 
         // Add time inline with title
-        if (ev.start_time) {
-            const timeSpan = document.createElement('span');
-            timeSpan.className = 'calendar-time-inline';
-            timeSpan.textContent = formatTimeRange(ev) || 'Time';
-            titleWrap.appendChild(timeSpan);
+        const timeBtn = document.createElement('button');
+        timeBtn.type = 'button';
+        timeBtn.className = 'calendar-time-inline';
+        const timeLabel = formatTimeRange(ev);
+        timeBtn.innerHTML = timeLabel
+            ? `<i class="fa-regular fa-clock"></i><span>${timeLabel}</span>`
+            : `<i class="fa-regular fa-clock"></i>`;
+        if (!timeLabel) {
+            timeBtn.classList.add('no-time');
+            timeBtn.setAttribute('data-label', 'Add time');
         }
+        timeBtn.title = timeLabel || 'Add time';
+        timeBtn.onclick = () => openCalendarTimeModal(ev);
+        titleWrap.appendChild(timeBtn);
 
         const noteChips = document.createElement('div');
         noteChips.className = 'calendar-note-chips';
@@ -2670,13 +2754,29 @@ function renderCalendarEvents() {
         noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
         noteBtn.onclick = () => linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
 
+        const rolloverBtn = document.createElement('button');
+        rolloverBtn.className = `calendar-icon-btn ${ev.rollover_enabled ? 'active' : ''}`;
+        rolloverBtn.title = ev.rollover_enabled ? 'Rollover enabled' : 'Rollover disabled';
+        rolloverBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
+        rolloverBtn.onclick = async () => {
+            const next = !ev.rollover_enabled;
+            try {
+                await updateCalendarEvent(ev.id, { rollover_enabled: next });
+                ev.rollover_enabled = next;
+                rolloverBtn.classList.toggle('active', next);
+                rolloverBtn.title = next ? 'Rollover enabled' : 'Rollover disabled';
+            } catch (err) {
+                console.error('Failed to toggle rollover', err);
+            }
+        };
+
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn-icon';
         deleteBtn.title = 'Delete';
         deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
         deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
 
-        actions.append(priorityDot, reminderBtn, noteBtn, deleteBtn);
+        actions.append(priorityDot, reminderBtn, noteBtn, rolloverBtn, deleteBtn);
         row.append(left, titleWrap, actions);
         return row;
     };
@@ -3146,7 +3246,6 @@ function renderAutocompleteSuggestions(suggestions) {
             <div class="autocomplete-description">${sug.description}</div>
             <div class="autocomplete-example">e.g., ${sug.example}</div>
         `;
-        item.onclick = () => insertSuggestion(sug.syntax);
         container.appendChild(item);
     });
 
@@ -3406,35 +3505,32 @@ async function enableCalendarNotifications() {
     scheduleLocalReminders();
 }
 
+function autoEnableCalendarNotificationsIfGranted() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+        calendarNotifyEnabled = true;
+        ensureServiceWorkerRegistered();
+        scheduleLocalReminders();
+    }
+}
+
 async function ensureServiceWorkerRegistered() {
     if (!('serviceWorker' in navigator)) return null;
     try {
-        console.log('[sw] registering service worker');
         const reg = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
-        console.log('[sw] registered with scope', reg.scope);
         const ready = await Promise.race([
             navigator.serviceWorker.ready,
             new Promise((resolve) => setTimeout(() => resolve(null), 5000))
         ]);
         if (!ready) {
-            console.warn('[sw] navigator.serviceWorker.ready timed out');
             return reg;
         }
-        console.log('[sw] service worker ready');
         return ready || reg;
     } catch (e) {
-        console.error('Service worker registration not ready', e);
         return null;
     }
 }
 
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data?.type === 'push-debug') {
-            console.log('[push] message from service worker', event.data.payload);
-        }
-    });
-}
 async function showNativeNotification(title, options = {}) {
     if (!('Notification' in window)) return;
     if (Notification.permission !== 'granted') return;
@@ -3521,6 +3617,9 @@ function initCalendarPage() {
     const quickInput = document.getElementById('calendar-quick-input');
     const notifyBtn = document.getElementById('calendar-enable-notify');
     const digestBtn = document.getElementById('calendar-send-digest');
+    const timeModal = document.getElementById('calendar-time-modal');
+    const timeSaveBtn = document.getElementById('calendar-time-save');
+    const timeCancelBtn = document.getElementById('calendar-time-cancel');
     const rolloverBtn = document.getElementById('calendar-rollover-btn');
     const backBtn = document.getElementById('calendar-back-month');
 
@@ -3611,6 +3710,13 @@ function initCalendarPage() {
     };
     if (rolloverBtn) rolloverBtn.onclick = triggerManualRollover;
     if (backBtn) backBtn.onclick = returnToMonthView;
+    if (timeCancelBtn) timeCancelBtn.onclick = closeCalendarTimeModal;
+    if (timeSaveBtn) timeSaveBtn.onclick = saveCalendarTimeModal;
+    if (timeModal) {
+        timeModal.addEventListener('click', (e) => {
+            if (e.target === timeModal) closeCalendarTimeModal();
+        });
+    }
 
     const startInDayMode = initialMode === 'day';
     if (startInDayMode) {
@@ -3679,6 +3785,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initNotesPage();
     initAIPage();
     initCalendarPage();
+    autoEnableCalendarNotificationsIfGranted();
 
     // Add long-press listeners for mobile selection
     document.querySelectorAll('.task-item').forEach(item => {

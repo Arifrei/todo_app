@@ -46,9 +46,6 @@ def get_current_user():
         return db.session.get(User, user_id)
     return None
 
-with app.app_context():
-    db.create_all()
-
 
 def parse_outline(outline_text, list_type='list'):
     """Parse a pasted outline into item dicts with content/status/description/notes."""
@@ -321,15 +318,32 @@ def reindex_list(todo_list):
 # --- Calendar Helpers ---
 
 def _parse_time_str(val):
-    """Parse 'HH' or 'HH:MM' into a time object; return None on failure."""
+    """Parse 24h or am/pm strings into a time object; return None on failure."""
     if not val:
         return None
     if isinstance(val, time):
         return val
+    s = str(val).strip().lower().replace(" ", "")
+    # Match hh, hh:mm, or hh:mm:ss with optional am/pm; allow 1-2 digit minutes/seconds
+    m = re.match(r"^(?P<hour>\d{1,2})(:(?P<minute>\d{1,2}))?(:(?P<second>\d{1,2}))?(?P<ampm>a|p|am|pm)?$", s)
+    if not m:
+        return None
     try:
-        parts = str(val).split(':')
-        hour = int(parts[0])
-        minute = int(parts[1]) if len(parts) > 1 else 0
+        hour = int(m.group("hour"))
+        minute = int(m.group("minute") or 0)
+        ampm = m.group("ampm")
+        # Ignore seconds but validate if present
+        if m.group("second") is not None:
+            sec_val = int(m.group("second"))
+            if not (0 <= sec_val <= 59):
+                return None
+        if ampm:
+            if ampm in ("p", "pm") and hour != 12:
+                hour += 12
+            if ampm in ("a", "am") and hour == 12:
+                hour = 0
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
         return time(hour=hour, minute=minute)
     except Exception:
         return None

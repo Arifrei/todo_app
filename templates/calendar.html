@@ -79,6 +79,26 @@
         </div>
     </div>
 
+    <!-- Calendar Time Edit Modal -->
+    <div class="modal" id="calendar-time-modal">
+        <div class="modal-content">
+            <h2>Edit Time</h2>
+            <p id="calendar-time-title" style="color: var(--text-muted); margin-top: -0.25rem;"></p>
+            <div class="form-group">
+                <label>Start time</label>
+                <input type="text" id="calendar-time-start" class="form-control" placeholder="e.g., 3:30pm or 15:30">
+            </div>
+            <div class="form-group">
+                <label>End time (optional)</label>
+                <input type="text" id="calendar-time-end" class="form-control" placeholder="e.g., 5:00pm">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="calendar-time-cancel">Cancel</button>
+                <button class="btn btn-primary" id="calendar-time-save">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Link Note Modal (shared with list view) -->
     <div class="modal" id="link-note-modal">
         <div class="modal-content">
