@@ -7,7 +7,7 @@
             <button class="btn-icon" id="calendar-prev-month" aria-label="Previous month"><i class="fa-solid fa-chevron-left"></i></button>
             <div class="calendar-month-label-wrap">
                 <div id="calendar-month-label" class="calendar-month-label"></div>
-                <div class="calendar-month-sub">Click a day to open its schedule</div>
+                <div class="calendar-month-sub">Click: quick add • Double-click: full view</div>
             </div>
             <button class="btn-icon" id="calendar-next-month" aria-label="Next month"><i class="fa-solid fa-chevron-right"></i></button>
         </div>
@@ -15,6 +15,29 @@
             <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
         </div>
         <div id="calendar-month-grid" class="calendar-month-grid"></div>
+    </section>
+
+    <!-- Quick Add Section (appears on single click) -->
+    <section id="calendar-quick-add-panel" class="calendar-quick-add-panel is-hidden">
+        <div class="calendar-quick-add-header">
+            <div id="calendar-quick-add-date" class="calendar-quick-add-date">Select a day</div>
+            <button class="btn-icon" id="calendar-quick-add-close" aria-label="Close"><i class="fa-solid fa-times"></i></button>
+        </div>
+        <div class="calendar-quick-add-input-row">
+            <textarea id="calendar-month-quick-input" class="form-control" rows="2" placeholder="Type your task and press Enter" disabled></textarea>
+        </div>
+        <div class="quick-hint">
+            Type your task and press <kbd>Enter</kbd>
+            <button class="link-btn" id="calendar-quick-help-toggle">Show syntax guide</button>
+        </div>
+        <div class="calendar-syntax-guide is-hidden" id="calendar-quick-syntax-guide">
+            <div class="syntax-guide-row"><strong>$</strong> Prefix for events (e.g., <code>$ Meeting @3pm</code>)</div>
+            <div class="syntax-guide-row"><strong>#Phase</strong> Assign to phase (e.g., <code>Task #Work</code>)</div>
+            <div class="syntax-guide-row"><strong>&gt;Group</strong> Assign to group (e.g., <code>Task >Project A</code>)</div>
+            <div class="syntax-guide-row"><strong>@time</strong> Set time (e.g., <code>Meeting @3pm-5pm</code>)</div>
+            <div class="syntax-guide-row"><strong>!priority</strong> Set priority: !high, !medium, !low</div>
+            <div class="syntax-guide-row"><strong>~minutes</strong> Set reminder (e.g., <code>Meeting ~30</code> for 30min before)</div>
+        </div>
     </section>
 
     <section id="calendar-day-view" class="calendar-day-view is-hidden">
@@ -31,18 +54,25 @@
                 <button class="btn-icon" id="calendar-next-day" aria-label="Next day"><i class="fa-solid fa-chevron-right"></i></button>
             </div>
             <div class="calendar-actions">
-                <button class="btn btn-secondary btn-small" id="calendar-back-month">
-                    <i class="fa-solid fa-calendar-days"></i> Back to Calendar
+                <button class="btn btn-secondary btn-icon-text" id="calendar-back-month">
+                    <i class="fa-solid fa-calendar-days"></i><span class="btn-text">Back</span>
                 </button>
-                <button class="btn btn-secondary btn-small" id="calendar-enable-notify">
-                    <i class="fa-solid fa-bell"></i> Enable Notify
-                </button>
-                <button class="btn btn-secondary btn-small" id="calendar-rollover-btn">
-                    <i class="fa-solid fa-rotate"></i> Rollover now
-                </button>
-                <button class="btn btn-primary btn-small" id="calendar-send-digest">
-                    <i class="fa-solid fa-envelope"></i> Email today's digest
-                </button>
+                <div class="calendar-actions-menu">
+                    <button class="btn btn-secondary btn-icon-only" id="calendar-menu-btn" aria-label="More options" title="More options">
+                        <i class="fa-solid fa-ellipsis-vertical"></i>
+                    </button>
+                    <div class="calendar-dropdown-menu" id="calendar-dropdown-menu">
+                        <button class="calendar-menu-item" id="calendar-enable-notify">
+                            <i class="fa-solid fa-bell"></i> Enable Notifications
+                        </button>
+                        <button class="calendar-menu-item" id="calendar-rollover-btn">
+                            <i class="fa-solid fa-rotate"></i> Run Rollover
+                        </button>
+                        <button class="calendar-menu-item" id="calendar-send-digest">
+                            <i class="fa-solid fa-envelope"></i> Email Digest
+                        </button>
+                    </div>
+                </div>
             </div>
         </header>
 

@@ -2074,9 +2074,30 @@ function hideDayView() {
 
 function returnToMonthView() {
     const monthCard = document.getElementById('calendar-month-card');
+    const quickAddPanel = document.getElementById('calendar-quick-add-panel');
+    const dayView = document.getElementById('calendar-day-view');
+
+    // Show month card
     if (monthCard) monthCard.classList.remove('is-hidden');
-    hideDayView();
+
+    // Hide quick-add panel
+    if (quickAddPanel) quickAddPanel.classList.add('is-hidden');
+
+    // Explicitly hide day view
+    if (dayView) dayView.classList.add('is-hidden');
+
+    // Reset calendar state
+    calendarState.dayViewOpen = false;
+    calendarState.detailsOpen = false;
+    setDayControlsEnabled(false);
+
+    // Re-render month view
     renderCalendarMonth();
+
+    // Update URL to remove query parameters
+    const url = new URL(window.location);
+    url.search = '';
+    window.history.pushState({}, '', url);
 }
 
 function refreshGroupOptionsFromState() {
@@ -2598,12 +2619,25 @@ function renderCalendarEvents() {
             });
         };
 
-        const reminderBtn = document.createElement('button');
+        // Overflow menu for less common actions
+        const overflowMenuContainer = document.createElement('div');
+        overflowMenuContainer.className = 'calendar-overflow-menu';
+
+        const overflowBtn = document.createElement('button');
+        overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+        overflowBtn.title = 'More options';
+        overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+
+        const overflowDropdown = document.createElement('div');
+        overflowDropdown.className = 'calendar-item-dropdown';
+
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
-        reminderBtn.className = `calendar-icon-btn ${reminderActive ? 'active' : ''}`;
-        reminderBtn.title = reminderActive ? `Reminder: ${ev.reminder_minutes_before}m` : 'Set reminder';
-        reminderBtn.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'}"></i>`;
-        reminderBtn.onclick = async () => {
+        const reminderMenuItem = document.createElement('button');
+        reminderMenuItem.className = 'calendar-item-menu-option';
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
             if (reminderActive) {
                 await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
                 return;
@@ -2621,35 +2655,68 @@ function renderCalendarEvents() {
             });
         };
 
-        const noteBtn = document.createElement('button');
-        noteBtn.className = 'calendar-icon-btn';
-        noteBtn.title = 'Link note';
-        noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
-        noteBtn.onclick = () => linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+        const noteMenuItem = document.createElement('button');
+        noteMenuItem.className = 'calendar-item-menu-option';
+        noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Link Note';
+        noteMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+        };
 
-        const rolloverBtn = document.createElement('button');
-        rolloverBtn.className = `calendar-icon-btn ${ev.rollover_enabled ? 'active' : ''}`;
-        rolloverBtn.title = ev.rollover_enabled ? 'Rollover enabled' : 'Rollover disabled';
-        rolloverBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
-        rolloverBtn.onclick = async () => {
+        const rolloverMenuItem = document.createElement('button');
+        rolloverMenuItem.className = 'calendar-item-menu-option';
+        rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+        rolloverMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
             const next = !ev.rollover_enabled;
             try {
                 await updateCalendarEvent(ev.id, { rollover_enabled: next });
                 ev.rollover_enabled = next;
-                rolloverBtn.classList.toggle('active', next);
-                rolloverBtn.title = next ? 'Rollover enabled' : 'Rollover disabled';
             } catch (err) {
                 console.error('Failed to toggle rollover', err);
             }
         };
 
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'btn-icon';
-        deleteBtn.title = 'Delete';
-        deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-        deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
+        const deleteMenuItem = document.createElement('button');
+        deleteMenuItem.className = 'calendar-item-menu-option delete-option';
+        deleteMenuItem.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
+        deleteMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            deleteCalendarEvent(ev.id);
+        };
 
-        actions.append(priorityDot, reminderBtn, noteBtn, rolloverBtn, deleteBtn);
+        overflowDropdown.append(reminderMenuItem, noteMenuItem, rolloverMenuItem, deleteMenuItem);
+        overflowMenuContainer.append(overflowBtn);
+        document.body.appendChild(overflowDropdown); // Append to body instead
+
+        overflowBtn.onclick = (e) => {
+            e.stopPropagation();
+
+            const isOpen = overflowDropdown.classList.contains('active');
+
+            // Close all other dropdowns first
+            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
+                if (d !== overflowDropdown) {
+                    d.classList.remove('active');
+                }
+            });
+
+            if (!isOpen) {
+                // Position relative to button
+                const rect = overflowBtn.getBoundingClientRect();
+                overflowDropdown.style.position = 'fixed';
+                overflowDropdown.style.top = `${rect.bottom + 8}px`;
+                overflowDropdown.style.left = `${rect.right - 180}px`;
+                overflowDropdown.classList.add('active');
+            } else {
+                overflowDropdown.classList.remove('active');
+            }
+        };
+
+        actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
         return row;
     };
@@ -3400,6 +3467,120 @@ async function handleCalendarQuickAdd() {
     }
 }
 
+async function handleMonthQuickAdd() {
+    const input = document.getElementById('calendar-month-quick-input');
+    const panel = document.getElementById('calendar-quick-add-panel');
+    if (!input || !calendarState.selectedDay) return;
+
+    const parsed = parseCalendarQuickInput(input.value || '');
+    if (!parsed) return;
+
+    input.value = '';
+    const isEvent = parsed.is_event || false;
+
+    // Load the day's events to get phases and groups
+    await loadCalendarMonth();
+
+    if (parsed.is_phase) {
+        await createCalendarEvent({ title: parsed.title, is_phase: true });
+        await loadCalendarMonth();
+        if (panel) panel.classList.add('is-hidden');
+        return;
+    }
+
+    let phaseId = null;
+    if (parsed.phase_name) {
+        const monthEvents = await fetchMonthEvents(calendarState.selectedDay);
+        const existing = monthEvents.find(e => e.is_phase && e.title.toLowerCase() === parsed.phase_name.toLowerCase());
+        if (existing) {
+            phaseId = existing.id;
+        } else {
+            const createdPhase = await createCalendarEvent({ title: parsed.phase_name, is_phase: true });
+            phaseId = createdPhase ? createdPhase.id : null;
+        }
+    }
+
+    let finalGroupId = null;
+    if (parsed.group_name) {
+        const monthEvents = await fetchMonthEvents(calendarState.selectedDay);
+        const existing = monthEvents.find(e => e.is_group && e.title.toLowerCase() === parsed.group_name.toLowerCase());
+        if (existing) {
+            finalGroupId = existing.id;
+        } else {
+            const createdGroup = await createCalendarEvent({ title: parsed.group_name, is_group: true, is_event: false, is_phase: false });
+            finalGroupId = createdGroup ? createdGroup.id : null;
+        }
+    }
+
+    await createCalendarEvent({
+        title: parsed.title,
+        is_phase: false,
+        is_event: isEvent,
+        group_id: finalGroupId,
+        start_time: parsed.start_time,
+        end_time: parsed.end_time,
+        priority: parsed.priority,
+        reminder_minutes_before: parsed.reminder_minutes_before,
+        phase_id: isEvent ? null : phaseId,
+        rollover_enabled: parsed.rollover_enabled
+    });
+
+    await loadCalendarMonth();
+    if (panel) panel.classList.add('is-hidden');
+}
+
+async function fetchMonthEvents(dayStr) {
+    try {
+        const res = await fetch(`/api/calendar/events?day=${dayStr}`);
+        if (!res.ok) return [];
+        return await res.json();
+    } catch (err) {
+        console.error(err);
+        return [];
+    }
+}
+
+function renderMonthAutocompleteSuggestions(suggestions) {
+    const container = document.getElementById('calendar-month-autocomplete');
+    if (!container) return;
+
+    if (!suggestions || suggestions.length === 0) {
+        hideMonthAutocomplete();
+        return;
+    }
+
+    container.innerHTML = '';
+    suggestions.forEach((sug, index) => {
+        const item = document.createElement('div');
+        item.className = 'autocomplete-item' + (index === autocompleteState.selectedIndex ? ' selected' : '');
+        item.innerHTML = `<strong>${sug.display}</strong> <span class="autocomplete-hint">${sug.hint || ''}</span>`;
+        item.onclick = () => {
+            const input = document.getElementById('calendar-month-quick-input');
+            if (input && sug.insert) {
+                const before = input.value.substring(0, autocompleteState.cursorPos);
+                const after = input.value.substring(autocompleteState.cursorPos);
+                input.value = before + sug.insert + after;
+                input.setSelectionRange(
+                    autocompleteState.cursorPos + sug.insert.length,
+                    autocompleteState.cursorPos + sug.insert.length
+                );
+                input.focus();
+            }
+            hideMonthAutocomplete();
+        };
+        container.appendChild(item);
+    });
+
+    container.classList.remove('is-hidden');
+}
+
+function hideMonthAutocomplete() {
+    const container = document.getElementById('calendar-month-autocomplete');
+    if (container) container.classList.add('is-hidden');
+    autocompleteState.visible = false;
+    autocompleteState.suggestions = [];
+}
+
 async function createCalendarEvent(payload) {
     try {
         const res = await fetch('/api/calendar/events', {
@@ -3587,12 +3768,34 @@ async function triggerManualRollover() {
 
 function selectDayForQuickAdd(dayStr) {
     if (!dayStr) return;
-    showDayView();
-    calendarState.detailsOpen = false;
-    setCalendarDay(dayStr, { skipLoad: true });
-    renderCalendarEvents();
-    const view = document.getElementById('calendar-day-view');
-    if (view) view.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    calendarState.selectedDay = dayStr;
+    const panel = document.getElementById('calendar-quick-add-panel');
+    const dateLabel = document.getElementById('calendar-quick-add-date');
+    const input = document.getElementById('calendar-month-quick-input');
+
+    if (!panel) return;
+
+    // Format the date nicely
+    const date = new Date(dayStr + 'T00:00:00');
+    const options = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
+    const formattedDate = date.toLocaleDateString('en-US', options);
+
+    if (dateLabel) dateLabel.textContent = formattedDate;
+    if (input) {
+        input.disabled = false;
+        input.value = '';
+    }
+
+    panel.classList.remove('is-hidden');
+
+    // Scroll to the panel smoothly after animation
+    setTimeout(() => {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        if (input) input.focus();
+    }, 350);
+
+    // Update month grid to highlight selected day
+    renderCalendarMonth();
 }
 
 function openDayDetails(dayStr) {
@@ -3636,6 +3839,36 @@ function initCalendarPage() {
     const timeCancelBtn = document.getElementById('calendar-time-cancel');
     const rolloverBtn = document.getElementById('calendar-rollover-btn');
     const backBtn = document.getElementById('calendar-back-month');
+    const menuBtn = document.getElementById('calendar-menu-btn');
+    const dropdownMenu = document.getElementById('calendar-dropdown-menu');
+
+    // Dropdown menu toggle
+    if (menuBtn && dropdownMenu) {
+        menuBtn.onclick = (e) => {
+            e.stopPropagation();
+            dropdownMenu.classList.toggle('active');
+        };
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.calendar-actions-menu')) {
+                dropdownMenu.classList.remove('active');
+            }
+            // Also close all calendar item dropdowns
+            if (!e.target.closest('.calendar-overflow-menu') && !e.target.closest('.calendar-item-dropdown')) {
+                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
+                    d.classList.remove('active');
+                });
+            }
+        });
+
+        // Close dropdowns on scroll
+        window.addEventListener('scroll', () => {
+            dropdownMenu.classList.remove('active');
+            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
+                d.classList.remove('active');
+            });
+        }, true);
+    }
 
     if (prevMonthBtn) prevMonthBtn.onclick = () => {
         const current = calendarState.monthCursor || new Date();
@@ -3730,6 +3963,38 @@ function initCalendarPage() {
         timeModal.addEventListener('click', (e) => {
             if (e.target === timeModal) closeCalendarTimeModal();
         });
+    }
+
+    // Quick-add panel event handlers
+    const quickAddPanel = document.getElementById('calendar-quick-add-panel');
+    const quickAddCloseBtn = document.getElementById('calendar-quick-add-close');
+    const monthQuickInput = document.getElementById('calendar-month-quick-input');
+
+    if (quickAddCloseBtn && quickAddPanel) {
+        quickAddCloseBtn.onclick = () => {
+            quickAddPanel.classList.add('is-hidden');
+            if (monthQuickInput) monthQuickInput.value = '';
+        };
+    }
+
+    if (monthQuickInput) {
+        monthQuickInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                await handleMonthQuickAdd();
+            }
+        });
+    }
+
+    // Syntax guide toggle
+    const quickHelpToggle = document.getElementById('calendar-quick-help-toggle');
+    const syntaxGuide = document.getElementById('calendar-quick-syntax-guide');
+
+    if (quickHelpToggle && syntaxGuide) {
+        quickHelpToggle.onclick = () => {
+            const isHidden = syntaxGuide.classList.toggle('is-hidden');
+            quickHelpToggle.textContent = isHidden ? 'Show syntax guide' : 'Hide syntax guide';
+        };
     }
 
     const startInDayMode = initialMode === 'day';
