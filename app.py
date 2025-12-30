@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import pytz
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
@@ -505,6 +506,81 @@ def _send_daily_email_digest(target_day=None):
                 continue
 
 
+def _check_calendar_reminders():
+    """Check for upcoming calendar events with reminders and send push notifications."""
+    with app.app_context():
+        try:
+            now = datetime.now(pytz.UTC).replace(tzinfo=None)
+            # Check for events in the next 5 minutes
+            upcoming_window = now + timedelta(minutes=5)
+
+            # Get all users
+            users = User.query.all()
+
+            for user in users:
+                # Get user's notification preferences
+                prefs = _get_or_create_notification_settings(user.id)
+                if not prefs.push_enabled or not prefs.reminders_enabled:
+                    continue
+
+                # Get user's calendar events for today and tomorrow
+                today = datetime.now(pytz.timezone(app.config['DEFAULT_TIMEZONE'])).date()
+                tomorrow = today + timedelta(days=1)
+
+                for day in [today, tomorrow]:
+                    day_str = day.strftime('%Y-%m-%d')
+                    events = CalendarEvent.query.filter_by(user_id=user.id, day=day_str, status='pending').all()
+
+                    for event in events:
+                        if not event.start_time or event.reminder_minutes_before is None:
+                            continue
+
+                        # Parse event time
+                        try:
+                            event_datetime = datetime.strptime(f"{day_str} {event.start_time}", '%Y-%m-%d %H:%M')
+                            event_datetime = pytz.timezone(app.config['DEFAULT_TIMEZONE']).localize(event_datetime)
+                            event_utc = event_datetime.astimezone(pytz.UTC).replace(tzinfo=None)
+
+                            # Calculate reminder time
+                            reminder_time = event_utc - timedelta(minutes=event.reminder_minutes_before)
+
+                            # Check if reminder should fire now (within next 5 minutes and hasn't been sent)
+                            if now <= reminder_time <= upcoming_window:
+                                # Check if we already sent this reminder
+                                existing_notif = Notification.query.filter_by(
+                                    user_id=user.id,
+                                    type='reminder',
+                                    link=f'/calendar?day={day_str}'
+                                ).filter(
+                                    Notification.created_at >= now - timedelta(minutes=event.reminder_minutes_before + 1)
+                                ).first()
+
+                                if not existing_notif:
+                                    # Send push notification
+                                    title = f"Reminder: {event.title}"
+                                    body = f"Starting at {event.start_time}"
+                                    _send_push_to_user(user, title, body, link=f'/calendar?day={day_str}')
+
+                                    # Create in-app notification
+                                    notif = Notification(
+                                        user_id=user.id,
+                                        type='reminder',
+                                        title=title,
+                                        body=body,
+                                        link=f'/calendar?day={day_str}',
+                                        channel='push'
+                                    )
+                                    db.session.add(notif)
+                                    db.session.commit()
+
+                        except Exception as e:
+                            app.logger.error(f"Error processing reminder for event {event.id}: {e}")
+                            continue
+
+        except Exception as e:
+            app.logger.error(f"Error in _check_calendar_reminders: {e}")
+
+
 def _start_scheduler():
     """Start background scheduler for rollover and optional digest."""
     global scheduler
@@ -519,6 +595,8 @@ def _start_scheduler():
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
     # Optional daily digest at 7:00 local time
     scheduler.add_job(_send_daily_email_digest, 'cron', hour=int(os.environ.get('DIGEST_HOUR', 7)), minute=0)
+    # Check for calendar reminders every minute
+    scheduler.add_job(_check_calendar_reminders, 'interval', minutes=1)
     scheduler.start()
 
 _jobs_bootstrapped = False
@@ -766,7 +844,7 @@ def handle_note(note_id):
         data = request.json or {}
         note.title = (data.get('title') or '').strip() or 'Untitled Note'
         note.content = data.get('content', note.content)
-        note.updated_at = datetime.utcnow()
+        note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
         if 'todo_item_id' in data:
             todo_item_id = data.get('todo_item_id')
             if todo_item_id is None:
@@ -1146,7 +1224,7 @@ def api_mark_notifications_read():
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    now = datetime.utcnow()
+    now = datetime.now(pytz.UTC).replace(tzinfo=None)
     updated = Notification.query.filter_by(user_id=user.id, read_at=None).update({"read_at": now})
     db.session.commit()
     return jsonify({'updated': updated})
@@ -1160,7 +1238,7 @@ def api_mark_notification_read(notification_id):
     notif = Notification.query.filter_by(id=notification_id, user_id=user.id).first()
     if not notif:
         return jsonify({'error': 'Not found'}), 404
-    notif.read_at = datetime.utcnow()
+    notif.read_at = datetime.now(pytz.UTC).replace(tzinfo=None)
     db.session.commit()
     return jsonify(notif.to_dict())
 
@@ -1452,7 +1530,7 @@ def handle_item(item_id):
         if new_status not in allowed_statuses:
             new_status = item.status
         if new_status == 'done' and item.status != 'done':
-            item.completed_at = datetime.utcnow()
+            item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
         elif new_status != 'done':
             item.completed_at = None
         item.status = new_status

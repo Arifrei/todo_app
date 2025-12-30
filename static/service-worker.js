@@ -27,14 +27,37 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
+  // Don't cache API requests or HTML pages to avoid stale data
+  const url = new URL(request.url);
+  if (url.pathname.startsWith('/api/') ||
+      url.pathname.endsWith('.html') ||
+      url.pathname === '/' ||
+      url.search.includes('?')) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
+  // Cache static assets only (CSS, JS, images, fonts)
   event.respondWith(
     caches.match(request).then(cached => {
-      if (cached) return cached;
-      return fetch(request).then(response => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+      const fetchPromise = fetch(request).then(response => {
+        // Only cache successful responses for static assets
+        if (response.ok &&
+            (url.pathname.endsWith('.css') ||
+             url.pathname.endsWith('.js') ||
+             url.pathname.endsWith('.png') ||
+             url.pathname.endsWith('.jpg') ||
+             url.pathname.endsWith('.svg') ||
+             url.pathname.endsWith('.woff') ||
+             url.pathname.endsWith('.woff2'))) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+        }
         return response;
       }).catch(() => cached || Response.error());
+
+      // Return cached version immediately if available, otherwise fetch
+      return cached || fetchPromise;
     })
   );
 });

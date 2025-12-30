@@ -2047,7 +2047,7 @@ function setDayControlsEnabled(enabled) {
     if (quickInput) {
         quickInput.disabled = !enabled;
         quickInput.placeholder = enabled
-            ? "Type your task and press Enter. Use $ for events, #Phase, >Group"
+            ? "Type your task and press Enter. Use $ # > @ ! *"
             : 'Pick a day to open its schedule';
     }
     if (prevBtn) prevBtn.disabled = !enabled;
@@ -2692,6 +2692,52 @@ function renderCalendarEvents() {
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
+        // Function to position dropdown relative to button
+        const positionDropdown = () => {
+            const rect = overflowBtn.getBoundingClientRect();
+            const dropdownWidth = 180;
+            const dropdownHeight = overflowDropdown.offsetHeight || 150; // Estimate if not rendered yet
+            const screenWidth = window.innerWidth;
+            const screenHeight = window.innerHeight;
+            const padding = 8;
+
+            overflowDropdown.style.position = 'fixed';
+
+            // Determine vertical position - flip up if would spill below screen
+            let topPos;
+            const spaceBelow = screenHeight - rect.bottom;
+            const spaceAbove = rect.top;
+
+            if (spaceBelow < dropdownHeight + padding && spaceAbove > spaceBelow) {
+                // Not enough space below, but more space above - position above button
+                topPos = rect.top - dropdownHeight - 8;
+            } else {
+                // Position below button (default)
+                topPos = rect.bottom + 8;
+            }
+
+            overflowDropdown.style.top = `${topPos}px`;
+
+            // Calculate left position, ensuring it stays on screen
+            let leftPos = rect.right - dropdownWidth;
+
+            // If dropdown would go off left edge, align to left edge with padding
+            if (leftPos < padding) {
+                leftPos = padding;
+            }
+
+            // If dropdown would go off right edge, align to right edge with padding
+            if (leftPos + dropdownWidth > screenWidth - padding) {
+                leftPos = screenWidth - dropdownWidth - padding;
+            }
+
+            overflowDropdown.style.left = `${leftPos}px`;
+        };
+
+        // Store reference for scroll update
+        overflowDropdown.updatePosition = positionDropdown;
+        overflowDropdown.triggerButton = overflowBtn;
+
         overflowBtn.onclick = (e) => {
             e.stopPropagation();
 
@@ -2705,11 +2751,7 @@ function renderCalendarEvents() {
             });
 
             if (!isOpen) {
-                // Position relative to button
-                const rect = overflowBtn.getBoundingClientRect();
-                overflowDropdown.style.position = 'fixed';
-                overflowDropdown.style.top = `${rect.bottom + 8}px`;
-                overflowDropdown.style.left = `${rect.right - 180}px`;
+                positionDropdown();
                 overflowDropdown.classList.add('active');
             } else {
                 overflowDropdown.classList.remove('active');
@@ -2816,17 +2858,19 @@ function renderCalendarEvents() {
         };
 
         const noteBtn = document.createElement('button');
-        noteBtn.className = 'calendar-icon-btn';
-        noteBtn.title = 'Link note';
+        const hasNotes = ev.linked_notes && ev.linked_notes.length > 0;
+        noteBtn.className = `calendar-icon-btn ${hasNotes ? 'active' : ''}`;
+        noteBtn.title = hasNotes ? `${ev.linked_notes.length} note(s) linked` : 'Link note';
         noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
         noteBtn.onclick = () => linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
 
         const rolloverBtn = document.createElement('button');
-        rolloverBtn.className = `calendar-icon-btn ${ev.rollover_enabled ? 'active' : ''}`;
-        rolloverBtn.title = ev.rollover_enabled ? 'Rollover enabled' : 'Rollover disabled';
+        const rolloverEnabled = ev.rollover_enabled !== false; // true by default
+        rolloverBtn.className = `calendar-icon-btn ${rolloverEnabled ? 'active' : ''}`;
+        rolloverBtn.title = rolloverEnabled ? 'Rollover enabled' : 'Rollover disabled';
         rolloverBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
         rolloverBtn.onclick = async () => {
-            const next = !ev.rollover_enabled;
+            const next = !rolloverEnabled;
             try {
                 await updateCalendarEvent(ev.id, { rollover_enabled: next });
                 ev.rollover_enabled = next;
@@ -3024,10 +3068,75 @@ function enableCalendarDragAndDrop(container) {
 function parseCalendarQuickInput(text) {
     const raw = text.trim();
     if (!raw) return null;
-    // Phase creation
+
+    // Phase creation with task
     if (raw.startsWith('#')) {
-        return { is_phase: true, title: raw.replace(/^#+\s*/, '') || 'Untitled Phase' };
+        const afterSymbol = raw.substring(1).trim();
+        let phaseName, taskText;
+
+        // Check for comma separator for multi-word phase names
+        if (afterSymbol.includes(',')) {
+            const parts = afterSymbol.split(',');
+            phaseName = parts[0].trim();
+            taskText = parts.slice(1).join(',').trim();
+        } else {
+            // Split on first space
+            const firstSpaceIndex = afterSymbol.indexOf(' ');
+            if (firstSpaceIndex === -1) {
+                // No space, just create the phase
+                return { is_phase: true, title: afterSymbol || 'Untitled Phase' };
+            }
+            phaseName = afterSymbol.substring(0, firstSpaceIndex).trim();
+            taskText = afterSymbol.substring(firstSpaceIndex + 1).trim();
+        }
+
+        if (!taskText) {
+            // No task text, just create phase
+            return { is_phase: true, title: phaseName };
+        }
+
+        // Return indicator to create both phase and task
+        return {
+            create_phase_with_task: true,
+            phase_name: phaseName,
+            task_text: taskText
+        };
     }
+
+    // Group creation with task
+    if (raw.startsWith('>')) {
+        const afterSymbol = raw.substring(1).trim();
+        let groupName, taskText;
+
+        // Check for comma separator for multi-word group names
+        if (afterSymbol.includes(',')) {
+            const parts = afterSymbol.split(',');
+            groupName = parts[0].trim();
+            taskText = parts.slice(1).join(',').trim();
+        } else {
+            // Split on first space
+            const firstSpaceIndex = afterSymbol.indexOf(' ');
+            if (firstSpaceIndex === -1) {
+                // No space, just create the group
+                return { is_group: true, title: afterSymbol || 'Untitled Group' };
+            }
+            groupName = afterSymbol.substring(0, firstSpaceIndex).trim();
+            taskText = afterSymbol.substring(firstSpaceIndex + 1).trim();
+        }
+
+        if (!taskText) {
+            // No task text, just create group
+            return { is_group: true, title: groupName };
+        }
+
+        // Return indicator to create both group and task
+        return {
+            create_group_with_task: true,
+            group_name: groupName,
+            task_text: taskText
+        };
+    }
+
     let working = raw;
     let startTime = null;
     let endTime = null;
@@ -3038,108 +3147,57 @@ function parseCalendarQuickInput(text) {
     let isEvent = false;
     let groupName = null;
 
-    // NEW SYNTAX: Letter-based codes (mobile-friendly)
-    // Event: e
-    if (/\be\b/i.test(working)) {
-        isEvent = true;
-        working = working.replace(/\be\b/gi, '').trim();
-    }
+    // SYMBOL-BASED SYNTAX
 
-    // Time: t [time] or t [time-time]
-    const newTimeMatch = working.match(/\bt\s+(\d{1,2}(?::\d{2})?(?:am|pm)?)\s*(?:-\s*(\d{1,2}(?::\d{2})?(?:am|pm)?))?/i);
-    if (newTimeMatch) {
-        startTime = newTimeMatch[1];
-        endTime = newTimeMatch[2] || null;
-        working = working.replace(newTimeMatch[0], '').trim();
-    }
-
-    // Priority: p h|m|l
-    const newPriorityMatch = working.match(/\bp\s+(h|m|l)\b/i);
-    if (newPriorityMatch) {
-        const val = newPriorityMatch[1].toLowerCase();
-        if (val === 'h') priority = 'high';
-        else if (val === 'l') priority = 'low';
-        else priority = 'medium';
-        working = working.replace(newPriorityMatch[0], '').trim();
-    }
-
-    // Phase: ph [name]
-    const newPhaseMatch = working.match(/\bph\s+([A-Za-z0-9_-]+)/i);
-    if (newPhaseMatch) {
-        phaseName = newPhaseMatch[1].trim();
-        working = working.replace(newPhaseMatch[0], '').trim();
-    }
-
-    // Group: g [name]
-    const newGroupMatch = working.match(/\bg\s+([A-Za-z0-9_-]+)/i);
-    if (newGroupMatch) {
-        groupName = newGroupMatch[1].trim();
-        working = working.replace(newGroupMatch[0], '').trim();
-    }
-
-    // Reminder: r [minutes]
-    const newReminderMatch = working.match(/\br\s+(\d{1,3})/i);
-    if (newReminderMatch) {
-        reminder = parseInt(newReminderMatch[1], 10);
-        working = working.replace(newReminderMatch[0], '').trim();
-    }
-
-    // No rollover: nr
-    if (/\bnr\b/i.test(working)) {
-        rollover = false;
-        working = working.replace(/\bnr\b/gi, '').trim();
-    }
-
-    // OLD SYNTAX: Symbol-based (backward compatibility)
-    // Event marker ($)
+    // Event marker: $
     if (working.includes('$')) {
         isEvent = true;
         working = working.replace(/\$/g, '').trim();
     }
 
-    // Time: @
-    const oldTimeMatch = working.match(/@(\d{1,2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}(?::\d{2})?))?/);
-    if (oldTimeMatch && !startTime) {
-        startTime = oldTimeMatch[1];
-        endTime = oldTimeMatch[2] || null;
-        working = working.replace(oldTimeMatch[0], '').trim();
+    // Time: @time or @time-time
+    const timeMatch = working.match(/@(\d{1,2}(?::\d{2})?(?:am|pm)?)\s*(?:-\s*(\d{1,2}(?::\d{2})?(?:am|pm)?))?/i);
+    if (timeMatch) {
+        startTime = timeMatch[1];
+        endTime = timeMatch[2] || null;
+        working = working.replace(timeMatch[0], '').trim();
     }
 
-    // Priority: !
-    const oldPriorityMatch = working.match(/!(high|med|medium|low|1|2|3)/i);
-    if (oldPriorityMatch && priority === 'medium') {
-        const val = oldPriorityMatch[1].toLowerCase();
-        if (val === 'high' || val === '3') priority = 'high';
-        else if (val === 'low' || val === '1') priority = 'low';
+    // Priority: !h, !m, !l OR !high, !medium, !low
+    const priorityMatch = working.match(/!(h|m|l|high|med|medium|low)/i);
+    if (priorityMatch) {
+        const val = priorityMatch[1].toLowerCase();
+        if (val === 'h' || val === 'high') priority = 'high';
+        else if (val === 'l' || val === 'low') priority = 'low';
         else priority = 'medium';
-        working = working.replace(oldPriorityMatch[0], '').trim();
+        working = working.replace(priorityMatch[0], '').trim();
     }
 
-    // Reminder: bell/rem
-    const oldReminderMatch = working.match(/\b(rem|bell)\s*(\d{1,3})/i);
-    if (oldReminderMatch && !reminder) {
-        reminder = parseInt(oldReminderMatch[2], 10);
-        working = working.replace(oldReminderMatch[0], '').trim();
+    // Reminder: *minutes
+    const reminderMatch = working.match(/\*(\d{1,3})/);
+    if (reminderMatch) {
+        reminder = parseInt(reminderMatch[1], 10);
+        working = working.replace(reminderMatch[0], '').trim();
     }
 
-    // Phase: #
-    const oldPhaseMatch = working.match(/#([A-Za-z0-9 _-]+)/);
-    if (oldPhaseMatch && !phaseName) {
-        phaseName = oldPhaseMatch[1].trim();
-        working = working.replace(oldPhaseMatch[0], '').trim();
+    // Phase: #name
+    const phaseMatch = working.match(/#([A-Za-z0-9 _-]+)/);
+    if (phaseMatch) {
+        phaseName = phaseMatch[1].trim();
+        working = working.replace(phaseMatch[0], '').trim();
     }
 
-    // Group: >
-    const oldGroupMatch = working.match(/>([A-Za-z0-9 _-]+)/);
-    if (oldGroupMatch && !groupName) {
-        groupName = oldGroupMatch[1].trim();
-        working = working.replace(oldGroupMatch[0], '').trim();
+    // Group: >name
+    const groupMatch = working.match(/>([A-Za-z0-9 _-]+)/);
+    if (groupMatch) {
+        groupName = groupMatch[1].trim();
+        working = working.replace(groupMatch[0], '').trim();
     }
 
-    // No rollover: noroll
-    if (working.toLowerCase().includes('noroll')) {
+    // No rollover: -
+    if (working.includes('-')) {
         rollover = false;
-        working = working.replace(/noroll/gi, '').trim();
+        working = working.replace(/-/g, '').trim();
     }
 
     const title = working.trim();
@@ -3169,46 +3227,39 @@ const autocompleteState = {
 function getSyntaxSuggestions(text, cursorPosition) {
     const suggestions = [];
     const beforeCursor = text.substring(0, cursorPosition);
-    const lastWord = beforeCursor.split(/\s/).pop().toLowerCase();
-    const words = beforeCursor.split(/\s/);
-    const lastTwoWords = words.slice(-2).join(' ').toLowerCase();
 
-    // Check if user is typing "g " - show existing groups
-    if (lastTwoWords.match(/\bg\s*$/)) {
-        const groups = calendarState.events?.filter(e => e.is_group) || [];
-        if (groups.length > 0) {
-            groups.forEach(group => {
+    // Check if user is typing after "#" - filter existing phases
+    const phaseMatch = beforeCursor.match(/#([A-Za-z0-9 _-]*)$/);
+    if (phaseMatch) {
+        const searchTerm = phaseMatch[1].toLowerCase();
+        const phases = calendarState.events?.filter(e => e.is_phase) || [];
+        phases.forEach(phase => {
+            if (phase.title.toLowerCase().startsWith(searchTerm)) {
                 suggestions.push({
-                    syntax: group.title,
-                    description: `Add to "${group.title}" group`,
-                    example: `g ${group.title}`
+                    type: 'phase',
+                    syntax: phase.title,
+                    description: `Add to "${phase.title}" phase`,
+                    insertText: phase.title
                 });
-            });
-        }
-        suggestions.push({
-            syntax: '[NewName]',
-            description: 'Or type a new group name',
-            example: 'g Projects'
+            }
         });
         return suggestions;
     }
 
-    // Check if user is typing "ph " - show existing phases
-    if (lastTwoWords.match(/\bph\s*$/)) {
-        const phases = calendarState.events?.filter(e => e.is_phase) || [];
-        if (phases.length > 0) {
-            phases.forEach(phase => {
+    // Check if user is typing after ">" - filter existing groups
+    const groupMatch = beforeCursor.match(/>([A-Za-z0-9 _-]*)$/);
+    if (groupMatch) {
+        const searchTerm = groupMatch[1].toLowerCase();
+        const groups = calendarState.events?.filter(e => e.is_group) || [];
+        groups.forEach(group => {
+            if (group.title.toLowerCase().startsWith(searchTerm)) {
                 suggestions.push({
-                    syntax: phase.title,
-                    description: `Add to "${phase.title}" phase`,
-                    example: `ph ${phase.title}`
+                    type: 'group',
+                    syntax: group.title,
+                    description: `Add to "${group.title}" group`,
+                    insertText: group.title
                 });
-            });
-        }
-        suggestions.push({
-            syntax: '[NewName]',
-            description: 'Or type a new phase name',
-            example: 'ph Planning'
+            }
         });
         return suggestions;
     }
@@ -3216,48 +3267,48 @@ function getSyntaxSuggestions(text, cursorPosition) {
     // Otherwise, show all syntax options
     // Event
     suggestions.push({
-        syntax: 'e',
+        syntax: '$',
         description: 'Mark as event (not a task)',
-        example: 'Team meeting e t 2pm'
+        example: '$ Team meeting @2pm'
     });
 
     // Time
     suggestions.push({
-        syntax: 't [time]',
+        syntax: '@[time]',
         description: 'Set time',
-        example: 't 2pm or t 2-3pm or t 14:00'
+        example: '@2pm or @2pm-3pm or @14:00'
     });
 
     // Priority
     suggestions.push({
-        syntax: 'p h',
+        syntax: '!h',
         description: 'High priority (red)',
-        example: 'Buy milk p h'
+        example: 'Buy milk !h'
     });
     suggestions.push({
-        syntax: 'p m',
+        syntax: '!m',
         description: 'Medium priority (orange)',
-        example: 'Call client p m'
+        example: 'Call client !m'
     });
     suggestions.push({
-        syntax: 'p l',
+        syntax: '!l',
         description: 'Low priority (green)',
-        example: 'Read article p l'
+        example: 'Read article !l'
     });
 
     // Phase
     const phases = calendarState.events?.filter(e => e.is_phase) || [];
     if (phases.length > 0) {
         suggestions.push({
-            syntax: 'ph [name]',
+            syntax: '#[name]',
             description: 'Add to phase',
-            example: `ph ${phases[0].title}`
+            example: `#${phases[0].title}`
         });
     } else {
         suggestions.push({
-            syntax: 'ph [name]',
+            syntax: '#[name]',
             description: 'Add to phase',
-            example: 'ph Planning'
+            example: '#Planning'
         });
     }
 
@@ -3265,30 +3316,30 @@ function getSyntaxSuggestions(text, cursorPosition) {
     const groups = calendarState.events?.filter(e => e.is_group) || [];
     if (groups.length > 0) {
         suggestions.push({
-            syntax: 'g [name]',
+            syntax: '>[name]',
             description: 'Add to group',
-            example: `g ${groups[0].title}`
+            example: `>${groups[0].title}`
         });
     } else {
         suggestions.push({
-            syntax: 'g [name]',
+            syntax: '>[name]',
             description: 'Add to group',
-            example: 'g Work'
+            example: '>Work'
         });
     }
 
     // Reminder
     suggestions.push({
-        syntax: 'r [minutes]',
+        syntax: '*[minutes]',
         description: 'Reminder before start',
-        example: 'r 15 or r 30'
+        example: '*15 or *30'
     });
 
-    // No rollover
+    // Disable rollover
     suggestions.push({
-        syntax: 'nr',
-        description: 'Disable auto-rollover',
-        example: 'Important task nr'
+        syntax: '-',
+        description: 'Disable rollover (task won\'t move to next day)',
+        example: 'Buy milk - (won\'t rollover)'
     });
 
     return suggestions;
@@ -3308,11 +3359,32 @@ function renderAutocompleteSuggestions(suggestions) {
     suggestions.forEach((sug, index) => {
         const item = document.createElement('div');
         item.className = `autocomplete-item ${index === autocompleteState.selectedIndex ? 'selected' : ''}`;
-        item.innerHTML = `
-            <div class="autocomplete-syntax">${sug.syntax}</div>
-            <div class="autocomplete-description">${sug.description}</div>
-            <div class="autocomplete-example">e.g., ${sug.example}</div>
-        `;
+
+        if (sug.type === 'phase' || sug.type === 'group') {
+            // Simpler format for phase/group autocomplete
+            item.innerHTML = `
+                <div class="autocomplete-syntax">${sug.syntax}</div>
+                <div class="autocomplete-description">${sug.description}</div>
+            `;
+        } else {
+            // Full format for syntax help
+            item.innerHTML = `
+                <div class="autocomplete-syntax">${sug.syntax}</div>
+                <div class="autocomplete-description">${sug.description}</div>
+                <div class="autocomplete-example">e.g., ${sug.example}</div>
+            `;
+        }
+
+        // Make item clickable
+        item.onclick = () => {
+            if (sug.insertText) {
+                insertSuggestion(sug.insertText, sug.type);
+            } else {
+                insertSuggestion(sug.syntax);
+            }
+            hideAutocomplete();
+        };
+
         container.appendChild(item);
     });
 
@@ -3321,7 +3393,7 @@ function renderAutocompleteSuggestions(suggestions) {
     autocompleteState.suggestions = suggestions;
 }
 
-function insertSuggestion(syntax) {
+function insertSuggestion(syntax, type) {
     const input = document.getElementById('calendar-quick-input');
     if (!input) return;
 
@@ -3330,21 +3402,38 @@ function insertSuggestion(syntax) {
     const beforeCursor = text.substring(0, cursorPos);
     const afterCursor = text.substring(cursorPos);
 
-    // Find where to insert (replace partial token or append)
-    const lastWord = beforeCursor.split(/\s/).pop();
-    const hasPartial = lastWord.startsWith('@') || lastWord.startsWith('!') ||
-                       lastWord.startsWith('#') || lastWord.startsWith('>') ||
-                       lastWord === '$' || lastWord.toLowerCase().startsWith('bell');
-
     let newText;
     let newCursorPos;
-    if (hasPartial) {
-        const replaceStart = cursorPos - lastWord.length;
-        newText = text.substring(0, replaceStart) + syntax + ' ' + afterCursor;
-        newCursorPos = replaceStart + syntax.length + 1;
+
+    // Handle phase/group autocomplete
+    if (type === 'phase' || type === 'group') {
+        const symbol = type === 'phase' ? '#' : '>';
+        const symbolIndex = beforeCursor.lastIndexOf(symbol);
+
+        if (symbolIndex !== -1) {
+            // Replace everything after the symbol with the selected name
+            newText = text.substring(0, symbolIndex + 1) + syntax + ' ' + afterCursor;
+            newCursorPos = symbolIndex + 1 + syntax.length + 1;
+        } else {
+            // Fallback: just append
+            newText = beforeCursor + syntax + ' ' + afterCursor;
+            newCursorPos = cursorPos + syntax.length + 1;
+        }
     } else {
-        newText = beforeCursor + syntax + ' ' + afterCursor;
-        newCursorPos = cursorPos + syntax.length + 1;
+        // Original logic for other suggestions
+        const lastWord = beforeCursor.split(/\s/).pop();
+        const hasPartial = lastWord.startsWith('@') || lastWord.startsWith('!') ||
+                           lastWord.startsWith('#') || lastWord.startsWith('>') ||
+                           lastWord === '$' || lastWord.toLowerCase().startsWith('bell');
+
+        if (hasPartial) {
+            const replaceStart = cursorPos - lastWord.length;
+            newText = text.substring(0, replaceStart) + syntax + ' ' + afterCursor;
+            newCursorPos = replaceStart + syntax.length + 1;
+        } else {
+            newText = beforeCursor + syntax + ' ' + afterCursor;
+            newCursorPos = cursorPos + syntax.length + 1;
+        }
     }
 
     input.value = newText;
@@ -3403,15 +3492,119 @@ document.addEventListener('click', (e) => {
     }
 });
 
+async function getOrCreatePhase(phaseName) {
+    const existing = calendarState.events.find(e => e.is_phase && e.title.toLowerCase() === phaseName.toLowerCase());
+    if (existing) {
+        return existing.id;
+    } else {
+        const created = await createCalendarEvent({ title: phaseName, is_phase: true });
+        return created ? created.id : null;
+    }
+}
+
+async function getOrCreateGroup(groupName) {
+    const existing = calendarState.events.find(e => e.is_group && e.title.toLowerCase() === groupName.toLowerCase());
+    if (existing) {
+        return existing.id;
+    } else {
+        const created = await createCalendarEvent({ title: groupName, is_group: true, is_event: false, is_phase: false });
+        return created ? created.id : null;
+    }
+}
+
 async function handleCalendarQuickAdd() {
     const input = document.getElementById('calendar-quick-input');
     if (!input || !calendarState.selectedDay || !calendarState.dayViewOpen) return;
     const parsed = parseCalendarQuickInput(input.value || '');
     if (!parsed) return;
     input.value = '';
+
+    // Handle phase creation with task
+    if (parsed.create_phase_with_task) {
+        const createdPhase = await createCalendarEvent({
+            title: parsed.phase_name,
+            is_phase: true
+        });
+        const phaseId = createdPhase ? createdPhase.id : null;
+
+        // Parse task text for all properties
+        const taskParsed = parseCalendarQuickInput(parsed.task_text);
+        if (taskParsed && !taskParsed.is_phase && !taskParsed.is_group && !taskParsed.create_phase_with_task && !taskParsed.create_group_with_task) {
+            await createCalendarEvent({
+                title: taskParsed.title,
+                is_phase: false,
+                is_event: taskParsed.is_event || false,
+                phase_id: phaseId,
+                start_time: taskParsed.start_time,
+                end_time: taskParsed.end_time,
+                priority: taskParsed.priority,
+                reminder_minutes_before: taskParsed.reminder_minutes_before,
+                group_id: taskParsed.group_name ? (await getOrCreateGroup(taskParsed.group_name)) : null,
+                rollover_enabled: taskParsed.rollover_enabled
+            });
+        }
+
+        if (calendarState.detailsOpen) {
+            await loadCalendarDay(calendarState.selectedDay);
+        } else {
+            await loadCalendarMonth();
+        }
+        return;
+    }
+
+    // Handle group creation with task
+    if (parsed.create_group_with_task) {
+        const createdGroup = await createCalendarEvent({
+            title: parsed.group_name,
+            is_group: true,
+            is_event: false,
+            is_phase: false
+        });
+        const groupId = createdGroup ? createdGroup.id : null;
+
+        // Parse task text for all properties
+        const taskParsed = parseCalendarQuickInput(parsed.task_text);
+        if (taskParsed && !taskParsed.is_phase && !taskParsed.is_group && !taskParsed.create_phase_with_task && !taskParsed.create_group_with_task) {
+            let phaseId = null;
+            if (taskParsed.phase_name) {
+                phaseId = await getOrCreatePhase(taskParsed.phase_name);
+            }
+
+            await createCalendarEvent({
+                title: taskParsed.title,
+                is_phase: false,
+                is_event: taskParsed.is_event || false,
+                group_id: groupId,
+                phase_id: phaseId,
+                start_time: taskParsed.start_time,
+                end_time: taskParsed.end_time,
+                priority: taskParsed.priority,
+                reminder_minutes_before: taskParsed.reminder_minutes_before,
+                rollover_enabled: taskParsed.rollover_enabled
+            });
+        }
+
+        if (calendarState.detailsOpen) {
+            await loadCalendarDay(calendarState.selectedDay);
+        } else {
+            await loadCalendarMonth();
+        }
+        return;
+    }
+
     const isEvent = parsed.is_event || false;
     if (parsed.is_phase) {
         await createCalendarEvent({ title: parsed.title, is_phase: true });
+        if (calendarState.detailsOpen) {
+            await loadCalendarDay(calendarState.selectedDay);
+        } else {
+            await loadCalendarMonth();
+        }
+        return;
+    }
+
+    if (parsed.is_group) {
+        await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
         if (calendarState.detailsOpen) {
             await loadCalendarDay(calendarState.selectedDay);
         } else {
@@ -3476,6 +3669,101 @@ async function handleMonthQuickAdd() {
     if (!parsed) return;
 
     input.value = '';
+
+    // Handle phase creation with task
+    if (parsed.create_phase_with_task) {
+        const createdPhase = await createCalendarEvent({
+            title: parsed.phase_name,
+            is_phase: true
+        });
+        const phaseId = createdPhase ? createdPhase.id : null;
+
+        // Parse task text for all properties
+        const taskParsed = parseCalendarQuickInput(parsed.task_text);
+        if (taskParsed && !taskParsed.is_phase && !taskParsed.is_group && !taskParsed.create_phase_with_task && !taskParsed.create_group_with_task) {
+            const monthEvents = await fetchMonthEvents(calendarState.selectedDay);
+            let groupId = null;
+            if (taskParsed.group_name) {
+                const existingGroup = monthEvents.find(e => e.is_group && e.title.toLowerCase() === taskParsed.group_name.toLowerCase());
+                if (existingGroup) {
+                    groupId = existingGroup.id;
+                } else {
+                    const createdGroup = await createCalendarEvent({
+                        title: taskParsed.group_name,
+                        is_group: true,
+                        is_event: false,
+                        is_phase: false
+                    });
+                    groupId = createdGroup ? createdGroup.id : null;
+                }
+            }
+
+            await createCalendarEvent({
+                title: taskParsed.title,
+                is_phase: false,
+                is_event: taskParsed.is_event || false,
+                phase_id: phaseId,
+                group_id: groupId,
+                start_time: taskParsed.start_time,
+                end_time: taskParsed.end_time,
+                priority: taskParsed.priority,
+                reminder_minutes_before: taskParsed.reminder_minutes_before,
+                rollover_enabled: taskParsed.rollover_enabled
+            });
+        }
+
+        await loadCalendarMonth();
+        if (panel) panel.classList.add('is-hidden');
+        return;
+    }
+
+    // Handle group creation with task
+    if (parsed.create_group_with_task) {
+        const createdGroup = await createCalendarEvent({
+            title: parsed.group_name,
+            is_group: true,
+            is_event: false,
+            is_phase: false
+        });
+        const groupId = createdGroup ? createdGroup.id : null;
+
+        // Parse task text for all properties
+        const taskParsed = parseCalendarQuickInput(parsed.task_text);
+        if (taskParsed && !taskParsed.is_phase && !taskParsed.is_group && !taskParsed.create_phase_with_task && !taskParsed.create_group_with_task) {
+            const monthEvents = await fetchMonthEvents(calendarState.selectedDay);
+            let phaseId = null;
+            if (taskParsed.phase_name) {
+                const existingPhase = monthEvents.find(e => e.is_phase && e.title.toLowerCase() === taskParsed.phase_name.toLowerCase());
+                if (existingPhase) {
+                    phaseId = existingPhase.id;
+                } else {
+                    const createdPhase = await createCalendarEvent({
+                        title: taskParsed.phase_name,
+                        is_phase: true
+                    });
+                    phaseId = createdPhase ? createdPhase.id : null;
+                }
+            }
+
+            await createCalendarEvent({
+                title: taskParsed.title,
+                is_phase: false,
+                is_event: taskParsed.is_event || false,
+                group_id: groupId,
+                phase_id: phaseId,
+                start_time: taskParsed.start_time,
+                end_time: taskParsed.end_time,
+                priority: taskParsed.priority,
+                reminder_minutes_before: taskParsed.reminder_minutes_before,
+                rollover_enabled: taskParsed.rollover_enabled
+            });
+        }
+
+        await loadCalendarMonth();
+        if (panel) panel.classList.add('is-hidden');
+        return;
+    }
+
     const isEvent = parsed.is_event || false;
 
     // Load the day's events to get phases and groups
@@ -3483,6 +3771,13 @@ async function handleMonthQuickAdd() {
 
     if (parsed.is_phase) {
         await createCalendarEvent({ title: parsed.title, is_phase: true });
+        await loadCalendarMonth();
+        if (panel) panel.classList.add('is-hidden');
+        return;
+    }
+
+    if (parsed.is_group) {
+        await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
         await loadCalendarMonth();
         if (panel) panel.classList.add('is-hidden');
         return;
@@ -3701,29 +3996,151 @@ function triggerLocalNotification(ev) {
 }
 
 async function enableCalendarNotifications() {
-    if (!('Notification' in window)) return;
+    if (!('Notification' in window)) {
+        alert('Notifications are not supported in this browser');
+        return;
+    }
+
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') {
         calendarNotifyEnabled = false;
+        alert('Notification permission denied. Please enable notifications in your browser settings.');
         return;
     }
-    await ensureServiceWorkerRegistered();
+
+    const registration = await ensureServiceWorkerRegistered();
+    if (!registration) {
+        alert('Could not register service worker. Notifications may not work properly.');
+        calendarNotifyEnabled = true;
+        scheduleLocalReminders();
+        return;
+    }
+
+    // Subscribe to push notifications
+    await subscribeToPushNotifications(registration);
+
     calendarNotifyEnabled = true;
     scheduleLocalReminders();
+
+    // Show success notification
+    showNativeNotification('Notifications Enabled', {
+        body: 'You will now receive notifications for your calendar events and reminders.',
+        icon: '/static/favicon.png'
+    });
 }
 
-function autoEnableCalendarNotificationsIfGranted() {
+async function subscribeToPushNotifications(registration) {
+    if (!registration) {
+        console.warn('No registration provided for push subscription');
+        return;
+    }
+
+    try {
+        // Check if service worker is active
+        if (!registration.active) {
+            console.warn('Service worker not active yet, waiting...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!registration.active) {
+                throw new Error('Service worker failed to activate');
+            }
+        }
+
+        // VAPID public key from server
+        const vapidPublicKey = 'BPIc2hbTVNzSXKqIVlMPYEl5CJ3tH6fT9QLNnyD2UQESX2JzIBNljsIVDBkWyYrbeET3tHWpmPyjOYq8PKnMWVQ';
+
+        // Convert base64 to Uint8Array
+        const convertedKey = urlBase64ToUint8Array(vapidPublicKey);
+
+        console.log('Subscribing to push notifications...');
+
+        // Subscribe to push notifications
+        const subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: convertedKey
+        });
+
+        console.log('Push subscription created:', subscription.endpoint);
+
+        // Send subscription to server
+        const response = await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                subscription: subscription.toJSON()
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server rejected subscription: ${response.status}`);
+        }
+
+        console.log('Push notification subscription successful');
+    } catch (error) {
+        console.error('Push subscription failed:', error);
+        // Don't fail entirely - local notifications can still work
+    }
+}
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+        .replace(/\-/g, '+')
+        .replace(/_/g, '/');
+
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
+async function autoEnableCalendarNotificationsIfGranted() {
     if (!('Notification' in window)) return;
     if (Notification.permission === 'granted') {
         calendarNotifyEnabled = true;
-        ensureServiceWorkerRegistered();
+        const registration = await ensureServiceWorkerRegistered();
+        if (registration) {
+            // Ensure push subscription is active
+            await subscribeToPushNotifications(registration);
+        }
         scheduleLocalReminders();
     }
 }
 
 async function ensureServiceWorkerRegistered() {
-    // Service workers disabled to prevent caching issues
-    return null;
+    if (!('serviceWorker' in navigator)) {
+        console.warn('Service workers not supported');
+        return null;
+    }
+    try {
+        // Check if already registered
+        let registration = await navigator.serviceWorker.getRegistration('/');
+
+        if (!registration) {
+            // Register new service worker
+            console.log('Registering service worker...');
+            registration = await navigator.serviceWorker.register('/service-worker.js', {
+                scope: '/'
+            });
+            console.log('Service worker registered:', registration);
+        } else {
+            console.log('Service worker already registered');
+        }
+
+        // Wait for service worker to be ready (active)
+        console.log('Waiting for service worker to be ready...');
+        const readyRegistration = await navigator.serviceWorker.ready;
+        console.log('Service worker ready and active:', readyRegistration.active);
+
+        return readyRegistration;
+    } catch (error) {
+        console.error('Service worker registration failed:', error);
+        return null;
+    }
 }
 
 async function showNativeNotification(title, options = {}) {
@@ -3731,7 +4148,7 @@ async function showNativeNotification(title, options = {}) {
     if (Notification.permission !== 'granted') return;
     try {
         const reg = await ensureServiceWorkerRegistered();
-        if (reg?.showNotification) {
+        if (reg?.active?.state === 'activated') {
             await reg.showNotification(title, options);
             return;
         }
@@ -3861,13 +4278,15 @@ function initCalendarPage() {
             }
         });
 
-        // Close dropdowns on scroll
+        // Update dropdown positions on scroll instead of closing them
         window.addEventListener('scroll', () => {
-            dropdownMenu.classList.remove('active');
-            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
-                d.classList.remove('active');
+            document.querySelectorAll('.calendar-item-dropdown.active').forEach(dropdown => {
+                if (dropdown.updatePosition && typeof dropdown.updatePosition === 'function') {
+                    dropdown.updatePosition();
+                }
             });
         }, true);
+
     }
 
     if (prevMonthBtn) prevMonthBtn.onclick = () => {
@@ -3930,7 +4349,24 @@ function initCalendarPage() {
             }
         });
 
-        // No auto-suggestions - user must trigger with Ctrl+Space
+        // Auto-trigger suggestions for # and > with continuous filtering
+        quickInput.addEventListener('input', () => {
+            const text = quickInput.value;
+            const cursorPos = quickInput.selectionStart;
+            const beforeCursor = text.substring(0, cursorPos);
+
+            // Check if we're currently typing after # or >
+            const hasPhase = beforeCursor.match(/#([A-Za-z0-9 _-]*)$/);
+            const hasGroup = beforeCursor.match(/>([A-Za-z0-9 _-]*)$/);
+
+            if (hasPhase || hasGroup) {
+                const suggestions = getSyntaxSuggestions(text, cursorPos);
+                renderAutocompleteSuggestions(suggestions);
+            } else {
+                // Hide autocomplete if not typing after # or >
+                hideAutocomplete();
+            }
+        });
 
         // Hide autocomplete when clicking outside
         document.addEventListener('click', (e) => {

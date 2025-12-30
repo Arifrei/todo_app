@@ -3740,9 +3740,16 @@ section.card.calendar-board,
 }
 
 .calendar-icon-btn.active {
-    background: rgba(59, 130, 246, 0.15);
-    color: var(--primary-color);
-    font-weight: 600;
+    background: rgba(59, 130, 246, 0.25) !important;
+    color: var(--primary-color) !important;
+}
+
+.calendar-icon-btn.active i {
+    color: var(--primary-color) !important;
+}
+
+.calendar-icon-btn.active:hover {
+    background: rgba(59, 130, 246, 0.35) !important;
 }
 
 .priority-menu {
