@@ -816,6 +816,22 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/download/app')
+def download_app():
+    """Serve the Android APK for download."""
+    downloads_dir = os.path.join(app.root_path, 'downloads')
+    apk_filename = 'taskflow.apk'
+    apk_path = os.path.join(downloads_dir, apk_filename)
+
+    if os.path.exists(apk_path):
+        return send_from_directory(downloads_dir, apk_filename,
+                                   as_attachment=True,
+                                   download_name='TaskFlow.apk',
+                                   mimetype='application/vnd.android.package-archive')
+    else:
+        return "APK not found. Please build and upload the app first.", 404
+
+
 @app.route('/notes')
 def notes_page():
     """Dedicated notes workspace with rich text editor."""
@@ -1655,6 +1671,52 @@ def dismiss_reminder(event_id):
     db.session.commit()
 
     return jsonify({'dismissed': True})
+
+
+@app.route('/api/calendar/events/pending-reminders', methods=['GET'])
+def get_pending_reminders():
+    """Get upcoming reminders for mobile app to schedule locally."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    # Get user's timezone
+    tz = pytz.timezone(app.config['DEFAULT_TIMEZONE'])
+    now = datetime.now(tz).replace(tzinfo=None)
+
+    # Get events with reminders in the next 7 days that haven't been sent yet
+    end_window = now + timedelta(days=7)
+
+    events = CalendarEvent.query.filter_by(user_id=user.id, reminder_sent=False).all()
+
+    pending = []
+    for event in events:
+        if not event.start_time:
+            continue
+
+        # Combine day and time
+        event_datetime = datetime.combine(event.day, event.start_time)
+
+        # Check if snoozed
+        if event.reminder_snoozed_until:
+            remind_at = event.reminder_snoozed_until
+        elif event.reminder_minutes_before:
+            remind_at = event_datetime - timedelta(minutes=event.reminder_minutes_before)
+        else:
+            continue  # No reminder set
+
+        # Only include if reminder is in the future and within our window
+        if now < remind_at <= end_window:
+            pending.append({
+                'event_id': event.id,
+                'title': event.title,
+                'start_time': event.start_time.strftime('%I:%M %p'),
+                'day': event.day.isoformat(),
+                'remind_at': remind_at.isoformat(),
+                'url': f'/calendar?day={event.day.isoformat()}'
+            })
+
+    return jsonify({'reminders': pending})
 
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])

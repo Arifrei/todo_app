@@ -6,8 +6,8 @@
     "cap:sync": "npx cap sync",
     "cap:open": "npx cap open android",
     "cap:build": "npx cap sync && npx cap copy",
-    "android:build": "cd android && ./gradlew assembleDebug",
-    "android:release": "cd android && ./gradlew assembleRelease"
+    "android:build": "cd android && gradlew assembleDebug",
+    "android:release": "cd android && gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^6.0.0",

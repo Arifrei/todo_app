@@ -27,13 +27,126 @@ const NotificationService = {
                     return false;
                 }
 
-                // Listen for notification actions (when user taps notification)
-                await LocalNotifications.addListener('localNotificationActionPerformed', (notification) => {
-                    console.log('Notification tapped:', notification);
+                // Register action types for snooze/dismiss buttons
+                await LocalNotifications.registerActionTypes({
+                    types: [
+                        {
+                            id: 'REMINDER_ACTIONS',
+                            actions: [
+                                {
+                                    id: 'snooze',
+                                    title: 'Snooze',
+                                    requiresAuthentication: false
+                                },
+                                {
+                                    id: 'dismiss',
+                                    title: 'Dismiss',
+                                    requiresAuthentication: false,
+                                    destructive: true
+                                }
+                            ]
+                        }
+                    ]
+                });
 
-                    // Handle notification tap - navigate to relevant page
-                    if (notification.notification.extra?.url) {
-                        window.location.href = notification.notification.extra.url;
+                // Listen for notification actions (when user taps notification or action buttons)
+                await LocalNotifications.addListener('localNotificationActionPerformed', async (actionData) => {
+                    console.log('Notification action performed:', JSON.stringify(actionData));
+
+                    const action = actionData.actionId;
+                    // Check both camelCase and snake_case for compatibility
+                    const eventId = actionData.notification.extra?.event_id || actionData.notification.extra?.eventId;
+
+                    console.log('Action:', action, 'EventId:', eventId);
+
+                    if (action === 'snooze' && eventId) {
+                        // Call snooze API
+                        try {
+                            // For native apps, fetch uses the configured server URL automatically
+                            const apiUrl = `/api/calendar/events/${eventId}/snooze`;
+
+                            console.log('Calling snooze API:', apiUrl);
+                            const response = await fetch(apiUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({})
+                            });
+
+                            console.log('Snooze response:', response.status, response.ok);
+
+                            if (response.ok) {
+                                const data = await response.json();
+                                console.log('Snooze API response data:', JSON.stringify(data));
+                                const minutes = data.snooze_minutes || 10;
+                                const snoozeUntil = new Date(data.snooze_until);
+                                console.log('Snoozed for', minutes, 'minutes until', snoozeUntil);
+
+                                const { LocalNotifications } = window.Capacitor.Plugins;
+
+                                try {
+                                    // Schedule the snoozed reminder
+                                    console.log('Scheduling snoozed reminder with:', {
+                                        id: eventId,
+                                        title: actionData.notification.title,
+                                        at: snoozeUntil
+                                    });
+
+                                    await LocalNotifications.schedule({
+                                        notifications: [{
+                                            id: eventId,  // Same ID so it replaces the original
+                                            title: actionData.notification.title,
+                                            body: actionData.notification.body,
+                                            schedule: { at: snoozeUntil },
+                                            extra: actionData.notification.extra,
+                                            smallIcon: 'ic_notification_bell',
+                                            channelId: 'taskflow_reminders',
+                                            actionTypeId: 'REMINDER_ACTIONS'
+                                        }]
+                                    });
+                                    console.log('Snoozed reminder scheduled successfully');
+
+                                    // Show confirmation
+                                    console.log('Scheduling confirmation notification');
+                                    await LocalNotifications.schedule({
+                                        notifications: [{
+                                            id: Date.now(),
+                                            title: 'Reminder Snoozed',
+                                            body: `You will be reminded again in ${minutes} minute${minutes !== 1 ? 's' : ''}`,
+                                            schedule: { at: new Date(Date.now() + 500) },
+                                            channelId: 'taskflow_general'
+                                        }]
+                                    });
+                                    console.log('Confirmation notification scheduled');
+
+                                    console.log('All notifications scheduled for snooze');
+                                } catch (notifError) {
+                                    console.error('Error scheduling notifications:', notifError);
+                                }
+                            } else {
+                                console.error('Snooze failed:', await response.text());
+                            }
+                        } catch (error) {
+                            console.error('Failed to snooze reminder:', error);
+                        }
+                    } else if (action === 'dismiss' && eventId) {
+                        // Call dismiss API
+                        try {
+                            const apiUrl = `/api/calendar/events/${eventId}/dismiss`;
+
+                            console.log('Calling dismiss API:', apiUrl);
+                            const response = await fetch(apiUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' }
+                            });
+                            console.log('Dismiss response:', response.status, response.ok);
+                        } catch (error) {
+                            console.error('Failed to dismiss reminder:', error);
+                        }
+                    } else if (action === 'tap') {
+                        // Default action: navigate to relevant page
+                        if (actionData.notification.extra?.url) {
+                            window.location.href = actionData.notification.extra.url;
+                        }
                     }
                 });
 
@@ -75,8 +188,9 @@ const NotificationService = {
                         body: options.body,
                         schedule: { at: options.at },
                         extra: options.extra || {},
-                        smallIcon: 'ic_stat_icon_config_sample',
-                        channelId: 'taskflow_reminders'
+                        smallIcon: 'ic_notification_bell',
+                        channelId: 'taskflow_reminders',
+                        actionTypeId: 'REMINDER_ACTIONS'  // Add snooze/dismiss buttons
                     }]
                 });
 
@@ -119,7 +233,7 @@ const NotificationService = {
                         body: options.body || '',
                         schedule: { at: new Date(Date.now() + 1000) }, // Show after 1 second
                         extra: options.data || {},
-                        smallIcon: 'ic_stat_icon_config_sample',
+                        smallIcon: 'ic_notification_bell',
                         channelId: 'taskflow_general'
                     }]
                 });
@@ -264,6 +378,73 @@ if (document.readyState === 'loading') {
     });
 }
 
+/**
+ * Poll for pending reminders and schedule them locally (mobile only)
+ */
+async function syncPendingReminders() {
+    if (!isNativeApp()) return;
+
+    try {
+        const response = await fetch('/api/calendar/events/pending-reminders');
+
+        if (!response.ok) {
+            console.error('Failed to fetch pending reminders:', response.status);
+            return;
+        }
+
+        const data = await response.json();
+        const reminders = data.reminders || [];
+
+        console.log(`Found ${reminders.length} pending reminders to schedule`);
+
+        for (const reminder of reminders) {
+            try {
+                const remindAt = new Date(reminder.remind_at);
+
+                // Only schedule if in the future
+                if (remindAt > new Date()) {
+                    await NotificationService.schedule({
+                        id: reminder.event_id,
+                        title: `Reminder: ${reminder.title}`,
+                        body: `Starting at ${reminder.start_time}`,
+                        at: remindAt,
+                        extra: {
+                            event_id: reminder.event_id,
+                            url: reminder.url
+                        }
+                    });
+
+                    console.log(`Scheduled reminder for ${reminder.title} at ${remindAt}`);
+                }
+            } catch (error) {
+                console.error('Failed to schedule reminder:', reminder, error);
+            }
+        }
+    } catch (error) {
+        console.error('Error syncing pending reminders:', error);
+    }
+}
+
+// Sync reminders periodically (every 5 minutes) for mobile app
+if (isNativeApp()) {
+    // Initial sync after 5 seconds
+    setTimeout(syncPendingReminders, 5000);
+
+    // Then sync every 5 minutes
+    setInterval(syncPendingReminders, 5 * 60 * 1000);
+
+    // Also sync when app comes to foreground
+    if (window.Capacitor?.Plugins?.App) {
+        window.Capacitor.Plugins.App.addListener('appStateChange', (state) => {
+            if (state.isActive) {
+                console.log('App became active, syncing reminders');
+                syncPendingReminders();
+            }
+        });
+    }
+}
+
 // Make globally available
 window.NotificationService = NotificationService;
 window.isNativeApp = isNativeApp;
+window.syncPendingReminders = syncPendingReminders;

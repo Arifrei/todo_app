@@ -3,7 +3,7 @@
   "appName": "TaskFlow",
   "webDir": "static",
   "server": {
-    "url": "http://192.168.11.148:5000",
+    "url": "http://51.81.32.252:8003",
     "cleartext": true,
     "androidScheme": "http"
   },
@@ -12,7 +12,7 @@
   },
   "plugins": {
     "LocalNotifications": {
-      "smallIcon": "ic_stat_icon_config_sample",
+      "smallIcon": "ic_notification_bell",
       "iconColor": "#3b82f6",
       "sound": "beep.wav"
     },

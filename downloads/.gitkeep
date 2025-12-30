@@ -1,0 +1,2 @@
+# This directory stores the Android APK for download
+# The APK file itself is ignored by git (see .gitignore)
