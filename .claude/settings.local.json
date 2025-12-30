@@ -8,7 +8,9 @@
       "Bash(git log:*)",
       "Bash(ipconfig:*)",
       "Bash(findstr:*)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(npm install)",
+      "Bash(npx cap:*)"
     ],
     "deny": [],
     "ask": []

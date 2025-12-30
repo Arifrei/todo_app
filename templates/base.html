@@ -11,8 +11,13 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='3') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='mobile-enhancements.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+
+    <!-- Capacitor Core (for native app) -->
+    <script type="module" src="/capacitor.js"></script>
+
     <script>
         window.VAPID_PUBLIC_KEY = "{{ config.get('VAPID_PUBLIC_KEY', '') }}";
     </script>
@@ -175,10 +180,13 @@
         <div class="ai-hint">Headers are auto-sent from your session; AI uses your data.</div>
     </div>
 
+    <!-- Capacitor Notification Service -->
+    <script src="{{ url_for('static', filename='capacitor-notifications.js') }}"></script>
+
     <script src="{{ url_for('static', filename='app.js', v='3') }}"></script>
     <script>
-        // Disable all service workers to avoid caching issues
-        if ('serviceWorker' in navigator) {
+        // Disable all service workers to avoid caching issues (not needed in native app)
+        if ('serviceWorker' in navigator && !window.isNativeApp?.()) {
             navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(reg => reg.unregister()));
         }
     </script>

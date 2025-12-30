@@ -3971,23 +3971,55 @@ function nudgeCalendarEvent(id, delta) {
     commitCalendarOrder();
 }
 
-function scheduleLocalReminders() {
+async function scheduleLocalReminders() {
+    // Clear old timers (only needed for web mode)
     Object.values(calendarReminderTimers).forEach(t => clearTimeout(t));
     calendarReminderTimers = {};
+
     if (!calendarNotifyEnabled || !calendarState.selectedDay) return;
+
     const now = new Date();
-    calendarState.events.forEach(ev => {
-        if (ev.status === 'done') return;
-        if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
-        const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
-        const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
-        const delay = reminderAt.getTime() - now.getTime();
-        if (delay > 0) {
-            calendarReminderTimers[ev.id] = setTimeout(() => {
-                triggerLocalNotification(ev);
-            }, delay);
-        }
-    });
+
+    // In native app mode, use Capacitor Local Notifications
+    if (window.isNativeApp && window.isNativeApp()) {
+        // Cancel all existing scheduled notifications
+        await window.NotificationService?.cancelAll();
+
+        // Schedule new notifications
+        calendarState.events.forEach(async (ev) => {
+            if (ev.status === 'done') return;
+            if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
+
+            const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
+            const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
+
+            if (reminderAt.getTime() > now.getTime()) {
+                const body = ev.start_time ? `${formatTimeRange(ev)} - ${ev.title}` : ev.title;
+
+                await window.NotificationService?.schedule({
+                    id: ev.id,
+                    title: 'Upcoming Event',
+                    body: body,
+                    at: reminderAt,
+                    extra: { url: '/calendar', eventId: ev.id }
+                });
+            }
+        });
+    } else {
+        // Web mode: use setTimeout as before
+        calendarState.events.forEach(ev => {
+            if (ev.status === 'done') return;
+            if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
+            const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
+            const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
+            const delay = reminderAt.getTime() - now.getTime();
+            if (delay > 0) {
+                calendarReminderTimers[ev.id] = setTimeout(() => {
+                    triggerLocalNotification(ev);
+                }, delay);
+            }
+        });
+    }
 }
 
 function triggerLocalNotification(ev) {
@@ -3996,6 +4028,25 @@ function triggerLocalNotification(ev) {
 }
 
 async function enableCalendarNotifications() {
+    // In native app, use NotificationService
+    if (window.isNativeApp && window.isNativeApp()) {
+        const hasPermission = await window.NotificationService?.initialize();
+        if (hasPermission) {
+            calendarNotifyEnabled = true;
+            await scheduleLocalReminders();
+
+            // Show success notification
+            await window.NotificationService?.show('Notifications Enabled', {
+                body: 'You will now receive notifications for your calendar events and reminders.'
+            });
+        } else {
+            calendarNotifyEnabled = false;
+            alert('Notification permission denied. Please enable notifications in your device settings.');
+        }
+        return;
+    }
+
+    // Web mode: use existing web notification system
     if (!('Notification' in window)) {
         alert('Notifications are not supported in this browser');
         return;
@@ -4099,6 +4150,17 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 async function autoEnableCalendarNotificationsIfGranted() {
+    // In native app, check permission via NotificationService
+    if (window.isNativeApp && window.isNativeApp()) {
+        const hasPermission = await window.NotificationService?.hasPermission();
+        if (hasPermission) {
+            calendarNotifyEnabled = true;
+            await scheduleLocalReminders();
+        }
+        return;
+    }
+
+    // Web mode: check browser notification permission
     if (!('Notification' in window)) return;
     if (Notification.permission === 'granted') {
         calendarNotifyEnabled = true;

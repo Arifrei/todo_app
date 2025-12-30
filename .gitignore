@@ -11,3 +11,21 @@ instance/
 # Python cache
 __pycache__/
 *.pyc
+
+# Node modules and dependencies
+node_modules/
+package-lock.json
+
+# Android build outputs
+android/app/build/
+android/app/release/
+android/.gradle/
+android/build/
+android/local.properties
+android/.idea/
+android/app/.cxx/
+*.apk
+*.aab
+
+# Capacitor
+.capacitor/
