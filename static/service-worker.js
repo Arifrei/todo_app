@@ -134,14 +134,18 @@ self.addEventListener('push', (event) => {
     payload = { title: 'Notification', body: event.data ? event.data.text() : '' };
   }
   const title = payload.title || 'Notification';
+  const hasActions = payload.actions && payload.actions.length > 0;
   const options = {
     body: payload.body || '',
     data: payload.data || {},
     actions: payload.actions || [],
-    requireInteraction: payload.actions && payload.actions.length > 0, // Keep notification visible if it has actions
+    requireInteraction: hasActions, // Keep notification visible if it has actions
     tag: payload.data?.event_id ? `reminder-${payload.data.event_id}` : undefined,
     icon: '/static/favicon.png',
-    badge: '/static/favicon.png'
+    badge: '/static/favicon.png',
+    vibrate: hasActions ? [200, 100, 200] : [200], // Vibrate pattern for mobile
+    silent: false, // Ensure sound/vibration on mobile
+    renotify: true // Force notification even if one with same tag exists
   };
   // Broadcast to open clients for debugging
   event.waitUntil(

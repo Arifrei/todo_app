@@ -1475,6 +1475,8 @@ def _send_push_to_user(user, title, body=None, link=None, event_id=None, actions
 
     payload = json.dumps(payload_data)
     sent = 0
+    # Use high urgency for reminders to ensure delivery on mobile even when screen is off
+    headers = {'Urgency': 'high', 'Topic': 'reminder'} if event_id else {}
     for sub in subs:
         try:
             webpush(
@@ -1484,7 +1486,8 @@ def _send_push_to_user(user, title, body=None, link=None, event_id=None, actions
                 },
                 data=payload,
                 vapid_private_key=private_key,
-                vapid_claims={"sub": "mailto:{}".format(os.environ.get('VAPID_SUBJECT', 'admin@example.com'))}
+                vapid_claims={"sub": "mailto:{}".format(os.environ.get('VAPID_SUBJECT', 'admin@example.com'))},
+                headers=headers
             )
             sent += 1
         except WebPushException as exc:
