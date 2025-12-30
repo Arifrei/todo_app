@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taskflow-cache-v1';
+const CACHE_NAME = 'taskflow-cache-v2';
 const CORE_ASSETS = [
   '/',
   '/static/style.css',
@@ -73,18 +73,57 @@ self.addEventListener('message', (event) => {
 
 // Make notification clicks focus or open the app
 self.addEventListener('notificationclick', (event) => {
+  const action = event.action;
+  const eventId = event.notification?.data?.event_id;
   const url = event.notification?.data?.url || '/';
+
   event.notification.close();
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      const client = list.find(c => c.url.includes(url));
-      if (client) {
-        client.focus();
-        return;
-      }
-      return clients.openWindow(url);
-    })
-  );
+
+  if (action === 'snooze' && eventId) {
+    // Snooze the reminder
+    event.waitUntil(
+      fetch(`/api/calendar/events/${eventId}/snooze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      }).then(response => {
+        if (response.ok) {
+          return response.json().then(data => {
+            const minutes = data.snooze_minutes || 10;
+            return self.registration.showNotification('Reminder Snoozed', {
+              body: `You will be reminded again in ${minutes} minute${minutes !== 1 ? 's' : ''}`,
+              tag: 'snooze-confirmation',
+              requireInteraction: false
+            });
+          });
+        }
+      }).catch(err => {
+        console.error('Failed to snooze reminder:', err);
+      })
+    );
+  } else if (action === 'dismiss' && eventId) {
+    // Dismiss the reminder
+    event.waitUntil(
+      fetch(`/api/calendar/events/${eventId}/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }).catch(err => {
+        console.error('Failed to dismiss reminder:', err);
+      })
+    );
+  } else {
+    // Default action: open the app
+    event.waitUntil(
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+        const client = list.find(c => c.url.includes(url));
+        if (client) {
+          client.focus();
+          return;
+        }
+        return clients.openWindow(url);
+      })
+    );
+  }
 });
 
 self.addEventListener('push', (event) => {
@@ -98,6 +137,11 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || '',
     data: payload.data || {},
+    actions: payload.actions || [],
+    requireInteraction: payload.actions && payload.actions.length > 0, // Keep notification visible if it has actions
+    tag: payload.data?.event_id ? `reminder-${payload.data.event_id}` : undefined,
+    icon: '/static/favicon.png',
+    badge: '/static/favicon.png'
   };
   // Broadcast to open clients for debugging
   event.waitUntil(

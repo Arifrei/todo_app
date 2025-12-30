@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
         reminders_enabled: document.getElementById('pref-reminders'),
         digest_enabled: document.getElementById('pref-digest'),
         digest_hour: document.getElementById('pref-digest-hour'),
+        default_snooze_minutes: document.getElementById('pref-snooze-minutes'),
     };
 
     let saveTimer = null;
@@ -22,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (prefsInputs.reminders_enabled) prefsInputs.reminders_enabled.checked = !!data.reminders_enabled;
             if (prefsInputs.digest_enabled) prefsInputs.digest_enabled.checked = !!data.digest_enabled;
             if (prefsInputs.digest_hour && data.digest_hour !== undefined) prefsInputs.digest_hour.value = data.digest_hour;
+            if (prefsInputs.default_snooze_minutes && data.default_snooze_minutes !== undefined) prefsInputs.default_snooze_minutes.value = data.default_snooze_minutes;
             if (prefsInputs.push_enabled && prefsInputs.push_enabled.checked) {
                 ensurePushSubscribed();
             }
@@ -38,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
             reminders_enabled: prefsInputs.reminders_enabled?.checked,
             digest_enabled: prefsInputs.digest_enabled?.checked,
             digest_hour: prefsInputs.digest_hour?.value ? parseInt(prefsInputs.digest_hour.value, 10) : undefined,
+            default_snooze_minutes: prefsInputs.default_snooze_minutes?.value ? parseInt(prefsInputs.default_snooze_minutes.value, 10) : undefined,
         };
         try {
             await fetch('/api/notifications/settings', {

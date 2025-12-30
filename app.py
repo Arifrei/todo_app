@@ -506,8 +506,131 @@ def _send_daily_email_digest(target_day=None):
                 continue
 
 
+def _schedule_reminder_job(event):
+    """Schedule a one-time reminder job for a calendar event."""
+    global scheduler
+    if not scheduler or not event.start_time or event.reminder_minutes_before is None:
+        return
+
+    # Cancel existing job if present
+    if event.reminder_job_id:
+        try:
+            scheduler.remove_job(event.reminder_job_id)
+        except Exception:
+            pass
+
+    # Calculate reminder time
+    try:
+        event_datetime = datetime.combine(event.day, event.start_time)
+        event_datetime = pytz.timezone(app.config['DEFAULT_TIMEZONE']).localize(event_datetime)
+        reminder_time = event_datetime - timedelta(minutes=event.reminder_minutes_before)
+
+        # Only schedule if reminder is in the future
+        now = datetime.now(pytz.timezone(app.config['DEFAULT_TIMEZONE']))
+        if reminder_time > now:
+            job_id = f"reminder_{event.id}_{int(reminder_time.timestamp())}"
+            scheduler.add_job(
+                _send_event_reminder,
+                'date',
+                run_date=reminder_time,
+                args=[event.id],
+                id=job_id,
+                replace_existing=True
+            )
+            event.reminder_job_id = job_id
+            event.reminder_sent = False
+            event.reminder_snoozed_until = None
+            db.session.commit()
+            app.logger.info(f"Scheduled reminder job {job_id} for event {event.id} at {reminder_time}")
+    except Exception as e:
+        app.logger.error(f"Error scheduling reminder for event {event.id}: {e}")
+
+
+def _cancel_reminder_job(event):
+    """Cancel a scheduled reminder job for a calendar event."""
+    global scheduler
+    if not scheduler or not event.reminder_job_id:
+        return
+
+    try:
+        scheduler.remove_job(event.reminder_job_id)
+        app.logger.info(f"Cancelled reminder job {event.reminder_job_id} for event {event.id}")
+    except Exception as e:
+        app.logger.debug(f"Could not cancel job {event.reminder_job_id}: {e}")
+
+    event.reminder_job_id = None
+    db.session.commit()
+
+
+def _send_event_reminder(event_id):
+    """Send a reminder notification for a specific calendar event."""
+    with app.app_context():
+        try:
+            event = CalendarEvent.query.get(event_id)
+            if not event:
+                return
+
+            # Check if already sent or snoozed
+            if event.reminder_sent:
+                return
+
+            # Check if snoozed
+            if event.reminder_snoozed_until:
+                tz = pytz.timezone(app.config['DEFAULT_TIMEZONE'])
+                now = datetime.now(tz).replace(tzinfo=None)
+                if now < event.reminder_snoozed_until:
+                    # Still snoozed, reschedule for snooze time
+                    global scheduler
+                    if scheduler:
+                        job_id = f"reminder_{event.id}_{int(event.reminder_snoozed_until.timestamp())}"
+                        scheduler.add_job(
+                            _send_event_reminder,
+                            'date',
+                            run_date=pytz.timezone(app.config['DEFAULT_TIMEZONE']).localize(event.reminder_snoozed_until),
+                            args=[event_id],
+                            id=job_id,
+                            replace_existing=True
+                        )
+                        event.reminder_job_id = job_id
+                        db.session.commit()
+                    return
+
+            # Get user
+            user = User.query.get(event.user_id)
+            if not user:
+                return
+
+            # Check user preferences
+            prefs = _get_or_create_notification_settings(user.id)
+            if not prefs.push_enabled or not prefs.reminders_enabled:
+                return
+
+            # Send push notification with action buttons
+            title = f"Reminder: {event.title}"
+            body = f"Starting at {event.start_time.strftime('%I:%M %p')}" if event.start_time else ""
+            day_str = event.day.isoformat()
+            link = f'/calendar?day={day_str}'
+
+            actions = [
+                {'action': 'snooze', 'title': 'Snooze'},
+                {'action': 'dismiss', 'title': 'Dismiss'}
+            ]
+
+            _send_push_to_user(user, title, body, link=link, event_id=event.id, actions=actions)
+
+            # Mark as sent
+            event.reminder_sent = True
+            event.reminder_job_id = None
+            db.session.commit()
+
+        except Exception as e:
+            app.logger.error(f"Error sending reminder for event {event_id}: {e}")
+
+
 def _check_calendar_reminders():
-    """Check for upcoming calendar events with reminders and send push notifications."""
+    """Legacy minute-polling function - now replaced by server-scheduled jobs."""
+    # This function is kept for backward compatibility but is no longer used
+    # when server-scheduled reminders are enabled
     with app.app_context():
         try:
             now = datetime.now(pytz.UTC).replace(tzinfo=None)
@@ -581,6 +704,32 @@ def _check_calendar_reminders():
             app.logger.error(f"Error in _check_calendar_reminders: {e}")
 
 
+def _schedule_existing_reminders():
+    """Schedule reminder jobs for all existing events with reminders on startup."""
+    with app.app_context():
+        try:
+            now = datetime.now(pytz.timezone(app.config['DEFAULT_TIMEZONE']))
+            # Get events with reminders that haven't been sent yet
+            events = CalendarEvent.query.filter(
+                CalendarEvent.reminder_minutes_before.isnot(None),
+                CalendarEvent.start_time.isnot(None),
+                CalendarEvent.reminder_sent == False,
+                CalendarEvent.day >= now.date()
+            ).all()
+
+            scheduled_count = 0
+            for event in events:
+                try:
+                    _schedule_reminder_job(event)
+                    scheduled_count += 1
+                except Exception as e:
+                    app.logger.error(f"Error scheduling reminder for event {event.id}: {e}")
+
+            app.logger.info(f"Scheduled {scheduled_count} existing reminder jobs on startup")
+        except Exception as e:
+            app.logger.error(f"Error in _schedule_existing_reminders: {e}")
+
+
 def _start_scheduler():
     """Start background scheduler for rollover and optional digest."""
     global scheduler
@@ -595,9 +744,12 @@ def _start_scheduler():
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
     # Optional daily digest at 7:00 local time
     scheduler.add_job(_send_daily_email_digest, 'cron', hour=int(os.environ.get('DIGEST_HOUR', 7)), minute=0)
-    # Check for calendar reminders every minute
-    scheduler.add_job(_check_calendar_reminders, 'interval', minutes=1)
+    # Note: Calendar reminders now use server-scheduled jobs (scheduled per-event)
+    # Legacy minute-polling has been replaced with precise scheduling
     scheduler.start()
+
+    # Schedule existing reminders on startup
+    _schedule_existing_reminders()
 
 _jobs_bootstrapped = False
 
@@ -1051,6 +1203,11 @@ def calendar_events():
     )
     db.session.add(new_event)
     db.session.commit()
+
+    # Schedule reminder job if applicable
+    if new_event.reminder_minutes_before is not None and new_event.start_time:
+        _schedule_reminder_job(new_event)
+
     return jsonify(new_event.to_dict()), 201
 
 
@@ -1063,6 +1220,8 @@ def calendar_event_detail(event_id):
     event = CalendarEvent.query.filter_by(id=event_id, user_id=user.id).first_or_404()
 
     if request.method == 'DELETE':
+        # Cancel reminder job if exists
+        _cancel_reminder_job(event)
         db.session.delete(event)
         db.session.commit()
         return '', 204
@@ -1088,15 +1247,24 @@ def calendar_event_detail(event_id):
         event.is_group = bool(data.get('is_group'))
     if 'rollover_enabled' in data:
         event.rollover_enabled = bool(data.get('rollover_enabled'))
+    time_changed = False
     if 'start_time' in data:
+        old_start = event.start_time
         event.start_time = _parse_time_str(data.get('start_time'))
+        if old_start != event.start_time:
+            time_changed = True
     if 'end_time' in data:
         event.end_time = _parse_time_str(data.get('end_time'))
+    reminder_changed = False
     if 'reminder_minutes_before' in data:
+        old_reminder = event.reminder_minutes_before
         try:
             event.reminder_minutes_before = int(data.get('reminder_minutes_before'))
         except (TypeError, ValueError):
             event.reminder_minutes_before = None
+        if old_reminder != event.reminder_minutes_before:
+            reminder_changed = True
+    day_changed = False
     if 'day' in data:
         new_day = _parse_day_value(data.get('day'))
         if not new_day:
@@ -1104,6 +1272,7 @@ def calendar_event_detail(event_id):
         if new_day != event.day:
             event.day = new_day
             event.order_index = _next_calendar_order(new_day, user.id)
+            day_changed = True
     if 'phase_id' in data and not event.is_phase:
         if data.get('phase_id') is None:
             event.phase_id = None
@@ -1129,6 +1298,17 @@ def calendar_event_detail(event_id):
                 return jsonify({'error': 'Group not found for that day'}), 404
             event.group_id = gid
     db.session.commit()
+
+    # Reschedule reminder if relevant fields changed
+    if (reminder_changed or time_changed or day_changed) and event.reminder_minutes_before is not None:
+        if event.start_time:
+            _schedule_reminder_job(event)
+        else:
+            _cancel_reminder_job(event)
+    elif reminder_changed and event.reminder_minutes_before is None:
+        # Reminder was removed
+        _cancel_reminder_job(event)
+
     return jsonify(event.to_dict())
 
 
@@ -1263,11 +1443,17 @@ def api_notification_settings():
             prefs.digest_hour = hour
     except (TypeError, ValueError):
         pass
+    try:
+        snooze_mins = int(data.get('default_snooze_minutes', prefs.default_snooze_minutes))
+        if snooze_mins > 0:
+            prefs.default_snooze_minutes = snooze_mins
+    except (TypeError, ValueError):
+        pass
     db.session.commit()
     return jsonify(prefs.to_dict())
 
 
-def _send_push_to_user(user, title, body=None, link=None):
+def _send_push_to_user(user, title, body=None, link=None, event_id=None, actions=None):
     public_key = app.config.get('VAPID_PUBLIC_KEY')
     private_key = app.config.get('VAPID_PRIVATE_KEY')
     if not public_key or not private_key:
@@ -1276,11 +1462,18 @@ def _send_push_to_user(user, title, body=None, link=None):
     if not subs:
         return 0
     app.logger.info("Sending push to %s subs for user %s", len(subs), user.id)
-    payload = json.dumps({
+
+    payload_data = {
         'title': title,
         'body': body or '',
         'data': {'url': link or '/'}
-    })
+    }
+    if event_id:
+        payload_data['data']['event_id'] = event_id
+    if actions:
+        payload_data['actions'] = actions
+
+    payload = json.dumps(payload_data)
     sent = 0
     for sub in subs:
         try:
@@ -1376,6 +1569,90 @@ def api_push_test():
     body = 'This is a test push notification.'
     sent = _send_push_to_user(user, title, body, link='/')
     return jsonify({'sent': sent})
+
+
+@app.route('/api/calendar/events/<int:event_id>/snooze', methods=['POST'])
+def snooze_reminder(event_id):
+    """Snooze a calendar event reminder."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    event = CalendarEvent.query.filter_by(id=event_id, user_id=user.id).first_or_404()
+
+    # Get snooze duration from request or use user's default
+    data = request.json or {}
+    snooze_minutes = data.get('snooze_minutes')
+
+    if snooze_minutes is None:
+        # Use user's default snooze time
+        prefs = _get_or_create_notification_settings(user.id)
+        snooze_minutes = prefs.default_snooze_minutes
+
+    try:
+        snooze_minutes = int(snooze_minutes)
+        if snooze_minutes <= 0:
+            return jsonify({'error': 'Snooze minutes must be positive'}), 400
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid snooze duration'}), 400
+
+    # Calculate snooze time (in server's local timezone)
+    tz = pytz.timezone(app.config['DEFAULT_TIMEZONE'])
+    now = datetime.now(tz).replace(tzinfo=None)
+    snooze_until = now + timedelta(minutes=snooze_minutes)
+
+    # Update event
+    event.reminder_snoozed_until = snooze_until
+    event.reminder_sent = False
+    db.session.commit()
+
+    # Schedule reminder for snooze time
+    global scheduler
+    if scheduler:
+        job_id = f"reminder_{event.id}_{int(snooze_until.timestamp())}"
+        try:
+            scheduler.add_job(
+                _send_event_reminder,
+                'date',
+                run_date=pytz.timezone(app.config['DEFAULT_TIMEZONE']).localize(snooze_until),
+                args=[event_id],
+                id=job_id,
+                replace_existing=True
+            )
+            event.reminder_job_id = job_id
+            db.session.commit()
+            app.logger.info(f"Snoozed reminder for event {event_id} for {snooze_minutes} minutes")
+        except Exception as e:
+            app.logger.error(f"Error scheduling snoozed reminder: {e}")
+            return jsonify({'error': 'Failed to schedule snooze'}), 500
+
+    return jsonify({
+        'snoozed': True,
+        'snooze_until': snooze_until.isoformat(),
+        'snooze_minutes': snooze_minutes
+    })
+
+
+@app.route('/api/calendar/events/<int:event_id>/dismiss', methods=['POST'])
+def dismiss_reminder(event_id):
+    """Dismiss a calendar event reminder (mark as sent, no more notifications)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    event = CalendarEvent.query.filter_by(id=event_id, user_id=user.id).first_or_404()
+
+    # Mark as sent (dismissed)
+    event.reminder_sent = True
+    event.reminder_snoozed_until = None
+
+    # Cancel any scheduled jobs
+    _cancel_reminder_job(event)
+
+    db.session.commit()
+
+    return jsonify({'dismissed': True})
+
 
 @app.route('/api/lists/<int:list_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_list(list_id):

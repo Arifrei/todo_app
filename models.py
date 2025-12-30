@@ -212,6 +212,9 @@ class CalendarEvent(db.Model):
     group = db.relationship('CalendarEvent', remote_side=[id], backref='group_items', foreign_keys=[group_id])
     order_index = db.Column(db.Integer, default=0)
     reminder_minutes_before = db.Column(db.Integer, nullable=True)
+    reminder_job_id = db.Column(db.String(255), nullable=True)
+    reminder_sent = db.Column(db.Boolean, default=False)
+    reminder_snoozed_until = db.Column(db.DateTime, nullable=True)
     rollover_enabled = db.Column(db.Boolean, default=True)
     rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
@@ -281,6 +284,7 @@ class NotificationSetting(db.Model):
     reminders_enabled = db.Column(db.Boolean, default=True)
     digest_enabled = db.Column(db.Boolean, default=True)
     digest_hour = db.Column(db.Integer, default=7)  # local hour for daily digest
+    default_snooze_minutes = db.Column(db.Integer, default=10)  # default snooze duration
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -292,6 +296,7 @@ class NotificationSetting(db.Model):
             'reminders_enabled': self.reminders_enabled,
             'digest_enabled': self.digest_enabled,
             'digest_hour': self.digest_hour,
+            'default_snooze_minutes': self.default_snooze_minutes,
         }
 
 

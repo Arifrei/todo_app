@@ -117,6 +117,9 @@ def ensure_calendar_event(cur):
     add_column(cur, "calendar_event", "group_id", "INTEGER")
     add_column(cur, "calendar_event", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "calendar_event", "reminder_minutes_before", "INTEGER")
+    add_column(cur, "calendar_event", "reminder_job_id", "VARCHAR(255)")
+    add_column(cur, "calendar_event", "reminder_sent", "BOOLEAN DEFAULT 0")
+    add_column(cur, "calendar_event", "reminder_snoozed_until", "TIMESTAMP")
     add_column(cur, "calendar_event", "rollover_enabled", "BOOLEAN DEFAULT 1")
     add_column(cur, "calendar_event", "rolled_from_id", "INTEGER")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
@@ -177,6 +180,7 @@ def ensure_notifications(cur):
         add_column(cur, "notification_setting", "reminders_enabled", "BOOLEAN DEFAULT 1")
         add_column(cur, "notification_setting", "digest_enabled", "BOOLEAN DEFAULT 1")
         add_column(cur, "notification_setting", "digest_hour", "INTEGER DEFAULT 7")
+        add_column(cur, "notification_setting", "default_snooze_minutes", "INTEGER DEFAULT 10")
         add_column(cur, "notification_setting", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_column(cur, "notification_setting", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
