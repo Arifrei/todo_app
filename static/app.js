@@ -29,6 +29,7 @@ let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
 let currentTaskFilter = 'all';
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false };
+const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
@@ -1080,7 +1081,7 @@ function updateBulkBar() {
     const bar = document.getElementById('bulk-actions');
     const countSpan = document.getElementById('bulk-count');
     const selectAll = document.getElementById('select-all');
-    const totalCheckboxes = document.querySelectorAll('.select-item').length;
+    const totalItems = document.querySelectorAll('.task-item').length;
 
     if (selectedItems.size > 0) {
         if (bar) bar.style.display = 'flex';
@@ -1097,11 +1098,48 @@ function updateBulkBar() {
   }
 
     if (selectAll) {
-        selectAll.checked = totalCheckboxes > 0 && selectedItems.size === totalCheckboxes;
-        selectAll.indeterminate = selectedItems.size > 0 && selectedItems.size < totalCheckboxes;
+        selectAll.checked = totalItems > 0 && selectedItems.size === totalItems;
+        selectAll.indeterminate = selectedItems.size > 0 && selectedItems.size < totalItems;
     }
     // Prevent layout jump when bar appears
     window.scrollTo(0, scrollY);
+}
+
+function setTaskSelected(itemId, isSelected, skipPhaseCascade = false) {
+    const row = document.getElementById(`item-${itemId}`);
+    if (!row) return;
+    const isPhase = row.classList.contains('phase');
+    if (isPhase && !skipPhaseCascade) {
+        cascadePhaseSelection(row, isSelected);
+    }
+    row.classList.toggle('selected', isSelected);
+    if (isSelected) selectedItems.add(itemId);
+    else selectedItems.delete(itemId);
+}
+
+function resetTaskSelection() {
+    selectedItems.clear();
+    document.querySelectorAll('.task-item.selected').forEach(row => row.classList.remove('selected'));
+    const selectAll = document.getElementById('select-all');
+    if (selectAll) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    }
+    updateBulkBar();
+}
+
+function shouldIgnoreTaskSelection(target) {
+    return !!(
+        target.closest('.drag-handle') ||
+        target.closest('.task-actions-dropdown') ||
+        target.closest('.task-actions') ||
+        target.closest('.status-buttons') ||
+        target.closest('button') ||
+        target.closest('a') ||
+        target.closest('input') ||
+        target.closest('textarea') ||
+        target.closest('select')
+    );
 }
 
 function cascadePhaseSelection(phaseElement, isChecked) {
@@ -1113,15 +1151,8 @@ function cascadePhaseSelection(phaseElement, isChecked) {
     for (let i = startIdx + 1; i < items.length; i++) {
         const el = items[i];
         if (el.classList.contains('phase')) break;
-        const cb = el.querySelector('.select-item');
-        // This function is only for cascading changes, so we directly manipulate
-        // the checkbox state and the underlying selectedItems set.
-        if (cb) {
-            cb.checked = isChecked;
-            const id = parseInt(cb.getAttribute('data-item-id'), 10);
-            if (isChecked) selectedItems.add(id);
-            else selectedItems.delete(id);
-        }
+        const id = parseInt(el.getAttribute('data-item-id'), 10);
+        setTaskSelected(id, isChecked, true);
     }
 }
 
@@ -1134,23 +1165,18 @@ function toggleSelectItem(itemId, isChecked, skipPhaseCascade = false) {
         cascadePhaseSelection(row, isChecked);
     }
 
-    // Add or remove the main item (or phase item) itself
-    if (isChecked) {
-        selectedItems.add(itemId);
-    } else {
-        selectedItems.delete(itemId);
-    }
+    setTaskSelected(itemId, isChecked, true);
 
     updateBulkBar();
 }
 
 function toggleSelectAll(checkbox) {
+    const shouldSelect = checkbox.checked;
     selectedItems.clear();
-    const checkboxes = document.querySelectorAll('.select-item');
-    checkboxes.forEach(cb => {
-        cb.checked = checkbox.checked;
-        const id = parseInt(cb.getAttribute('data-item-id'), 10);
-        if (checkbox.checked) selectedItems.add(id); else selectedItems.delete(id);
+    const rows = document.querySelectorAll('.task-item');
+    rows.forEach(row => {
+        const id = parseInt(row.getAttribute('data-item-id'), 10);
+        setTaskSelected(id, shouldSelect, true);
     });
     updateBulkBar();
 }
@@ -1217,6 +1243,10 @@ function getDragAfterElement(container, y) {
 function handleDragStart(e) {
     const handle = e.target.closest('.drag-handle');
     if (!handle) return;
+    if (selectedItems.size > 0) {
+        e.preventDefault();
+        return;
+    }
     const itemId = handle.getAttribute('data-drag-id');
     currentDragId = itemId;
     const row = document.getElementById(`item-${itemId}`);
@@ -1305,6 +1335,8 @@ async function refreshListView() {
         const newContainer = doc.getElementById('items-container');
         document.getElementById('items-container').innerHTML = newContainer.innerHTML;
         normalizePhaseParents();
+        initTaskSelectionUI();
+        selectedItems.forEach(id => setTaskSelected(id, true, true));
         updateBulkBar();
         initDragAndDrop(); // Re-initialize drag and drop on new elements
         restorePhaseVisibility();
@@ -1338,21 +1370,16 @@ function handleTouchStart(e) {
         touchStartY = e.touches[0].clientY;
     }
     const item = e.currentTarget;
+    if (shouldIgnoreTaskSelection(e.target)) return;
     // Don't trigger long press if dragging
     if (e.target.closest('.drag-handle')) return;
 
     longPressTimer = setTimeout(() => {
         longPressTimer = null; // Prevent multiple triggers
         const itemId = parseInt(item.dataset.itemId, 10);
-        const checkbox = item.querySelector('.select-item');
-        
-        // Enter selection mode and select the item
-        document.body.classList.add('selection-mode-active');
-        if (checkbox && !checkbox.checked) {
-            checkbox.checked = true;
-            toggleSelectItem(itemId, true);
-            longPressTriggered = true;
-        }
+        setTaskSelected(itemId, true);
+        longPressTriggered = true;
+        updateBulkBar();
     }, 500); // 500ms for a long press
 }
 
@@ -1378,6 +1405,8 @@ function handleTouchEnd(e) {
         return;
     }
     if (longPressTriggered) {
+        const item = e.currentTarget;
+        if (item) item.dataset.skipClickAfterPress = 'true';
         longPressTriggered = false;
         return;
     }
@@ -1386,11 +1415,29 @@ function handleTouchEnd(e) {
         // Prevent click event from also firing and toggling again
         e.preventDefault();
         const item = e.currentTarget;
-        const checkbox = item.querySelector('.select-item');
-        if (checkbox) {
-            checkbox.click(); // Programmatically toggle the checkbox to trigger its onchange
+        const itemId = parseInt(item.dataset.itemId, 10);
+        if (!shouldIgnoreTaskSelection(e.target)) {
+            const next = !selectedItems.has(itemId);
+            setTaskSelected(itemId, next);
+            updateBulkBar();
         }
     }
+}
+
+function handleTaskClick(e) {
+    const row = e.currentTarget;
+    if (row.dataset.skipClickAfterPress === 'true') {
+        row.dataset.skipClickAfterPress = 'false';
+        return;
+    }
+    if (shouldIgnoreTaskSelection(e.target)) return;
+    const meta = e.metaKey || e.ctrlKey;
+    if (!meta && selectedItems.size === 0) return;
+    e.preventDefault();
+    const itemId = parseInt(row.dataset.itemId, 10);
+    const next = !selectedItems.has(itemId);
+    setTaskSelected(itemId, next);
+    updateBulkBar();
 }
 
 // Touch drag for mobile (reorder)
@@ -1398,6 +1445,10 @@ function touchHandleDragStart(e) {
     const handle = e.currentTarget;
     const itemId = handle.getAttribute('data-drag-id');
     if (!itemId) return;
+    if (selectedItems.size > 0) {
+        e.preventDefault();
+        return;
+    }
     touchDragActive = true;
     touchDragId = itemId;
     touchDragBlock = [];
@@ -2089,6 +2140,7 @@ function returnToMonthView() {
     // Reset calendar state
     calendarState.dayViewOpen = false;
     calendarState.detailsOpen = false;
+    resetCalendarSelection();
     setDayControlsEnabled(false);
 
     // Re-render month view
@@ -2171,9 +2223,28 @@ function openCalendarPrompt({ title = 'Input', message = '', defaultValue = '', 
     };
 }
 
+function openReminderEditor(ev) {
+    openCalendarPrompt({
+        title: 'Reminder',
+        message: 'Minutes before start (leave blank to remove)',
+        type: 'number',
+        defaultValue: ev.reminder_minutes_before ?? '',
+        onSubmit: async (val) => {
+            if (val === '' || val === null || val === undefined) {
+                await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
+                return;
+            }
+            const minutes = parseInt(val, 10);
+            if (Number.isNaN(minutes) || minutes < 0) return;
+            await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
+        }
+    });
+}
+
 async function setCalendarDay(dayStr, options = {}) {
     const { skipLoad = false, skipLabel = false } = options;
     calendarState.selectedDay = dayStr;
+    resetCalendarSelection();
     const label = document.getElementById('calendar-day-label');
     const picker = document.getElementById('calendar-date-picker');
     if (!skipLabel) {
@@ -2390,14 +2461,17 @@ function renderCalendarEvents() {
     container.innerHTML = '';
     if (!calendarState.selectedDay) {
         container.innerHTML = `<div class="calendar-empty">Pick a day from the calendar to view its schedule.</div>`;
+        resetCalendarSelection();
         return;
     }
     if (!calendarState.detailsOpen) {
         container.innerHTML = `<div class="calendar-empty">Double-click a day to open its full schedule. You can still add quick events once a day is selected.</div>`;
+        resetCalendarSelection();
         return;
     }
     if (!calendarState.events || calendarState.events.length === 0) {
         container.innerHTML = `<div class="calendar-empty">Nothing planned for this day. Use the quick add box to start.</div>`;
+        resetCalendarSelection();
         return;
     }
     const sorted = [...calendarState.events].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
@@ -2491,6 +2565,7 @@ function renderCalendarEvents() {
             actions.append(reminderBtn, rolloverBtn, openBtn, unpinBtn);
 
             row.append(left, titleWrap, actions);
+            attachCalendarRowSelection(row, ev);
             return row;
         }
 
@@ -2537,6 +2612,7 @@ function renderCalendarEvents() {
             moveDown.onclick = () => nudgeCalendarEvent(ev.id, 1);
             actions.append(moveUp, moveDown, deleteBtn);
             row.append(left, titleWrap, actions);
+            attachCalendarRowSelection(row, ev);
             return row;
         }
 
@@ -2634,25 +2710,11 @@ function renderCalendarEvents() {
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
         const reminderMenuItem = document.createElement('button');
         reminderMenuItem.className = 'calendar-item-menu-option';
-        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
-        reminderMenuItem.onclick = async (e) => {
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.onclick = (e) => {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
-            if (reminderActive) {
-                await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
-                return;
-            }
-            openCalendarPrompt({
-                title: 'Set Reminder',
-                message: 'Minutes before start',
-                type: 'number',
-                defaultValue: ev.reminder_minutes_before ?? 10,
-                onSubmit: async (val) => {
-                    const minutes = parseInt(val, 10);
-                    if (Number.isNaN(minutes) || minutes < 0) return;
-                    await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
-                }
-            });
+            openReminderEditor(ev);
         };
 
         const noteMenuItem = document.createElement('button');
@@ -2666,7 +2728,7 @@ function renderCalendarEvents() {
 
         const rolloverMenuItem = document.createElement('button');
         rolloverMenuItem.className = 'calendar-item-menu-option';
-        rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+        rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
         rolloverMenuItem.onclick = async (e) => {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
@@ -2760,6 +2822,7 @@ function renderCalendarEvents() {
 
         actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
+        attachCalendarRowSelection(row, ev);
         return row;
     };
 
@@ -2836,25 +2899,24 @@ function renderCalendarEvents() {
 
         const reminderBtn = document.createElement('button');
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
-        reminderBtn.className = `calendar-icon-btn ${reminderActive ? 'active' : ''}`;
+        reminderBtn.className = `calendar-icon-btn reminder-btn ${reminderActive ? 'active' : ''}`;
         reminderBtn.title = reminderActive ? `Reminder: ${ev.reminder_minutes_before}m` : 'Set reminder';
-        reminderBtn.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'}"></i>`;
-        reminderBtn.onclick = async () => {
-            if (reminderActive) {
+        const reminderIcon = document.createElement('span');
+        reminderIcon.className = 'reminder-toggle';
+        reminderIcon.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'}"></i>`;
+        reminderBtn.appendChild(reminderIcon);
+        if (reminderActive) {
+            const label = document.createElement('span');
+            label.className = 'reminder-time-label';
+            label.textContent = `${ev.reminder_minutes_before}m`;
+            reminderBtn.appendChild(label);
+        }
+        reminderBtn.onclick = async (e) => {
+            if (reminderActive && e.target.closest('.reminder-toggle')) {
                 await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
                 return;
             }
-            openCalendarPrompt({
-                title: 'Set Reminder',
-                message: 'Minutes before start',
-                type: 'number',
-                defaultValue: ev.reminder_minutes_before ?? 10,
-                onSubmit: async (val) => {
-                    const minutes = parseInt(val, 10);
-                    if (Number.isNaN(minutes) || minutes < 0) return;
-                    await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
-                }
-            });
+            openReminderEditor(ev);
         };
 
         const noteBtn = document.createElement('button');
@@ -2889,6 +2951,7 @@ function renderCalendarEvents() {
 
         actions.append(priorityDot, reminderBtn, noteBtn, rolloverBtn, deleteBtn);
         row.append(left, titleWrap, actions);
+        attachCalendarRowSelection(row, ev);
         return row;
     };
 
@@ -3017,6 +3080,264 @@ function renderCalendarEvents() {
     }
 
     enableCalendarDragAndDrop(container);
+
+    updateCalendarBulkBar();
+}
+
+function calendarSelectionKey(id) {
+    return String(id);
+}
+
+function resetCalendarSelection() {
+    calendarSelection.ids.clear();
+    calendarSelection.active = false;
+    document.querySelectorAll('.calendar-row.selected').forEach(row => row.classList.remove('selected'));
+    const selectAll = document.getElementById('calendar-select-all');
+    if (selectAll) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    }
+    updateCalendarBulkBar();
+}
+
+function setCalendarRowSelected(id, isSelected) {
+    const row = document.querySelector(`.calendar-row[data-id="${id}"]`);
+    if (row) row.classList.toggle('selected', isSelected);
+}
+
+function startCalendarSelection(id) {
+    if (id === null || id === undefined) return;
+    calendarSelection.active = true;
+    const key = calendarSelectionKey(id);
+    calendarSelection.ids.add(key);
+    setCalendarRowSelected(key, true);
+    updateCalendarBulkBar();
+}
+
+function toggleCalendarSelection(id) {
+    if (id === null || id === undefined) return;
+    const key = calendarSelectionKey(id);
+    if (!calendarSelection.active) {
+        calendarSelection.active = true;
+    }
+    if (calendarSelection.ids.has(key)) {
+        calendarSelection.ids.delete(key);
+        setCalendarRowSelected(key, false);
+    } else {
+        calendarSelection.ids.add(key);
+        setCalendarRowSelected(key, true);
+    }
+    if (calendarSelection.ids.size === 0) {
+        calendarSelection.active = false;
+    }
+    updateCalendarBulkBar();
+}
+
+function calendarSelectAll(checked) {
+    const rows = document.querySelectorAll('.calendar-row.selectable');
+    calendarSelection.active = checked;
+    calendarSelection.ids.clear();
+    rows.forEach(row => {
+        const id = row.dataset.id;
+        if (!id) return;
+        setCalendarRowSelected(id, checked);
+        if (checked) calendarSelection.ids.add(calendarSelectionKey(id));
+    });
+    updateCalendarBulkBar();
+}
+
+function getSelectedCalendarEvents(includeTaskLinks = true) {
+    const selectedKeys = calendarSelection.ids;
+    if (!selectedKeys.size) return [];
+    return (calendarState.events || []).filter(ev =>
+        selectedKeys.has(calendarSelectionKey(ev.id)) &&
+        (includeTaskLinks || !ev.is_task_link)
+    );
+}
+
+function shouldIgnoreCalendarSelection(target) {
+    if (!target) return false;
+    return !!target.closest('input, textarea, select, button, a, .calendar-item-dropdown, .priority-menu');
+}
+
+function handleCalendarRowClick(e, ev) {
+    if (ev.is_phase || ev.is_group) return;
+    if (shouldIgnoreCalendarSelection(e.target)) return;
+    const metaPressed = e.metaKey || e.ctrlKey;
+    if (!calendarSelection.active && !metaPressed) return;
+    e.preventDefault();
+    toggleCalendarSelection(ev.id);
+}
+
+function handleCalendarTouchStart(e, ev) {
+    if (ev.is_phase || ev.is_group) return;
+    if (shouldIgnoreCalendarSelection(e.target)) return;
+    calendarSelection.longPressTriggered = false;
+    if (calendarSelection.longPressTimer) {
+        clearTimeout(calendarSelection.longPressTimer);
+    }
+    if (e.touches && e.touches.length) {
+        calendarSelection.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    calendarSelection.longPressTimer = setTimeout(() => {
+        calendarSelection.longPressTimer = null;
+        calendarSelection.longPressTriggered = true;
+        startCalendarSelection(ev.id);
+    }, 450);
+}
+
+function handleCalendarTouchMove(e) {
+    if (!calendarSelection.longPressTimer || !e.touches || !e.touches.length) return;
+    const dx = Math.abs(e.touches[0].clientX - calendarSelection.touchStart.x);
+    const dy = Math.abs(e.touches[0].clientY - calendarSelection.touchStart.y);
+    if (dx > 8 || dy > 8) {
+        clearTimeout(calendarSelection.longPressTimer);
+        calendarSelection.longPressTimer = null;
+    }
+}
+
+function handleCalendarTouchEnd(e, ev) {
+    if (calendarSelection.longPressTimer) {
+        clearTimeout(calendarSelection.longPressTimer);
+        calendarSelection.longPressTimer = null;
+    }
+    if (calendarSelection.longPressTriggered) {
+        e.preventDefault();
+        calendarSelection.longPressTriggered = false;
+        return;
+    }
+    if (calendarSelection.active && !shouldIgnoreCalendarSelection(e.target)) {
+        e.preventDefault();
+        toggleCalendarSelection(ev.id);
+    }
+}
+
+function attachCalendarRowSelection(row, ev) {
+    if (!row || ev.is_phase || ev.is_group) return;
+    row.classList.add('selectable');
+    if (calendarSelection.ids.has(calendarSelectionKey(ev.id))) {
+        row.classList.add('selected');
+    }
+    const indicator = document.createElement('div');
+    indicator.className = 'calendar-select-indicator';
+    indicator.innerHTML = '<i class="fa-solid fa-check"></i>';
+    row.appendChild(indicator);
+
+    row.addEventListener('click', (e) => handleCalendarRowClick(e, ev));
+    row.addEventListener('touchstart', (e) => handleCalendarTouchStart(e, ev), { passive: true });
+    row.addEventListener('touchmove', handleCalendarTouchMove, { passive: true });
+    row.addEventListener('touchend', (e) => handleCalendarTouchEnd(e, ev));
+}
+
+function updateCalendarBulkBar() {
+    const bar = document.getElementById('calendar-bulk-bar');
+    const count = document.getElementById('calendar-bulk-count');
+    const selectAll = document.getElementById('calendar-select-all');
+    const hasSelection = calendarSelection.ids.size > 0;
+    if (bar) {
+        bar.classList.toggle('active', hasSelection);
+        bar.classList.toggle('is-hidden', !hasSelection);
+    }
+    if (count) {
+        count.textContent = hasSelection ? `${calendarSelection.ids.size} selected` : '0 selected';
+    }
+    if (selectAll) {
+        const selectableRows = document.querySelectorAll('.calendar-row.selectable');
+        const total = selectableRows.length;
+        selectAll.checked = hasSelection && total > 0 && calendarSelection.ids.size >= total;
+        selectAll.indeterminate = hasSelection && total > 0 && calendarSelection.ids.size > 0 && calendarSelection.ids.size < total;
+    }
+    document.body.classList.toggle('calendar-selection-active', hasSelection);
+}
+
+async function finalizeCalendarBulkUpdate({ reloadDay = true } = {}) {
+    if (reloadDay && calendarState.selectedDay) {
+        await loadCalendarDay(calendarState.selectedDay);
+    } else {
+        renderCalendarEvents();
+    }
+    if (calendarState.monthCursor) {
+        await loadCalendarMonth();
+    }
+    resetCalendarSelection();
+}
+
+async function bulkCalendarUpdateStatus(status) {
+    const targets = getSelectedCalendarEvents(true).filter(ev => !ev.is_phase && !ev.is_group);
+    if (!targets.length) return;
+    const normalEvents = targets.filter(ev => !ev.is_task_link);
+    const linkedTasks = targets.filter(ev => ev.is_task_link && ev.task_id);
+    await Promise.all(normalEvents.map(ev => updateCalendarEvent(ev.id, { status }, { skipReload: true, skipMonth: true })));
+    await Promise.all(linkedTasks.map(ev => updateLinkedTaskStatus(ev.task_id, status)));
+    await finalizeCalendarBulkUpdate();
+}
+
+async function bulkCalendarToggleRollover() {
+    const targets = getSelectedCalendarEvents(false).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+    if (!targets.length) return;
+    await Promise.all(targets.map(ev => {
+        const current = ev.rollover_enabled !== false;
+        return updateCalendarEvent(ev.id, { rollover_enabled: !current }, { skipReload: true, skipMonth: true });
+    }));
+    await finalizeCalendarBulkUpdate();
+}
+
+async function bulkCalendarChangePriority(priority) {
+    if (!['low', 'medium', 'high'].includes(priority)) return;
+    const targets = getSelectedCalendarEvents(false).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+    if (!targets.length) return;
+    await Promise.all(targets.map(ev => updateCalendarEvent(ev.id, { priority }, { skipReload: true, skipMonth: true })));
+    await finalizeCalendarBulkUpdate();
+}
+
+async function bulkCalendarDelete() {
+    const targets = getSelectedCalendarEvents(false).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+    if (!targets.length) return;
+    if (!confirm(`Delete ${targets.length} selected item(s)?`)) return;
+    try {
+        await Promise.all(targets.map(ev => fetch(`/api/calendar/events/${ev.id}`, { method: 'DELETE' })));
+        calendarState.events = calendarState.events.filter(ev => !calendarSelection.ids.has(calendarSelectionKey(ev.id)));
+    } catch (err) {
+        console.error('Bulk delete failed', err);
+    }
+    await finalizeCalendarBulkUpdate({ reloadDay: true });
+}
+
+async function bulkCalendarMove(dayStr) {
+    if (!dayStr) return;
+    const targets = getSelectedCalendarEvents(false).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+    if (!targets.length) return;
+    await Promise.all(targets.map(ev => updateCalendarEvent(ev.id, { day: dayStr }, { skipReload: true })));
+    await finalizeCalendarBulkUpdate();
+}
+
+function startBulkCalendarMovePrompt() {
+    openCalendarPrompt({
+        title: 'Move to day',
+        message: 'Choose a date',
+        type: 'date',
+        defaultValue: calendarState.selectedDay || '',
+        onSubmit: (val) => bulkCalendarMove(val)
+    });
+}
+
+function startBulkCalendarPriorityPicker(anchor) {
+    const button = anchor || document.getElementById('calendar-bulk-priority');
+    if (!button) return;
+    const hasSelection = calendarSelection.ids.size > 0;
+    if (!hasSelection) return;
+    openBulkPriorityDropdown(button, (val) => bulkCalendarChangePriority(val));
+}
+
+function startBulkCalendarNoteLink() {
+    const targets = getSelectedCalendarEvents(true).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+    if (!targets.length) return;
+    if (targets.length > 1) {
+        alert('Link note works one item at a time because notes attach to a single calendar entry. Select one item to continue.');
+        return;
+    }
+    const ev = targets[0];
+    linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
 }
 
 function enableCalendarDragAndDrop(container) {
@@ -3029,6 +3350,10 @@ function enableCalendarDragAndDrop(container) {
     rows.forEach(row => {
         row.draggable = true;
         row.addEventListener('dragstart', (e) => {
+            if (calendarSelection.ids.size) {
+                e.preventDefault();
+                return;
+            }
             dragSrc = row;
             row.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
@@ -3492,6 +3817,42 @@ document.addEventListener('click', (e) => {
     }
 });
 
+let bulkPriorityDropdown = null;
+function closeBulkPriorityDropdown() {
+    if (bulkPriorityDropdown) bulkPriorityDropdown.classList.add('is-hidden');
+}
+
+function openBulkPriorityDropdown(anchor, onSelect) {
+    if (!bulkPriorityDropdown) {
+        bulkPriorityDropdown = document.createElement('div');
+        bulkPriorityDropdown.className = 'priority-menu priority-menu-bulk is-hidden';
+        document.body.appendChild(bulkPriorityDropdown);
+    }
+    bulkPriorityDropdown.innerHTML = '';
+    ['low', 'medium', 'high'].forEach(val => {
+        const btn = document.createElement('button');
+        btn.className = 'priority-menu-item';
+        btn.textContent = `Set to ${val.charAt(0).toUpperCase() + val.slice(1)}`;
+        btn.onclick = async () => {
+            await onSelect(val);
+            closeBulkPriorityDropdown();
+        };
+        bulkPriorityDropdown.appendChild(btn);
+    });
+    const rect = anchor.getBoundingClientRect();
+    bulkPriorityDropdown.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    bulkPriorityDropdown.style.left = `${rect.left + window.scrollX}px`;
+    bulkPriorityDropdown.classList.remove('is-hidden');
+}
+
+document.addEventListener('click', (e) => {
+    if (bulkPriorityDropdown && !bulkPriorityDropdown.classList.contains('is-hidden')) {
+        if (!e.target.closest('.priority-menu-bulk') && !e.target.closest('#calendar-bulk-priority')) {
+            closeBulkPriorityDropdown();
+        }
+    }
+});
+
 async function getOrCreatePhase(phaseName) {
     const existing = calendarState.events.find(e => e.is_phase && e.title.toLowerCase() === phaseName.toLowerCase());
     if (existing) {
@@ -3895,7 +4256,8 @@ async function createCalendarEvent(payload) {
     }
 }
 
-async function updateCalendarEvent(id, payload) {
+async function updateCalendarEvent(id, payload, options = {}) {
+    const { skipReload = false, skipMonth = false } = options;
     try {
         const res = await fetch(`/api/calendar/events/${id}`, {
             method: 'PUT',
@@ -3921,12 +4283,14 @@ async function updateCalendarEvent(id, payload) {
             calendarState.monthEventsByDay[dayKey] = calendarState.monthEventsByDay[dayKey].map(ev => ev.id === id ? { ...ev, ...updated } : ev);
         }
 
-        if (calendarState.detailsOpen && calendarState.selectedDay) {
-            await loadCalendarDay(calendarState.selectedDay);
-        } else if (updated) {
-            renderCalendarEvents();
+        if (!skipReload) {
+            if (calendarState.detailsOpen && calendarState.selectedDay) {
+                await loadCalendarDay(calendarState.selectedDay);
+            } else if (updated) {
+                renderCalendarEvents();
+            }
         }
-        if (calendarState.monthCursor) {
+        if (calendarState.monthCursor && !skipMonth) {
             renderCalendarMonth();
         }
     } catch (err) {
@@ -4320,6 +4684,15 @@ function initCalendarPage() {
     const backBtn = document.getElementById('calendar-back-month');
     const menuBtn = document.getElementById('calendar-menu-btn');
     const dropdownMenu = document.getElementById('calendar-dropdown-menu');
+    const bulkClearBtn = document.getElementById('calendar-bulk-clear');
+    const bulkDoneBtn = document.getElementById('calendar-bulk-done');
+    const bulkUndoneBtn = document.getElementById('calendar-bulk-undone');
+    const bulkRolloverBtn = document.getElementById('calendar-bulk-rollover');
+    const bulkPriorityBtn = document.getElementById('calendar-bulk-priority');
+    const bulkMoveBtn = document.getElementById('calendar-bulk-move');
+    const bulkNoteBtn = document.getElementById('calendar-bulk-note');
+    const bulkDeleteBtn = document.getElementById('calendar-bulk-delete');
+    const selectAllCheckbox = document.getElementById('calendar-select-all');
 
     // Dropdown menu toggle
     if (menuBtn && dropdownMenu) {
@@ -4350,6 +4723,12 @@ function initCalendarPage() {
         }, true);
 
     }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && calendarSelection.active) {
+            resetCalendarSelection();
+        }
+    });
 
     if (prevMonthBtn) prevMonthBtn.onclick = () => {
         const current = calendarState.monthCursor || new Date();
@@ -4462,6 +4841,15 @@ function initCalendarPage() {
             if (e.target === timeModal) closeCalendarTimeModal();
         });
     }
+    if (bulkClearBtn) bulkClearBtn.onclick = resetCalendarSelection;
+    if (bulkDoneBtn) bulkDoneBtn.onclick = () => bulkCalendarUpdateStatus('done');
+    if (bulkUndoneBtn) bulkUndoneBtn.onclick = () => bulkCalendarUpdateStatus('not_started');
+    if (bulkRolloverBtn) bulkRolloverBtn.onclick = bulkCalendarToggleRollover;
+    if (bulkPriorityBtn) bulkPriorityBtn.onclick = (e) => startBulkCalendarPriorityPicker(e.currentTarget);
+    if (bulkMoveBtn) bulkMoveBtn.onclick = startBulkCalendarMovePrompt;
+    if (bulkNoteBtn) bulkNoteBtn.onclick = startBulkCalendarNoteLink;
+    if (bulkDeleteBtn) bulkDeleteBtn.onclick = bulkCalendarDelete;
+    if (selectAllCheckbox) selectAllCheckbox.onchange = (e) => calendarSelectAll(e.target.checked);
 
     // Quick-add panel event handlers
     const quickAddPanel = document.getElementById('calendar-quick-add-panel');
@@ -4564,15 +4952,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initCalendarPage();
     autoEnableCalendarNotificationsIfGranted();
 
-    // Add long-press listeners for mobile selection
-    document.querySelectorAll('.task-item').forEach(item => {
-        item.addEventListener('touchstart', handleTouchStart, { passive: false });
-        item.addEventListener('touchend', handleTouchEnd, { passive: false });
-        item.addEventListener('touchmove', handleTouchMove, { passive: false });
-        item.addEventListener('mousedown', handleMouseHoldStart);
-        item.addEventListener('mouseup', handleMouseHoldEnd);
-        item.addEventListener('mouseleave', handleMouseHoldEnd);
-    });
+    initTaskSelectionUI();
 
     initAIPanel();
 });
@@ -4644,23 +5024,35 @@ function handleMouseHoldStart(e) {
     // Only trigger on left click
     if (e.button !== 0) return;
     const item = e.currentTarget;
+    if (shouldIgnoreTaskSelection(e.target)) return;
     if (e.target.closest('.drag-handle') || e.target.closest('.task-actions-dropdown')) return;
     mouseHoldTimer = setTimeout(() => {
         mouseHoldTimer = null;
         const itemId = parseInt(item.dataset.itemId, 10);
-        const checkbox = item.querySelector('.select-item');
-        document.body.classList.add('selection-mode-active');
-        if (checkbox && !checkbox.checked) {
-            checkbox.checked = true;
-            toggleSelectItem(itemId, true);
-            checkbox.classList.add('force-visible');
-        }
+        setTaskSelected(itemId, true);
+        updateBulkBar();
     }, 500);
 }
 
 function handleMouseHoldEnd() {
     clearTimeout(mouseHoldTimer);
     mouseHoldTimer = null;
+}
+
+function initTaskSelectionUI() {
+    const rows = document.querySelectorAll('.task-item');
+    rows.forEach(row => {
+        if (row.dataset.selectionBound === 'true') return;
+        row.dataset.selectionBound = 'true';
+        row.classList.add('selectable');
+        row.addEventListener('touchstart', handleTouchStart, { passive: false });
+        row.addEventListener('touchend', handleTouchEnd, { passive: false });
+        row.addEventListener('touchmove', handleTouchMove, { passive: false });
+        row.addEventListener('mousedown', handleMouseHoldStart);
+        row.addEventListener('mouseup', handleMouseHoldEnd);
+        row.addEventListener('mouseleave', handleMouseHoldEnd);
+        row.addEventListener('click', handleTaskClick);
+    });
 }
 
 // --- AI Assistant ---

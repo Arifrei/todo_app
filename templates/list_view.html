@@ -116,6 +116,7 @@
         <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
         <label for="select-all" style="cursor: pointer;">Select all</label>
         <span id="bulk-count" style="color: var(--text-muted); margin-left: 0.5rem;"></span>
+        <button class="btn btn-secondary btn-small" type="button" onclick="resetTaskSelection()" style="margin-left: 0.5rem;">Clear</button>
     </div>
     <div class="bulk-buttons">
         <button class="btn-status status-pending" onclick="bulkUpdateStatus('not_started')">Not Started</button>
@@ -135,7 +136,6 @@
     {% set parent_phase_id = item.phase_id if item.phase_id else current_phase_id if not item.is_phase else '' %}
     <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if item.is_phase else '' }}" data-phase-parent="{{ parent_phase_id }}">
         <div class="task-content">
-            <input type="checkbox" class="select-item" data-item-id="{{ item.id }}" data-status="{{ item.status }}" onchange="toggleSelectItem({{ item.id }}, this.checked)">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
             </div>
@@ -190,6 +190,7 @@
                 {% endif %}
             </div>
         </div>
+        <div class="task-select-indicator"><i class="fa-solid fa-check"></i></div>
 
         <div class="task-footer">
             <div class="task-actions">

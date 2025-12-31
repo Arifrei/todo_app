@@ -93,6 +93,39 @@
         </section>
 
         <section class="calendar-board card">
+            <div id="calendar-bulk-bar" class="calendar-bulk-bar is-hidden">
+                <div class="calendar-bulk-meta">
+                    <label style="display:flex; align-items:center; gap:0.35rem; cursor:pointer;">
+                        <input type="checkbox" id="calendar-select-all" style="width:18px; height:18px;">
+                        <span style="font-weight:600;">Select all</span>
+                    </label>
+                    <span id="calendar-bulk-count">0 selected</span>
+                    <button class="calendar-bulk-clear" id="calendar-bulk-clear" type="button">Clear</button>
+                </div>
+                <div class="calendar-bulk-actions-row">
+                    <button class="btn btn-secondary btn-small" id="calendar-bulk-done" type="button">
+                        <i class="fa-solid fa-square-check"></i><span class="btn-text">Mark done</span>
+                    </button>
+                    <button class="btn btn-secondary btn-small" id="calendar-bulk-undone" type="button">
+                        <i class="fa-regular fa-square"></i><span class="btn-text">Mark undone</span>
+                    </button>
+                    <button class="btn btn-secondary btn-small" id="calendar-bulk-rollover" type="button">
+                        <i class="fa-solid fa-rotate"></i><span class="btn-text">Toggle rollover</span>
+                    </button>
+                    <button class="btn btn-secondary btn-small" id="calendar-bulk-priority" type="button">
+                        <i class="fa-solid fa-arrow-up-wide-short"></i><span class="btn-text">Priority</span>
+                    </button>
+                    <button class="btn btn-secondary btn-small" id="calendar-bulk-move" type="button">
+                        <i class="fa-solid fa-calendar-day"></i><span class="btn-text">Move day</span>
+                    </button>
+                    <button class="btn btn-secondary btn-small" id="calendar-bulk-note" type="button">
+                        <i class="fa-solid fa-note-sticky"></i><span class="btn-text">Link note</span>
+                    </button>
+                    <button class="btn btn-danger btn-small" id="calendar-bulk-delete" type="button">
+                        <i class="fa-solid fa-trash"></i><span class="btn-text">Delete</span>
+                    </button>
+                </div>
+            </div>
             <div id="calendar-events" class="calendar-events"></div>
         </section>
     </section>

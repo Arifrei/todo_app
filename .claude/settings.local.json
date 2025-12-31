@@ -13,7 +13,9 @@
       "Bash(npx cap:*)",
       "Bash(copy \"C:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\static\\\\favicon.png\" \"C:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\app\\\\src\\\\main\\\\res\\\\mipmap-mdpi\\\\ic_launcher_round.png\")",
       "Bash(copy \"C:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\static\\\\favicon.png\" \"C:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\app\\\\src\\\\main\\\\res\\\\mipmap-mdpi\\\\ic_launcher_foreground.png\")",
-      "Bash(copy:*)"
+      "Bash(copy:*)",
+      "Bash(awk:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
