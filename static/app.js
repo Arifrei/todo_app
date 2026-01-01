@@ -5128,6 +5128,15 @@ let aiRecorderChunks = [];
 let aiRecorderActive = false;
 let aiRecorderContext = 'panel';
 let aiRecorderBaseText = '';
+let aiRecorderTranscript = '';
+const USE_SERVER_STT_ALWAYS = true; // Force server STT to avoid native auto-stopping
+const SERVER_STT_CHUNK_MS = 10000; // send chunks every 10s
+
+function isSecureVoiceContext() {
+    // getUserMedia typically requires HTTPS or localhost
+    return window.isSecureContext || ['https:', 'file:'].includes(location.protocol) ||
+        location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+}
 
 function loadAIMessagesFromStorage() {
     try {
@@ -5174,7 +5183,7 @@ function ensureRecognition() {
         if (!input) return;
         let finalText = '';
         let interimText = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let i = 0; i < event.results.length; i++) {
             const res = event.results[i];
             if (res.isFinal) finalText += res[0].transcript;
             else interimText += res[0].transcript;
@@ -5211,7 +5220,7 @@ function ensureRecognition() {
 function toggleAIVoice(context = 'panel') {
     aiVoiceContext = context || 'panel';
     const recognition = ensureRecognition();
-    const hasNative = !!recognition;
+    const hasNative = !USE_SERVER_STT_ALWAYS && !!recognition;
     const hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 
     // If native speech is available, prefer it
@@ -5256,24 +5265,70 @@ function startServerVoice(context = 'panel') {
     const input = getAIInputByContext(aiRecorderContext);
     if (!input) return;
     aiRecorderBaseText = input.value ? input.value.trim() : '';
+    aiRecorderTranscript = aiRecorderBaseText;
+
+    if (!isSecureVoiceContext()) {
+        alert('Microphone access is blocked because this page is not served over HTTPS/localhost. Use HTTPS or the installed app.');
+        return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Microphone is not available in this environment.');
+        return;
+    }
 
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
         aiRecorderStream = stream;
         aiRecorderChunks = [];
-        aiRecorder = new MediaRecorder(stream);
+
+        // Configure MediaRecorder with options for better compatibility
+        let options = { mimeType: 'audio/webm' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = { mimeType: 'audio/ogg' };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                options = {};
+            }
+        }
+
+        aiRecorder = new MediaRecorder(stream, options);
+        console.log('MediaRecorder started with mimeType:', aiRecorder.mimeType);
+
         aiRecorder.ondataavailable = (e) => {
+            console.log('Data available event fired, size:', e.data.size);
             if (e.data && e.data.size > 0) {
+                // Accumulate chunks instead of transcribing immediately
                 aiRecorderChunks.push(e.data);
+                console.log('Chunk accumulated. Total chunks:', aiRecorderChunks.length);
+            } else {
+                console.warn('Empty chunk received');
             }
         };
+
+        aiRecorder.onstart = () => {
+            console.log('MediaRecorder started successfully');
+        };
+
+        aiRecorder.onerror = (e) => {
+            console.error('MediaRecorder error:', e);
+        };
+
         aiRecorder.onstop = () => {
+            console.log('MediaRecorder stopped');
             aiRecorderActive = false;
             setAIMicButtonState(false, aiRecorderContext);
-            const blob = new Blob(aiRecorderChunks, { type: 'audio/webm' });
+
+            // Transcribe all accumulated chunks as one complete audio
+            if (aiRecorderChunks.length > 0) {
+                console.log('Transcribing', aiRecorderChunks.length, 'accumulated chunks');
+                const completeBlob = new Blob(aiRecorderChunks, { type: aiRecorder.mimeType });
+                transcribeServerAudioChunk(completeBlob, aiRecorderContext);
+            }
+
             stopServerVoiceStream();
-            transcribeServerAudio(blob, aiRecorderContext, aiRecorderBaseText);
         };
-        aiRecorder.start();
+
+        // Start with timeslice to ensure continuous chunk generation regardless of pauses
+        aiRecorder.start(SERVER_STT_CHUNK_MS);
         aiRecorderActive = true;
         setAIMicButtonState(true, aiRecorderContext);
     }).catch(err => {
@@ -5288,12 +5343,14 @@ function stopServerVoiceStream() {
         aiRecorderStream = null;
     }
     aiRecorder = null;
+    // Clear chunks after transcription is done
     aiRecorderChunks = [];
 }
 
 function stopServerVoice() {
     if (aiRecorder) {
         try { aiRecorder.stop(); } catch (e) { /* ignore */ }
+        // Don't clear chunks here - let onstop handler use them first
     } else {
         stopServerVoiceStream();
         aiRecorderActive = false;
@@ -5301,32 +5358,46 @@ function stopServerVoice() {
     }
 }
 
-async function transcribeServerAudio(blob, context, baseText = '') {
-    const input = getAIInputByContext(context);
-    if (!input) return;
+async function transcribeServerAudioChunk(blob, context) {
     const formData = new FormData();
     formData.append('audio', blob, 'audio.webm');
-    setAIMicButtonState(true, context);
+    console.log('Sending STT chunk - bytes:', blob.size, 'type:', blob.type);
     try {
         const res = await fetch('/api/ai/stt', {
             method: 'POST',
             body: formData
         });
+        console.log('STT response status:', res.status);
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            alert(err.error || 'Speech-to-text failed');
+            console.error('STT failed with status', res.status, ':', err);
         } else {
             const data = await res.json();
             const transcript = data.text || '';
-            const existing = baseText || input.value || '';
-            input.value = `${existing} ${transcript}`.trim();
+            console.log('STT chunk transcript:', transcript.length, 'chars - "' + transcript + '"');
+            appendTranscript(context, transcript);
         }
     } catch (e) {
         console.error('Transcription error:', e);
-        alert('Speech-to-text service unavailable.');
-    } finally {
-        setAIMicButtonState(false, context);
     }
+}
+
+function appendTranscript(context, text) {
+    console.log('appendTranscript called with text:', text);
+    if (!text) {
+        console.warn('appendTranscript: no text provided');
+        return;
+    }
+    const input = getAIInputByContext(context);
+    if (!input) {
+        console.error('appendTranscript: no input found for context', context);
+        return;
+    }
+    const current = aiRecorderTranscript || input.value || '';
+    const appended = `${current} ${text}`.replace(/\s+/g, ' ').trim();
+    console.log('Appending transcript - before:', current.length, 'chars, after:', appended.length, 'chars');
+    aiRecorderTranscript = appended;
+    input.value = appended;
 }
 
 function toggleAIPanel() {

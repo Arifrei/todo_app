@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import logging
 import pytz
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
@@ -30,6 +31,9 @@ app.config['OPENAI_STT_MODEL'] = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
 
 db.init_app(app)
 scheduler = None
+# Ensure our app logger emits INFO to the console
+if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
+    app.logger.setLevel(logging.INFO)
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -370,6 +374,7 @@ def _rollover_incomplete_events():
     with app.app_context():
         today = date.today()
         yesterday = today - timedelta(days=1)
+        app.logger.info(f"Rollover start: {yesterday} -> {today}")
 
         # Build a map of phases that need to be recreated
         phases_yesterday = CalendarEvent.query.filter(
@@ -380,11 +385,36 @@ def _rollover_incomplete_events():
         # For each user, roll their events independently
         user_ids = [u.id for u in User.query.all()]
         for uid in user_ids:
+            created_events = 0
+            created_phases = 0
+
+            # Track already created rollovers so reruns stay idempotent
+            existing_rollovers = CalendarEvent.query.filter(
+                CalendarEvent.user_id == uid,
+                CalendarEvent.day == today,
+                CalendarEvent.rolled_from_id.isnot(None)
+            ).all()
+            rolled_lookup = {}
+            duplicates_to_delete = []
+            for ev in existing_rollovers:
+                key = ev.rolled_from_id
+                if key in rolled_lookup:
+                    keep = rolled_lookup[key]
+                    # Keep the earliest created rollover, delete extras
+                    if ev.id < keep.id:
+                        duplicates_to_delete.append(keep)
+                        rolled_lookup[key] = ev
+                    else:
+                        duplicates_to_delete.append(ev)
+                else:
+                    rolled_lookup[key] = ev
+
             phase_map = {}
             # Collect phases by title to recreate only if needed
             for ph in phases_yesterday:
                 if ph.user_id == uid:
-                    phase_map[ph.id] = None  # placeholder
+                    existing_phase_copy = rolled_lookup.get(ph.id)
+                    phase_map[ph.id] = existing_phase_copy.id if existing_phase_copy and existing_phase_copy.is_phase else None
 
             events = CalendarEvent.query.filter(
                 CalendarEvent.user_id == uid,
@@ -398,6 +428,10 @@ def _rollover_incomplete_events():
                 continue
 
             for ev in events:
+                # Skip if this event has already been rolled over today
+                if ev.id in rolled_lookup:
+                    continue
+
                 new_phase_id = None
                 if ev.phase_id:
                     if ev.phase_id not in phase_map or phase_map[ev.phase_id] is None:
@@ -419,6 +453,7 @@ def _rollover_incomplete_events():
                             db.session.add(copy_phase)
                             db.session.flush()
                             phase_map[orig_phase.id] = copy_phase.id
+                            created_phases += 1
                     new_phase_id = phase_map.get(ev.phase_id)
 
                 copy_event = CalendarEvent(
@@ -438,8 +473,18 @@ def _rollover_incomplete_events():
                     rolled_from_id=ev.id
                 )
                 db.session.add(copy_event)
+                created_events += 1
+
+            for dup in duplicates_to_delete:
+                db.session.delete(dup)
 
             db.session.commit()
+            if created_events or duplicates_to_delete:
+                app.logger.info(
+                    f"Rollover user {uid}: created {created_events} events, "
+                    f"created {created_phases} phases, removed {len(duplicates_to_delete)} duplicates"
+                )
+        app.logger.info("Rollover finished")
 
 
 def _send_email(to_addr, subject, body):
@@ -753,6 +798,12 @@ def _start_scheduler():
     # Note: Calendar reminders now use server-scheduled jobs (scheduled per-event)
     # Legacy minute-polling has been replaced with precise scheduling
     scheduler.start()
+
+    # Catch up rollover if the server started after the scheduled time
+    try:
+        _rollover_incomplete_events()
+    except Exception as e:
+        app.logger.error(f"Error running rollover catch-up: {e}")
 
     # Schedule existing reminders on startup
     _schedule_existing_reminders()
@@ -1428,7 +1479,9 @@ def manual_rollover():
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
+    app.logger.info(f"Manual rollover triggered by user {user.id}")
     _rollover_incomplete_events()
+    app.logger.info("Manual rollover completed")
     return jsonify({'status': 'ok'})
 
 
@@ -2499,4 +2552,4 @@ def reorder_items(list_id):
     return jsonify({'updated': len(ordered_ids)})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True)
+    app.run(host='0.0.0.0', port=5000, ssl_context=('cert.pem', 'key.pem'))
