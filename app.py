@@ -3,14 +3,18 @@ import re
 import json
 import pytz
 from datetime import datetime, date, time, timedelta
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from ai_service import run_ai_chat
 from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
+import requests
 
-load_dotenv()
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DOTENV_PATH = find_dotenv() or os.path.join(BASE_DIR, '.env')
+if DOTENV_PATH and os.path.exists(DOTENV_PATH):
+    load_dotenv(DOTENV_PATH)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'
@@ -21,6 +25,8 @@ app.config['API_SHARED_KEY'] = os.environ.get('API_SHARED_KEY')  # Optional shar
 app.config['DEFAULT_TIMEZONE'] = os.environ.get('DEFAULT_TIMEZONE', 'America/New_York')  # EST/EDT
 app.config['VAPID_PUBLIC_KEY'] = os.environ.get('VAPID_PUBLIC_KEY', '')
 app.config['VAPID_PRIVATE_KEY'] = os.environ.get('VAPID_PRIVATE_KEY', '')
+app.config['OPENAI_API_KEY'] = os.environ.get('OPENAI_API_KEY', '')
+app.config['OPENAI_STT_MODEL'] = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
 
 db.init_app(app)
 scheduler = None
@@ -853,6 +859,55 @@ def ai_page():
     if not get_current_user():
         return redirect(url_for('select_user'))
     return render_template('ai.html')
+
+
+@app.route('/api/ai/stt', methods=['POST'])
+def transcribe_audio():
+    """Transcribe audio to text using OpenAI Whisper API."""
+    if not get_current_user():
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    file = request.files.get('audio')
+    if not file:
+        return jsonify({'error': 'Missing audio file'}), 400
+
+    # Pull key from config or environment (fallback reload .env if needed)
+    api_key = app.config.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY')
+    if not api_key:
+        if DOTENV_PATH and os.path.exists(DOTENV_PATH):
+            load_dotenv(DOTENV_PATH)
+        api_key = os.environ.get('OPENAI_API_KEY')
+    model = app.config.get('OPENAI_STT_MODEL', 'whisper-1')
+    if not api_key:
+        return jsonify({'error': 'Speech-to-text API key not configured'}), 500
+
+    try:
+        files = {
+            'file': (file.filename or 'audio.webm', file.stream, file.mimetype or 'audio/webm')
+        }
+        data = {
+            'model': model,
+            'response_format': 'json',
+            'temperature': 0
+        }
+        headers = {
+            'Authorization': f'Bearer {api_key}'
+        }
+        resp = requests.post(
+            'https://api.openai.com/v1/audio/transcriptions',
+            headers=headers,
+            data=data,
+            files=files,
+            timeout=60
+        )
+        if resp.status_code != 200:
+            return jsonify({'error': 'STT request failed', 'details': resp.text}), 502
+        text = resp.json().get('text', '')
+        return jsonify({'text': text})
+    except requests.RequestException as e:
+        return jsonify({'error': 'STT service unreachable', 'details': str(e)}), 502
+    except Exception as e:
+        return jsonify({'error': 'STT failed', 'details': str(e)}), 500
 
 
 @app.route('/settings')

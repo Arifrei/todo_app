@@ -5122,6 +5122,12 @@ let aiVoiceActive = false;
 let aiVoiceUserStop = false;
 let aiVoiceBaseText = '';
 let aiVoiceContext = 'panel';
+let aiRecorder = null;
+let aiRecorderStream = null;
+let aiRecorderChunks = [];
+let aiRecorderActive = false;
+let aiRecorderContext = 'panel';
+let aiRecorderBaseText = '';
 
 function loadAIMessagesFromStorage() {
     try {
@@ -5205,8 +5211,22 @@ function ensureRecognition() {
 function toggleAIVoice(context = 'panel') {
     aiVoiceContext = context || 'panel';
     const recognition = ensureRecognition();
-    if (!recognition) {
-        alert('Speech recognition is not available in this browser.');
+    const hasNative = !!recognition;
+    const hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+
+    // If native speech is available, prefer it
+    if (!hasNative && !hasMediaRecorder) {
+        alert('Speech recognition is not available in this environment.');
+        return;
+    }
+
+    if (!hasNative && hasMediaRecorder) {
+        // Fallback to server STT with recording
+        if (aiRecorderActive) {
+            stopServerVoice();
+        } else {
+            startServerVoice(aiVoiceContext);
+        }
         return;
     }
 
@@ -5228,6 +5248,84 @@ function toggleAIVoice(context = 'panel') {
         console.error('Failed to start speech recognition:', e);
         aiVoiceActive = false;
         setAIMicButtonState(false, aiVoiceContext);
+    }
+}
+
+function startServerVoice(context = 'panel') {
+    aiRecorderContext = context || 'panel';
+    const input = getAIInputByContext(aiRecorderContext);
+    if (!input) return;
+    aiRecorderBaseText = input.value ? input.value.trim() : '';
+
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        aiRecorderStream = stream;
+        aiRecorderChunks = [];
+        aiRecorder = new MediaRecorder(stream);
+        aiRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+                aiRecorderChunks.push(e.data);
+            }
+        };
+        aiRecorder.onstop = () => {
+            aiRecorderActive = false;
+            setAIMicButtonState(false, aiRecorderContext);
+            const blob = new Blob(aiRecorderChunks, { type: 'audio/webm' });
+            stopServerVoiceStream();
+            transcribeServerAudio(blob, aiRecorderContext, aiRecorderBaseText);
+        };
+        aiRecorder.start();
+        aiRecorderActive = true;
+        setAIMicButtonState(true, aiRecorderContext);
+    }).catch(err => {
+        console.error('Unable to access microphone:', err);
+        alert('Could not access the microphone. Please check permissions.');
+    });
+}
+
+function stopServerVoiceStream() {
+    if (aiRecorderStream) {
+        aiRecorderStream.getTracks().forEach(t => t.stop());
+        aiRecorderStream = null;
+    }
+    aiRecorder = null;
+    aiRecorderChunks = [];
+}
+
+function stopServerVoice() {
+    if (aiRecorder) {
+        try { aiRecorder.stop(); } catch (e) { /* ignore */ }
+    } else {
+        stopServerVoiceStream();
+        aiRecorderActive = false;
+        setAIMicButtonState(false, aiRecorderContext);
+    }
+}
+
+async function transcribeServerAudio(blob, context, baseText = '') {
+    const input = getAIInputByContext(context);
+    if (!input) return;
+    const formData = new FormData();
+    formData.append('audio', blob, 'audio.webm');
+    setAIMicButtonState(true, context);
+    try {
+        const res = await fetch('/api/ai/stt', {
+            method: 'POST',
+            body: formData
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Speech-to-text failed');
+        } else {
+            const data = await res.json();
+            const transcript = data.text || '';
+            const existing = baseText || input.value || '';
+            input.value = `${existing} ${transcript}`.trim();
+        }
+    } catch (e) {
+        console.error('Transcription error:', e);
+        alert('Speech-to-text service unavailable.');
+    } finally {
+        setAIMicButtonState(false, context);
     }
 }
 
