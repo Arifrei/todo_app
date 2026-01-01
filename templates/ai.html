@@ -12,7 +12,12 @@
     <div class="ai-messages" id="ai-page-messages"></div>
     <div class="ai-input-row">
         <textarea id="ai-page-input" class="form-control" rows="3" placeholder="e.g. Add “Finish onboarding” under Phase Week 1 in Onboarding"></textarea>
-        <button class="btn btn-primary" id="ai-page-send">Send</button>
+        <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('page')" aria-label="Toggle voice input">
+            <i class="fa-solid fa-microphone"></i>
+        </button>
+        <button class="btn btn-primary ai-send-btn" type="button" id="ai-page-send" aria-label="Send AI prompt">
+            <i class="fa-solid fa-paper-plane"></i>
+        </button>
     </div>
     <div class="ai-hint">AI uses your selected user. Data is applied immediately.</div>
 </div>

@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<header class="header-row">
+    <div>
+        <h1>Welcome</h1>
+        <p style="color: var(--text-muted);">Choose where you want to work today.</p>
+    </div>
+</header>
+
+<div class="module-grid">
+    <a class="module-card" href="/tasks">
+        <div class="module-icon tasks icon-bubble"><i class="fa-solid fa-list-check"></i></div>
+        <div class="module-label">Tasks</div>
+    </a>
+    <a class="module-card" href="/calendar">
+        <div class="module-icon calendar icon-bubble"><i class="fa-solid fa-calendar-day"></i></div>
+        <div class="module-label">Calendar</div>
+    </a>
+    <a class="module-card" href="/notes">
+        <div class="module-icon notes icon-bubble"><i class="fa-solid fa-note-sticky"></i></div>
+        <div class="module-label">Notes</div>
+    </a>
+    <a class="module-card" href="/ai">
+        <div class="module-icon ai icon-bubble"><i class="fa-solid fa-robot"></i></div>
+        <div class="module-label">Assistant</div>
+    </a>
+    <a class="module-card" href="/settings">
+        <div class="module-icon settings icon-bubble"><i class="fa-solid fa-gear"></i></div>
+        <div class="module-label">Settings</div>
+    </a>
+    <a class="module-card" href="/download/app">
+        <div class="module-icon download icon-bubble"><i class="fa-solid fa-mobile-screen-button"></i></div>
+        <div class="module-label">Get App</div>
+    </a>
+</div>
+{% endblock %}

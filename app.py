@@ -813,6 +813,14 @@ def index():
     # If no user selected, redirect to user selection
     if not get_current_user():
         return redirect(url_for('select_user'))
+    return render_template('home.html')
+
+
+@app.route('/tasks')
+def tasks_page():
+    """Main tasks/hubs dashboard."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
     return render_template('index.html')
 
 

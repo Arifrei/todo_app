@@ -53,6 +53,12 @@
                 <ul class="nav-links">
                     <li>
                         <a href="/" class="{{ 'active' if request.path == '/' else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-house"></i></span>
+                            <span class="nav-label">Home</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/tasks" class="{{ 'active' if request.path.startswith('/tasks') or request.path.startswith('/list') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-list-check"></i></span>
                             <span class="nav-label">Tasks</span>
                         </a>
@@ -175,7 +181,17 @@
         <div class="ai-messages" id="ai-messages"></div>
         <div class="ai-input-row">
             <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Add ‘Finish onboarding’ under Phase Week 1 in Project Onboarding"></textarea>
-            <button class="btn btn-primary" onclick="sendAIPrompt()">Send</button>
+            <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('panel')" aria-label="Toggle voice input">
+                <i class="fa-solid fa-microphone"></i>
+            </button>
+            <button class="btn btn-primary ai-send-btn" type="button" onclick="sendAIPrompt()" aria-label="Send AI prompt">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
+        <div class="ai-footer-actions">
+            <button class="btn btn-secondary" type="button" onclick="openFullAIPage()">
+                <i class="fa-solid fa-up-right-from-square"></i> Open full AI page
+            </button>
         </div>
         <div class="ai-hint">Headers are auto-sent from your session; AI uses your data.</div>
     </div>

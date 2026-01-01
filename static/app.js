@@ -1511,21 +1511,72 @@ function getPhaseVisibilityKey() {
     return `phase-visibility-${CURRENT_LIST_ID}`;
 }
 
-function applyPhaseVisibility(phaseId, collapsed) {
+function hasDoneTasksInPhase(phaseId) {
+    const phaseEl = document.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
+    if (!phaseEl) return false;
+    const phaseIdStr = String(phaseId);
+    const direct = Array.from(document.querySelectorAll(`.task-item[data-phase-parent='${phaseIdStr}']`))
+        .filter(el => !el.classList.contains('phase') && el.dataset.status === 'done');
+    if (direct.length) return true;
+
+    // Fallback scan for under-phase tasks without explicit parent
+    let sibling = phaseEl.nextElementSibling;
+    while (sibling && !sibling.classList.contains('phase')) {
+        const parentAttr = sibling.getAttribute('data-phase-parent') || '';
+        const isUnderPhase = sibling.classList.contains('under-phase');
+
+        if (parentAttr) {
+            if (parentAttr !== phaseIdStr) break;
+        } else if (!isUnderPhase) {
+            break;
+        }
+
+        if (!sibling.classList.contains('phase') && sibling.dataset.status === 'done') return true;
+        sibling = sibling.nextElementSibling;
+    }
+    return false;
+}
+
+function normalizePhaseMode(mode) {
+    if (mode === true || mode === 'collapsed') return 'collapsed';
+    if (mode === 'hide_done') return 'hide_done';
+    return 'expanded';
+}
+
+function applyPhaseVisibility(phaseId, modeInput) {
     const phaseEl = document.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
     if (!phaseEl) return;
+    const requestedMode = normalizePhaseMode(modeInput || phaseEl.dataset.phaseMode);
+    const mode = requestedMode === 'hide_done' && !hasDoneTasksInPhase(phaseId) ? 'collapsed' : requestedMode;
+    phaseEl.dataset.phaseMode = mode;
+
+    const collapsed = mode === 'collapsed';
+    const hideDoneOnly = mode === 'hide_done';
     phaseEl.classList.toggle('phase-collapsed', collapsed);
 
     const icon = phaseEl.querySelector('.phase-toggle i');
     if (icon) {
-        icon.className = collapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up';
+        if (collapsed) icon.className = 'fa-solid fa-chevron-down';
+        else if (hideDoneOnly) icon.className = 'fa-solid fa-minus';
+        else icon.className = 'fa-solid fa-chevron-up';
     }
 
     const phaseIdStr = String(phaseId);
+    const hideAll = collapsed;
+    const hideDone = hideDoneOnly && currentTaskFilter !== 'done';
+
+    function toggleTaskVisibility(el) {
+        const isDone = el.dataset.status === 'done';
+        const hideTask = hideAll || (hideDone && isDone);
+        el.classList.toggle('hidden-by-phase', hideAll);
+        el.classList.toggle('hidden-by-done', hideDone && isDone);
+        if (!hideAll) el.classList.remove('hidden-by-phase');
+        if (!hideDone || !isDone) el.classList.remove('hidden-by-done');
+    }
 
     // Primary: hide/show tasks explicitly assigned to this phase
     document.querySelectorAll(`.task-item[data-phase-parent='${phaseIdStr}']`).forEach(el => {
-        el.classList.toggle('hidden-by-phase', collapsed);
+        toggleTaskVisibility(el);
     });
 
     // Fallback: also hide tasks visually under this phase that lack a parent attribute
@@ -1538,15 +1589,17 @@ function applyPhaseVisibility(phaseId, collapsed) {
 
         if (parentAttr) {
             if (parentAttr !== phaseIdStr) break; // belongs to another phase
-            sibling.classList.toggle('hidden-by-phase', collapsed);
+            toggleTaskVisibility(sibling);
         } else if (isUnderPhase) {
-            sibling.classList.toggle('hidden-by-phase', collapsed);
+            toggleTaskVisibility(sibling);
         } else {
             break; // not under this phase, stop scanning
         }
 
         sibling = sibling.nextElementSibling;
     }
+
+    return mode;
 }
 
 function normalizePhaseParents() {
@@ -1578,16 +1631,22 @@ function persistPhaseVisibility(phaseId, collapsed) {
     } catch (e) {
         state = {};
     }
-    state[phaseId] = collapsed;
+    state[phaseId] = normalizePhaseMode(collapsed);
     localStorage.setItem(key, JSON.stringify(state));
 }
 
 function togglePhaseVisibility(phaseId) {
     const phaseEl = document.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
     if (!phaseEl) return;
-    const collapsed = !phaseEl.classList.contains('phase-collapsed');
-    applyPhaseVisibility(phaseId, collapsed);
-    persistPhaseVisibility(phaseId, collapsed);
+    const current = normalizePhaseMode(phaseEl.dataset.phaseMode);
+    const hasDone = hasDoneTasksInPhase(phaseId);
+    const next = current === 'expanded'
+        ? (hasDone ? 'hide_done' : 'collapsed')
+        : current === 'hide_done'
+            ? 'collapsed'
+            : 'expanded';
+    const applied = applyPhaseVisibility(phaseId, next);
+    persistPhaseVisibility(phaseId, applied);
 }
 
 function restorePhaseVisibility() {
@@ -1599,10 +1658,8 @@ function restorePhaseVisibility() {
     } catch (e) {
         state = {};
     }
-    Object.entries(state).forEach(([phaseId, collapsed]) => {
-        if (collapsed) {
-            applyPhaseVisibility(phaseId, true);
-        }
+    Object.entries(state).forEach(([phaseId, mode]) => {
+        applyPhaseVisibility(phaseId, mode);
     });
 }
 
@@ -5059,10 +5116,127 @@ function initTaskSelectionUI() {
 let aiMessages = [];
 let aiSending = false;
 let aiTyping = false;
+const AI_STORAGE_KEY = 'ai-messages';
+let aiRecognition = null;
+let aiVoiceActive = false;
+let aiVoiceUserStop = false;
+let aiVoiceBaseText = '';
+let aiVoiceContext = 'panel';
+
+function loadAIMessagesFromStorage() {
+    try {
+        const raw = localStorage.getItem(AI_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveAIMessagesToStorage() {
+    try {
+        localStorage.setItem(AI_STORAGE_KEY, JSON.stringify(aiMessages));
+    } catch (e) {
+        // ignore storage errors
+    }
+}
+
+function getAIInputByContext(context) {
+    const inputId = context === 'page' ? 'ai-page-input' : 'ai-input';
+    return document.getElementById(inputId);
+}
+
+function setAIMicButtonState(active, context) {
+    const btn = context === 'page'
+        ? document.querySelector('#ai-page-send')?.previousElementSibling
+        : document.querySelector('#ai-panel .ai-mic-btn');
+    if (!btn) return;
+    btn.classList.toggle('listening', active);
+}
+
+function ensureRecognition() {
+    if (aiRecognition) return aiRecognition;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return null;
+    aiRecognition = new SpeechRecognition();
+    aiRecognition.lang = navigator.language || 'en-US';
+    aiRecognition.continuous = true;
+    aiRecognition.interimResults = true;
+    aiRecognition.onresult = (event) => {
+        const input = getAIInputByContext(aiVoiceContext);
+        if (!input) return;
+        let finalText = '';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const res = event.results[i];
+            if (res.isFinal) finalText += res[0].transcript;
+            else interimText += res[0].transcript;
+        }
+        input.value = `${aiVoiceBaseText}${finalText}${interimText}`.trimStart();
+    };
+    aiRecognition.onerror = (e) => {
+        console.error('Speech recognition error:', e);
+        aiVoiceActive = false;
+        setAIMicButtonState(false, aiVoiceContext);
+    };
+    aiRecognition.onstart = () => {
+        aiVoiceActive = true;
+        setAIMicButtonState(true, aiVoiceContext);
+    };
+    aiRecognition.onend = () => {
+        if (aiVoiceUserStop) {
+            aiVoiceActive = false;
+            setAIMicButtonState(false, aiVoiceContext);
+            return;
+        }
+        // Keep listening; avoid silence auto-stop
+        try {
+            aiRecognition.start();
+        } catch (err) {
+            console.error('Failed to restart speech recognition:', err);
+            aiVoiceActive = false;
+            setAIMicButtonState(false, aiVoiceContext);
+        }
+    };
+    return aiRecognition;
+}
+
+function toggleAIVoice(context = 'panel') {
+    aiVoiceContext = context || 'panel';
+    const recognition = ensureRecognition();
+    if (!recognition) {
+        alert('Speech recognition is not available in this browser.');
+        return;
+    }
+
+    if (aiVoiceActive) {
+        aiVoiceUserStop = true;
+        try { recognition.stop(); } catch (e) { /* ignore */ }
+        aiVoiceActive = false;
+        setAIMicButtonState(false, aiVoiceContext);
+        return;
+    }
+
+    const input = getAIInputByContext(aiVoiceContext);
+    if (!input) return;
+    aiVoiceBaseText = input.value ? `${input.value.trim()} ` : '';
+    aiVoiceUserStop = false;
+    try {
+        recognition.start();
+    } catch (e) {
+        console.error('Failed to start speech recognition:', e);
+        aiVoiceActive = false;
+        setAIMicButtonState(false, aiVoiceContext);
+    }
+}
 
 function toggleAIPanel() {
     const panel = document.getElementById('ai-panel');
     if (!panel) return;
+    if (!aiMessages.length) {
+        aiMessages = loadAIMessagesFromStorage();
+    }
     panel.classList.toggle('open');
     if (panel.classList.contains('open')) {
         const input = document.getElementById('ai-input');
@@ -5127,6 +5301,7 @@ function renderAIMessages(context = 'panel') {
         container.appendChild(typing);
     }
     container.scrollTop = container.scrollHeight;
+    saveAIMessagesToStorage();
 }
 
 async function sendAIPrompt(context = 'panel') {
@@ -5163,14 +5338,27 @@ async function sendAIPrompt(context = 'panel') {
         aiSending = false;
         aiTyping = false;
         renderAIMessages(context);
+        saveAIMessagesToStorage();
     }
 }
 
+function openFullAIPage() {
+    if (!aiMessages.length) {
+        aiMessages = loadAIMessagesFromStorage();
+    }
+    saveAIMessagesToStorage();
+    window.location.href = '/ai';
+}
+
 function initAIPanel() {
+    if (!aiMessages.length) {
+        aiMessages = loadAIMessagesFromStorage();
+    }
     renderAIMessages('panel');
 }
 
 function initAIPage() {
+    aiMessages = loadAIMessagesFromStorage();
     const pageMessages = document.getElementById('ai-page-messages');
     const pageInput = document.getElementById('ai-page-input');
     const pageSend = document.getElementById('ai-page-send');
