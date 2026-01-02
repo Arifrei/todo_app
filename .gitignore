@@ -1,6 +1,7 @@
 # Environments & secrets
 .env
 venv/
+*.pem
 
 # App data
 instance/
