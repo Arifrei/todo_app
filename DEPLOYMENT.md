@@ -123,10 +123,10 @@ Share this with users: **`http://51.81.32.252:8003/download/app`**
 
 **App won't connect to server:**
 - Verify Flask is running on VPS: `sudo systemctl status todo-app`
-- Check firewall allows port 8003: `sudo ufw status`
-- Ensure phone can reach `51.81.32.252:8003` (test in browser)
+- Check domain DNS is resolving correctly
+- Ensure phone can reach `simplytasks.simplifiedsuite.com` (test in browser)
 
 **Old version on phone:**
 - Uninstall the old app completely
-- Download fresh from `http://51.81.32.252:8003/download/app`
+- Download fresh from `https://simplytasks.simplifiedsuite.com/download/app`
 - Install the new version

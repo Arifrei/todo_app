@@ -3,9 +3,9 @@
   "appName": "TaskFlow",
   "webDir": "static",
   "server": {
-    "url": "http://51.81.32.252:8003",
-    "cleartext": true,
-    "androidScheme": "http"
+    "url": "https://simplytasks.simplifiedsuite.com",
+    "cleartext": false,
+    "androidScheme": "https"
   },
   "android": {
     "allowMixedContent": true
