@@ -211,6 +211,12 @@ body {
     gap: 2rem;
     box-shadow: var(--shadow-sm);
     transition: transform 0.25s ease, box-shadow 0.25s ease;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .logo {
@@ -252,6 +258,14 @@ body {
     font-weight: 600;
     font-size: 1rem;
     border: 1px solid transparent;
+}
+
+.nav-links li[draggable="true"] {
+    cursor: grab;
+}
+
+.nav-links li.dragging {
+    opacity: 0.6;
 }
 
 .icon-bubble {
@@ -473,6 +487,7 @@ body {
     padding: 0.5rem;
     z-index: 200;
     min-width: 160px;
+    max-width: calc(100vw - 16px);
 }
 
 .user-menu a {
@@ -808,6 +823,158 @@ header p {
     width: 100%;
     height: 5px;
     background: linear-gradient(90deg, var(--primary-color), var(--secondary-color), var(--accent-color));
+}
+
+/* Compact Sticky Header */
+.list-header-compact {
+    display: grid;
+    grid-template-columns: minmax(auto, max-content) 1fr minmax(auto, max-content);
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--white);
+    padding: 0.75rem 1rem;
+    border-bottom: 2px solid var(--border-color);
+    border-radius: 0 0 14px 14px;
+    box-shadow: var(--shadow-sm);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    min-height: 56px;
+}
+
+.header-left {
+    justify-self: start;
+    flex-shrink: 0;
+}
+
+.header-center {
+    justify-self: center;
+    text-align: center;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.header-right {
+    justify-self: end;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.btn-home {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.875rem;
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    color: var(--white);
+    border: none;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: var(--transition);
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+    white-space: nowrap;
+}
+
+.btn-home:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.btn-home i {
+    font-size: 0.95rem;
+}
+
+.home-label {
+    display: inline;
+}
+
+.header-center h1 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin: 0;
+    color: var(--text-color);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.header-menu-trigger {
+    width: 40px;
+    height: 40px;
+    background: var(--white);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-color);
+    transition: var(--transition);
+}
+
+.header-menu-trigger:hover {
+    background: var(--primary-light);
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.header-menu-dropdown {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    background: var(--white);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    min-width: 200px;
+    padding: 0.5rem;
+    display: none;
+    z-index: 200;
+}
+
+.header-menu-dropdown.show {
+    display: block;
+}
+
+.header-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: none;
+    background: none;
+    color: var(--text-color);
+    font-size: 0.95rem;
+    font-weight: 500;
+    text-align: left;
+    text-decoration: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.header-menu-item:hover {
+    background: var(--primary-light);
+    color: var(--primary-color);
+}
+
+.header-menu-item.danger {
+    color: var(--danger-color);
+}
+
+.header-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--danger-color);
+}
+
+.header-menu-item i {
+    width: 18px;
+    text-align: center;
+}
+
+.header-menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 0.5rem 0;
 }
 
 .back-link {
@@ -2796,12 +2963,23 @@ textarea.form-control {
     line-height: 1.6;
     overflow-y: auto;
     cursor: text;
+    color: var(--text-color);
+    font-family: 'Outfit', sans-serif;
+    font-weight: 400;
+    font-style: normal;
 }
 
 .note-editor-surface:focus {
     outline: none;
     border-color: var(--primary-color);
     box-shadow: var(--shadow-md);
+}
+
+.note-editor-surface * {
+    color: inherit;
+    font-family: inherit;
+    font-weight: inherit;
+    font-style: inherit;
 }
 
 .note-editor-surface:empty:before {
@@ -2816,16 +2994,16 @@ textarea.form-control {
 .note-editor-surface blockquote {
     border-left: 3px solid var(--primary-color);
     padding-left: 0.8rem;
-    color: var(--text-muted);
+    color: inherit;
     margin: 0.75rem 0;
-    font-style: italic;
+    font-style: normal;
 }
 
 .note-editor-surface code {
     background: #0f172a0d;
     padding: 0.15rem 0.35rem;
     border-radius: 6px;
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-family: inherit;
 }
 
 .note-editor-surface input[type="checkbox"] {

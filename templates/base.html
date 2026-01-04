@@ -51,43 +51,43 @@
             </div>
             <div class="nav-row">
                 <ul class="nav-links">
-                    <li>
+                    <li data-nav-id="home">
                         <a href="/" class="{{ 'active' if request.path == '/' else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-house"></i></span>
                             <span class="nav-label">Home</span>
                         </a>
                     </li>
-                    <li>
+                    <li data-nav-id="tasks">
                         <a href="/tasks" class="{{ 'active' if request.path.startswith('/tasks') or request.path.startswith('/list') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-list-check"></i></span>
                             <span class="nav-label">Tasks</span>
                         </a>
                     </li>
-                    <li>
+                    <li data-nav-id="calendar">
                         <a href="/calendar" class="{{ 'active' if request.path.startswith('/calendar') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-calendar-day"></i></span>
                             <span class="nav-label">Calendar</span>
                         </a>
                     </li>
-                    <li>
+                    <li data-nav-id="notes">
                         <a href="/notes" class="{{ 'active' if request.path.startswith('/notes') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-note-sticky"></i></span>
                             <span class="nav-label">Notes</span>
                         </a>
                     </li>
-                    <li>
+                    <li data-nav-id="recalls">
                         <a href="/recalls" class="{{ 'active' if request.path.startswith('/recalls') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-inbox"></i></span>
                             <span class="nav-label">Recalls</span>
                         </a>
                     </li>
-                    <li>
+                    <li data-nav-id="ai">
                         <a href="/ai" class="{{ 'active' if request.path.startswith('/ai') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-robot"></i></span>
                             <span class="nav-label">Assistant</span>
                         </a>
                     </li>
-                    <li>
+                    <li data-nav-id="settings">
                         <a href="/settings" class="{{ 'active' if request.path.startswith('/settings') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-gear"></i></span>
                             <span class="nav-label">Settings</span>
@@ -99,9 +99,9 @@
                     <i class="fa-solid fa-user"></i>
                     <span id="current-username">Loading...</span>
                     <i class="fa-solid fa-caret-down caret"></i>
-                </div>
-                <div class="user-menu" id="user-menu">
-                    <a href="{{ url_for('select_user') }}"><i class="fa-solid fa-user-group"></i> Switch User</a>
+                    <div class="user-menu" id="user-menu">
+                        <a href="{{ url_for('select_user') }}"><i class="fa-solid fa-user-group"></i> Switch User</a>
+                    </div>
                 </div>
             </div>
             <script>
@@ -119,7 +119,35 @@
                 function toggleUserMenu(event) {
                     event.stopPropagation();
                     const menu = document.getElementById('user-menu');
-                    if (menu) menu.classList.toggle('open');
+                    if (!menu) return;
+                    menu.classList.toggle('open');
+                    if (!menu.classList.contains('open')) return;
+
+                    const anchor = event.currentTarget || event.target;
+                    if (!anchor || !anchor.getBoundingClientRect) return;
+
+                    // Position relative to viewport to avoid clipping or overflow.
+                    menu.style.left = '';
+                    menu.style.right = '';
+                    menu.style.top = '';
+                    menu.style.bottom = '';
+                    menu.style.position = 'fixed';
+
+                    requestAnimationFrame(() => {
+                        const anchorRect = anchor.getBoundingClientRect();
+                        const menuRect = menu.getBoundingClientRect();
+                        const padding = 8;
+
+                        let left = anchorRect.right - menuRect.width;
+                        left = Math.max(padding, Math.min(left, window.innerWidth - menuRect.width - padding));
+                        let top = anchorRect.bottom + 8;
+                        if (top + menuRect.height > window.innerHeight - padding) {
+                            top = Math.max(padding, anchorRect.top - menuRect.height - 8);
+                        }
+
+                        menu.style.left = `${left}px`;
+                        menu.style.top = `${top}px`;
+                    });
                 }
 
                 document.addEventListener('click', () => {

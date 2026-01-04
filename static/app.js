@@ -803,13 +803,30 @@ function togglePhaseMenu(event, forceHide = false) {
     const menu = document.getElementById('phase-menu-main');
     if (!menu) return;
     if (event) event.stopPropagation();
-    
+
     if (forceHide) {
         menu.classList.remove('show');
         return;
     }
     menu.classList.toggle('show');
 }
+
+function toggleHeaderMenu(event) {
+    const dropdown = document.getElementById('header-menu-dropdown');
+    if (!dropdown) return;
+    if (event) event.stopPropagation();
+    dropdown.classList.toggle('show');
+}
+
+// Close header menu when clicking outside
+document.addEventListener('click', (e) => {
+    const dropdown = document.getElementById('header-menu-dropdown');
+    if (dropdown && dropdown.classList.contains('show')) {
+        if (!e.target.closest('.header-main-menu')) {
+            dropdown.classList.remove('show');
+        }
+    }
+});
 
 async function bulkImportItems(listId) {
     const textarea = document.getElementById('bulk-import-text');
@@ -5678,6 +5695,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initStickyListHeader();
     initTaskFilters();
     initMobileTopbar();
+    initSidebarReorder();
     initNotesPage();
     initRecallsPage();
     initAIPage();
@@ -5748,6 +5766,66 @@ function initMobileTopbar() {
     } else if (typeof media.addListener === 'function') {
         media.addListener(handleMediaChange);
     }
+}
+
+function initSidebarReorder() {
+    const navList = document.querySelector('.nav-links');
+    if (!navList) return;
+    const media = window.matchMedia('(max-width: 1024px)');
+    if (media.matches) return;
+
+    let draggingEl = null;
+
+    function applyOrder(order) {
+        if (!Array.isArray(order) || !order.length) return;
+        const items = Array.from(navList.querySelectorAll('li[data-nav-id]'));
+        const map = new Map(items.map(item => [item.getAttribute('data-nav-id'), item]));
+        order.forEach(id => {
+            const item = map.get(id);
+            if (item) navList.appendChild(item);
+        });
+    }
+
+    function persistOrder() {
+        const order = Array.from(navList.querySelectorAll('li[data-nav-id]'))
+            .map(item => item.getAttribute('data-nav-id'))
+            .filter(Boolean);
+        fetch('/api/sidebar-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order })
+        }).catch(err => console.error('Failed to save sidebar order:', err));
+    }
+
+    fetch('/api/sidebar-order')
+        .then(r => r.json())
+        .then(data => applyOrder(data.order || []))
+        .catch(err => console.error('Failed to load sidebar order:', err));
+
+    navList.querySelectorAll('li[data-nav-id]').forEach(item => {
+        item.setAttribute('draggable', 'true');
+
+        item.addEventListener('dragstart', (e) => {
+            draggingEl = item;
+            item.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        });
+
+        item.addEventListener('dragend', () => {
+            if (draggingEl) draggingEl.classList.remove('dragging');
+            draggingEl = null;
+            persistOrder();
+        });
+
+        item.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const target = e.currentTarget;
+            if (!draggingEl || draggingEl === target) return;
+            const rect = target.getBoundingClientRect();
+            const shouldInsertAfter = e.clientY > rect.top + rect.height / 2;
+            navList.insertBefore(draggingEl, shouldInsertAfter ? target.nextSibling : target);
+        });
+    });
 }
 
 let mouseHoldTimer = null;

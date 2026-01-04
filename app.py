@@ -22,7 +22,7 @@ if DOTENV_PATH and os.path.exists(DOTENV_PATH):
 
 app = Flask(__name__)
 # Keep DB path aligned with migration scripts (instance/todo.db)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///instance/todo.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///todo.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
@@ -38,6 +38,9 @@ scheduler = None
 # Ensure our app logger emits INFO to the console
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
+
+SIDEBAR_ORDER_FILE = os.path.join(app.instance_path, 'sidebar_order.json')
+DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'ai', 'settings']
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -127,6 +130,33 @@ def _fetch_url_content(url, max_length=3000):
     except Exception as exc:
         app.logger.warning(f"URL fetch failed for {url}: {exc}")
         return None
+
+
+def _load_sidebar_order():
+    """Load global sidebar order from disk, falling back to defaults."""
+    try:
+        if os.path.exists(SIDEBAR_ORDER_FILE):
+            with open(SIDEBAR_ORDER_FILE, 'r', encoding='utf-8') as handle:
+                data = json.load(handle)
+                if isinstance(data, list):
+                    order = [str(item).strip() for item in data if isinstance(item, str) and str(item).strip()]
+                    allowed = set(DEFAULT_SIDEBAR_ORDER)
+                    order = [item for item in order if item in allowed]
+                    if order:
+                        # Ensure all items present.
+                        seen = set(order)
+                        order.extend([item for item in DEFAULT_SIDEBAR_ORDER if item not in seen])
+                        return order
+    except Exception as exc:
+        app.logger.warning(f"Failed to load sidebar order: {exc}")
+    return list(DEFAULT_SIDEBAR_ORDER)
+
+
+def _save_sidebar_order(order):
+    """Persist global sidebar order to disk."""
+    os.makedirs(app.instance_path, exist_ok=True)
+    with open(SIDEBAR_ORDER_FILE, 'w', encoding='utf-8') as handle:
+        json.dump(order, handle, indent=2)
 
 
 def _generate_recall_summary(title, content, category, type_name, source_url=None):
@@ -1096,6 +1126,35 @@ def current_user_info():
     if user:
         return jsonify({'user_id': user.id, 'username': user.username})
     return jsonify({'user_id': None, 'username': None})
+
+@app.route('/api/sidebar-order', methods=['GET', 'POST'])
+def sidebar_order():
+    """Get or update the global sidebar order (stored on disk, not per-user)."""
+    if request.method == 'GET':
+        order = _load_sidebar_order()
+        return jsonify({'order': order})
+
+    data = request.get_json(silent=True)
+    order = data if isinstance(data, list) else (data or {}).get('order')
+    if not isinstance(order, list):
+        return jsonify({'error': 'Order must be a list'}), 400
+
+    cleaned = [str(item).strip() for item in order if isinstance(item, str) and str(item).strip()]
+    allowed = set(DEFAULT_SIDEBAR_ORDER)
+    cleaned = [item for item in cleaned if item in allowed]
+    # Ensure all allowed items exist exactly once, preserving requested order.
+    seen = set()
+    final_order = []
+    for item in cleaned:
+        if item not in seen:
+            seen.add(item)
+            final_order.append(item)
+    for item in DEFAULT_SIDEBAR_ORDER:
+        if item not in seen:
+            final_order.append(item)
+
+    _save_sidebar_order(final_order)
+    return jsonify({'success': True, 'order': final_order})
 
 @app.route('/')
 def index():

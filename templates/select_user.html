@@ -27,6 +27,7 @@
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
             max-width: 520px;
             width: 100%;
+            box-sizing: border-box;
         }
 
         .user-select-header {
@@ -134,16 +135,20 @@
         .new-user-form {
             display: flex;
             gap: 0.75rem;
+            flex-wrap: wrap;
+            width: 100%;
         }
 
         .new-user-input {
-            flex: 1;
+            flex: 1 1 220px;
             padding: 0.75rem;
             border: 2px solid #e0e0e0;
             border-radius: 10px;
             font-size: 1rem;
             font-family: 'Outfit', sans-serif;
             transition: border-color 0.2s;
+            min-width: 0;
+            box-sizing: border-box;
         }
 
         .new-user-input:focus {
@@ -162,6 +167,9 @@
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
             white-space: nowrap;
+            flex: 0 1 auto;
+            max-width: 100%;
+            box-sizing: border-box;
         }
 
         .btn-create:hover {

@@ -109,14 +109,6 @@ def ensure_todo_item_table(cur):
 
     # Normalize legacy status
     cur.execute("UPDATE todo_item SET status='not_started' WHERE status='pending'")
-    # Backfill order_index per list
-    rows = cur.execute("SELECT id, list_id FROM todo_item ORDER BY list_id, id").fetchall()
-    counters = {}
-    for item_id, list_id in rows:
-        idx = counters.get(list_id, 1)
-        cur.execute("UPDATE todo_item SET order_index=? WHERE id=?", (idx, item_id))
-        counters[list_id] = idx + 1
-    print("[update] todo_item order_index backfilled")
 
 
 def ensure_note_table(cur):

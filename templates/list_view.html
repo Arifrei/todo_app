@@ -3,95 +3,77 @@
 {% block content %}
 {# Phase headers: anything marked is_phase or legacy status == 'phase' #}
 {% set phases = items|selectattr('is_phase', 'equalto', True)|list + items|selectattr('status', 'equalto', 'phase')|list %}
-<div class="nav-links" style="margin-bottom: 1rem; display: flex; align-items: center;">
-    {% if parent_list %}
-    <a href="/list/{{ parent_list.id }}" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to {{
-        parent_list.title }}</a>
-    {% endif %}
-    <a href="/tasks" class="back-link" style="margin-left: 0.75rem;"><i class="fa-solid fa-house"></i> Home</a>
-</div>
 
-<div class="list-header sticky-header">
-    <div class="card-header">
-        <div>
-            <h1 id="list-title-display">{{ todo_list.title }}</h1>
-            <span class="card-type">{{ todo_list.type }}</span>
-        </div>
-        <div class="task-actions">
-            <button class="btn-icon" onclick="openEditListModal()"><i class="fa-solid fa-pen"></i></button>
-            <button class="btn-icon" style="color: var(--danger-color);" onclick="deleteList({{ todo_list.id }})"><i
-                    class="fa-solid fa-trash"></i></button>
-        </div>
-    </div>
-
-    {% if todo_list.type == 'hub' %}
-    {# Compute counts: treat a project as complete when the linked list is 100% or a simple item is 'done' #}
-    {% set total = todo_list.items|length %}
-    {% set done_count = 0 %}
-    {% for item in todo_list.items %}
-        {% if item.linked_list %}
-            {% if item.linked_list.get_progress() == 100 %}
-                {% set done_count = done_count + 1 %}
-            {% endif %}
-        {% else %}
-            {% if item.status == 'done' %}
-                {% set done_count = done_count + 1 %}
-            {% endif %}
+{# Compute counts for hub progress #}
+{% if todo_list.type == 'hub' %}
+{% set total = todo_list.items|length %}
+{% set done_count = 0 %}
+{% for item in todo_list.items %}
+    {% if item.linked_list %}
+        {% if item.linked_list.get_progress() == 100 %}
+            {% set done_count = done_count + 1 %}
         {% endif %}
-    {% endfor %}
-
-    <div class="progress-container" style="margin-top: 1.5rem;">
-        <div class="progress-bar" id="main-progress-bar" style="width: {{ todo_list.get_progress() }}%"></div>
-    </div>
-    <div class="progress-text">
-        <span id="progress-percent">{{ todo_list.get_progress() }}% Complete</span>
-        <span id="progress-count">{{ done_count }}/{{ total }} Projects</span>
-    </div>
+    {% else %}
+        {% if item.status == 'done' %}
+            {% set done_count = done_count + 1 %}
+        {% endif %}
     {% endif %}
-</div>
+{% endfor %}
+{% endif %}
 
-<div class="header-row">
-    <h2>{{ 'Projects' if todo_list.type == 'hub' else 'Tasks' }}</h2>
-    <div class="header-actions">
-        <a class="btn btn-secondary" href="/api/lists/{{ todo_list.id }}/export" download>
-            <i class="fa-solid fa-download"></i> Export
+<!-- Compact Sticky Header -->
+<div class="list-header-compact sticky-header">
+    <div class="header-left">
+        <a href="/tasks" class="btn btn-home">
+            <i class="fa-solid fa-house"></i>
+            <span class="home-label">Home</span>
         </a>
-        <button class="btn" onclick="openBulkImportModal()">
-            <i class="fa-solid fa-list-check"></i> Bulk Add
-        </button>
+    </div>
 
-        {% if todo_list.type == 'list' %}
-        <div class="phase-add-dropdown">
-            <button class="btn btn-primary btn-secondary" type="button" onclick="togglePhaseMenu(event)">
-                <i class="fa-solid fa-plus"></i> Add
+    <div class="header-center">
+        <h1 id="list-title-display">{{ todo_list.title }}</h1>
+    </div>
+
+    <div class="header-right">
+        <button class="btn-icon header-menu-trigger" onclick="toggleHeaderMenu(event)" title="More options">
+            <i class="fa-solid fa-ellipsis-vertical"></i>
+        </button>
+        <div class="header-menu-dropdown" id="header-menu-dropdown">
+            {% if parent_list %}
+            <a class="header-menu-item" href="/list/{{ parent_list.id }}">
+                <i class="fa-solid fa-arrow-left"></i> Back to {{ parent_list.title }}
+            </a>
+            <div class="header-menu-divider"></div>
+            {% endif %}
+            {% if todo_list.type == 'list' %}
+            <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-plus"></i> Add Task
             </button>
-            <!-- Main Menu -->
-            <div class="phase-menu" id="phase-menu-main">
-                <button class="phase-menu-item" onclick="openAddItemModal(null, 'phase'); togglePhaseMenu(event, true);">
-                    <i class="fa-solid fa-layer-group"></i> Add Phase
-                </button>
-                <button class="phase-menu-item" onclick="openAddItemModal(null, 'task'); togglePhaseMenu(event, true);">
-                    <i class="fa-solid fa-tasks"></i> Add Task
-                </button>
-            </div>
-            <!-- Sub-menu removed -->
-        </div>
-        {% else %}
-        <!-- This is the 'hub' view -->
-        <div class="phase-add-dropdown">
-            <button class="btn btn-primary btn-secondary" type="button" onclick="togglePhaseMenu(event)">
-                <i class="fa-solid fa-plus"></i> Add
+            <button class="header-menu-item" onclick="openAddItemModal(null, 'phase'); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-layer-group"></i> Add Phase
             </button>
-            <div class="phase-menu" id="phase-menu-main">
-                <button class="phase-menu-item" onclick="openAddItemModal(null, 'project_list'); togglePhaseMenu(event, true);">
-                    <i class="fa-solid fa-list-check"></i> Add Project (List)
-                </button>
-                <button class="phase-menu-item" onclick="openAddItemModal(null, 'project_hub'); togglePhaseMenu(event, true);">
-                    <i class="fa-solid fa-folder-tree"></i> Add Project (Hub)
-                </button>
-            </div>
+            {% else %}
+            <button class="header-menu-item" onclick="openAddItemModal(null, 'project_list'); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-list-check"></i> Add Project (List)
+            </button>
+            <button class="header-menu-item" onclick="openAddItemModal(null, 'project_hub'); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-folder-tree"></i> Add Project (Hub)
+            </button>
+            {% endif %}
+            <button class="header-menu-item" onclick="openBulkImportModal(); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-list-check"></i> Bulk Add
+            </button>
+            <a class="header-menu-item" href="/api/lists/{{ todo_list.id }}/export" download>
+                <i class="fa-solid fa-download"></i> Export
+            </a>
+            <div class="header-menu-divider"></div>
+            <button class="header-menu-item" onclick="openEditListModal(); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-pen"></i> Rename List
+            </button>
+            <button class="header-menu-item danger" onclick="deleteList({{ todo_list.id }});">
+                <i class="fa-solid fa-trash"></i> Delete List
+            </button>
         </div>
-        {% endif %}
     </div>
 </div>
 
