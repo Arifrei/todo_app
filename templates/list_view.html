@@ -24,6 +24,15 @@
 <!-- Compact Sticky Header -->
 <div class="list-header-compact sticky-header">
     <div class="header-left">
+        {% if parent_list %}
+        <a href="/list/{{ parent_list.id }}" class="btn btn-back btn-small" aria-label="Back to {{ parent_list.title }}">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        {% else %}
+        <a href="/tasks" class="btn btn-back btn-small" aria-label="Go back">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        {% endif %}
         <a href="/tasks" class="btn btn-home">
             <i class="fa-solid fa-house"></i>
             <span class="home-label">Home</span>
@@ -39,12 +48,6 @@
             <i class="fa-solid fa-ellipsis-vertical"></i>
         </button>
         <div class="header-menu-dropdown" id="header-menu-dropdown">
-            {% if parent_list %}
-            <a class="header-menu-item" href="/list/{{ parent_list.id }}">
-                <i class="fa-solid fa-arrow-left"></i> Back to {{ parent_list.title }}
-            </a>
-            <div class="header-menu-divider"></div>
-            {% endif %}
             {% if todo_list.type == 'list' %}
             <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-plus"></i> Add Task

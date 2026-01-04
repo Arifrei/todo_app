@@ -23,6 +23,19 @@
     </header>
 
     <aside class="notes-sidebar card">
+        <div class="bulk-actions" id="notes-bulk-actions" style="display: none;">
+            <div class="bulk-left">
+                <input type="checkbox" id="notes-select-all" onchange="toggleNotesSelectAll(this)">
+                <label for="notes-select-all" style="cursor: pointer;">Select all</label>
+                <span id="notes-bulk-count" style="color: var(--text-muted); margin-left: 0.5rem;"></span>
+                <button class="btn btn-secondary btn-small" type="button" onclick="resetNoteSelection()" style="margin-left: 0.5rem;">Clear</button>
+            </div>
+            <div class="bulk-buttons">
+                <button class="btn btn-secondary" onclick="bulkPinNotes()"><i class="fa-solid fa-thumbtack"></i> Pin</button>
+                <button class="btn btn-secondary" onclick="bulkUnpinNotes()"><i class="fa-solid fa-thumbtack"></i> Unpin</button>
+                <button class="btn-icon delete" onclick="bulkDeleteNotes()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
+            </div>
+        </div>
         <div class="notes-sidebar-header">
             <div>
                 <h3>Pinned</h3>

@@ -6,6 +6,7 @@ const bulkImportModal = document.getElementById('bulk-import-modal');
 const moveItemModal = document.getElementById('move-item-modal');
 const phaseMenu = document.getElementById('phase-menu');
 const selectedItems = new Set();
+const selectedNotes = new Set();
 const confirmModal = document.getElementById('confirm-modal');
 const confirmMessage = document.getElementById('confirm-message');
 const confirmYesButton = document.getElementById('confirm-yes-button');
@@ -1291,6 +1292,126 @@ async function bulkDelete() {
     });
 }
 
+// --- Bulk Note Selection ---
+
+function updateNotesBulkBar() {
+    const bar = document.getElementById('notes-bulk-actions');
+    const countSpan = document.getElementById('notes-bulk-count');
+    const selectAll = document.getElementById('notes-select-all');
+    const totalNotes = notesState.notes.length;
+
+    if (selectedNotes.size > 0) {
+        if (bar) bar.style.display = 'flex';
+        if (countSpan) countSpan.textContent = `${selectedNotes.size} selected`;
+    } else {
+        if (bar) bar.style.display = 'none';
+        if (countSpan) countSpan.textContent = '';
+    }
+
+    if (selectedNotes.size === 0 && document.body.classList.contains('note-selection-mode-active')) {
+        document.body.classList.remove('note-selection-mode-active');
+    } else if (selectedNotes.size > 0 && !document.body.classList.contains('note-selection-mode-active')) {
+        document.body.classList.add('note-selection-mode-active');
+    }
+
+    if (selectAll) {
+        selectAll.checked = totalNotes > 0 && selectedNotes.size === totalNotes;
+        selectAll.indeterminate = selectedNotes.size > 0 && selectedNotes.size < totalNotes;
+    }
+}
+
+function setNoteSelected(noteId, isSelected) {
+    const noteElements = document.querySelectorAll(`[data-note-id="${noteId}"]`);
+    noteElements.forEach(el => {
+        el.classList.toggle('selected', isSelected);
+    });
+    if (isSelected) {
+        selectedNotes.add(noteId);
+    } else {
+        selectedNotes.delete(noteId);
+    }
+}
+
+function resetNoteSelection() {
+    selectedNotes.clear();
+    document.querySelectorAll('.notes-list-item.selected').forEach(el => el.classList.remove('selected'));
+    const selectAll = document.getElementById('notes-select-all');
+    if (selectAll) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    }
+    updateNotesBulkBar();
+}
+
+function toggleNotesSelectAll(checkbox) {
+    const shouldSelect = checkbox.checked;
+    selectedNotes.clear();
+    notesState.notes.forEach(note => {
+        setNoteSelected(note.id, shouldSelect);
+    });
+    updateNotesBulkBar();
+}
+
+function shouldIgnoreNoteSelection(target) {
+    return !!(
+        target.closest('.pin-btn') ||
+        target.closest('.note-actions') ||
+        target.closest('button.btn-icon')
+    );
+}
+
+async function bulkDeleteNotes() {
+    if (selectedNotes.size === 0) return;
+    openConfirmModal(`Delete ${selectedNotes.size} note(s)?`, async () => {
+        try {
+            const deletePromises = Array.from(selectedNotes).map(noteId =>
+                fetch(`/api/notes/${noteId}`, { method: 'DELETE' })
+            );
+            await Promise.all(deletePromises);
+            resetNoteSelection();
+            await loadNotes({ keepSelection: false });
+        } catch (e) {
+            console.error('Error bulk deleting notes:', e);
+        }
+    });
+}
+
+async function bulkPinNotes() {
+    if (selectedNotes.size === 0) return;
+    try {
+        const pinPromises = Array.from(selectedNotes).map(noteId =>
+            fetch(`/api/notes/${noteId}/pin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pinned: true })
+            })
+        );
+        await Promise.all(pinPromises);
+        resetNoteSelection();
+        await loadNotes({ keepSelection: false });
+    } catch (e) {
+        console.error('Error bulk pinning notes:', e);
+    }
+}
+
+async function bulkUnpinNotes() {
+    if (selectedNotes.size === 0) return;
+    try {
+        const unpinPromises = Array.from(selectedNotes).map(noteId =>
+            fetch(`/api/notes/${noteId}/pin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pinned: false })
+            })
+        );
+        await Promise.all(unpinPromises);
+        resetNoteSelection();
+        await loadNotes({ keepSelection: false });
+    } catch (e) {
+        console.error('Error bulk unpinning notes:', e);
+    }
+}
+
 // --- Drag & Drop Reorder ---
 
 function getDragAfterElement(container, y) {
@@ -1401,6 +1522,7 @@ async function refreshListView() {
         const newContainer = doc.getElementById('items-container');
         document.getElementById('items-container').innerHTML = newContainer.innerHTML;
         normalizePhaseParents();
+        organizePhaseDoneTasks();
         initTaskSelectionUI();
         selectedItems.forEach(id => setTaskSelected(id, true, true));
         updateBulkBar();
@@ -1588,6 +1710,10 @@ function hasDoneTasksInPhase(phaseId) {
     // Fallback scan for under-phase tasks without explicit parent
     let sibling = phaseEl.nextElementSibling;
     while (sibling && !sibling.classList.contains('phase')) {
+        if (!sibling.classList.contains('task-item')) {
+            sibling = sibling.nextElementSibling;
+            continue;
+        }
         const parentAttr = sibling.getAttribute('data-phase-parent') || '';
         const isUnderPhase = sibling.classList.contains('under-phase');
 
@@ -1605,7 +1731,7 @@ function hasDoneTasksInPhase(phaseId) {
 
 function normalizePhaseMode(mode) {
     if (mode === true || mode === 'collapsed') return 'collapsed';
-    if (mode === 'hide_done') return 'hide_done';
+    if (mode === 'hide_done') return 'collapsed'; // treat legacy hide_done as collapsed
     return 'expanded';
 }
 
@@ -1630,6 +1756,15 @@ function applyPhaseVisibility(phaseId, modeInput) {
     const phaseIdStr = String(phaseId);
     const hideAll = collapsed;
     const hideDone = hideDoneOnly && currentTaskFilter !== 'done';
+    const doneBar = document.querySelector(`.phase-done-bar[data-phase-id='${phaseIdStr}']`);
+    const doneContainer = document.querySelector(`.phase-done-container[data-phase-id='${phaseIdStr}']`);
+    if (doneBar) doneBar.classList.toggle('hidden-by-phase', hideAll);
+    if (doneContainer) {
+        doneContainer.classList.toggle('hidden-by-phase', hideAll);
+        // Respect the phase "hide done" mode in addition to the explicit toggle state
+        if (hideDone) doneContainer.classList.add('collapsed-by-phase');
+        else doneContainer.classList.remove('collapsed-by-phase');
+    }
 
     function toggleTaskVisibility(el) {
         const isDone = el.dataset.status === 'done';
@@ -1656,6 +1791,75 @@ function normalizePhaseParents() {
     // Keeping this function for backwards compatibility but it does nothing.
 }
 
+function organizePhaseDoneTasks() {
+    const container = document.getElementById('items-container');
+    if (!container) return;
+
+    // Unwrap any previous containers to avoid duplicating bars
+    document.querySelectorAll('.phase-done-container').forEach(box => {
+        while (box.firstChild) {
+            container.insertBefore(box.firstChild, box);
+        }
+        box.remove();
+    });
+    document.querySelectorAll('.phase-done-bar').forEach(bar => bar.remove());
+
+    const phases = Array.from(container.querySelectorAll('.task-item.phase'));
+    phases.forEach(phaseEl => {
+        const phaseIdStr = String(phaseEl.dataset.phaseId || '');
+        if (!phaseIdStr) return;
+
+        const doneTasks = [];
+        let cursor = phaseEl.nextElementSibling;
+        while (cursor && !cursor.classList.contains('phase')) {
+            if (cursor.classList.contains('task-item')) {
+                const belongs = cursor.dataset.phaseParent === phaseIdStr
+                    || (!cursor.dataset.phaseParent && cursor.classList.contains('under-phase'));
+                if (belongs && cursor.dataset.status === 'done') {
+                    doneTasks.push(cursor);
+                }
+            }
+            cursor = cursor.nextElementSibling;
+        }
+
+        if (!doneTasks.length) return;
+
+        const anchor = cursor || null; // Insert before the next phase (or end)
+
+        const bar = document.createElement('div');
+        bar.className = 'phase-done-bar';
+        bar.setAttribute('data-phase-id', phaseIdStr);
+
+        const label = document.createElement('span');
+        label.className = 'phase-done-label';
+        label.textContent = `${doneTasks.length} done task${doneTasks.length === 1 ? '' : 's'}`;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary btn-small phase-done-toggle';
+
+        const doneBox = document.createElement('div');
+        doneBox.className = 'phase-done-container collapsed';
+        doneBox.setAttribute('data-phase-id', phaseIdStr);
+
+        const startOpen = currentTaskFilter === 'done';
+        if (startOpen) doneBox.classList.remove('collapsed');
+        btn.textContent = startOpen ? 'Hide' : 'Show';
+
+        btn.addEventListener('click', () => {
+            const isCollapsed = doneBox.classList.toggle('collapsed');
+            btn.textContent = isCollapsed ? 'Show' : 'Hide';
+        });
+
+        doneTasks.forEach(task => doneBox.appendChild(task));
+
+        bar.appendChild(label);
+        bar.appendChild(btn);
+        container.insertBefore(bar, anchor);
+        container.insertBefore(doneBox, anchor);
+    });
+}
+
 function persistPhaseVisibility(phaseId, collapsed) {
     const key = getPhaseVisibilityKey();
     if (!key) return;
@@ -1673,12 +1877,7 @@ function togglePhaseVisibility(phaseId) {
     const phaseEl = document.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
     if (!phaseEl) return;
     const current = normalizePhaseMode(phaseEl.dataset.phaseMode);
-    const hasDone = hasDoneTasksInPhase(phaseId);
-    const next = current === 'expanded'
-        ? (hasDone ? 'hide_done' : 'collapsed')
-        : current === 'hide_done'
-            ? 'collapsed'
-            : 'expanded';
+    const next = current === 'collapsed' ? 'expanded' : 'collapsed';
     const applied = applyPhaseVisibility(phaseId, next);
     persistPhaseVisibility(phaseId, applied);
 }
@@ -2147,7 +2346,8 @@ function renderNotesList() {
         } else {
             pinnedNotes.forEach(note => {
                 const btn = document.createElement('button');
-                btn.className = `notes-list-item draggable ${note.id === notesState.activeNoteId ? 'active' : ''}`;
+                const isSelected = selectedNotes.has(note.id);
+                btn.className = `notes-list-item draggable ${note.id === notesState.activeNoteId ? 'active' : ''} ${isSelected ? 'selected' : ''}`;
                 btn.draggable = true;
                 btn.dataset.noteId = note.id;
 
@@ -2168,6 +2368,7 @@ function renderNotesList() {
                 }
 
                 btn.innerHTML = `
+                    <div class="note-select-indicator"><i class="fa-solid fa-check"></i></div>
                     <div class="note-title-row">
                         <div class="note-title">${displayTitle}</div>
                         <div class="note-actions">
@@ -2181,8 +2382,22 @@ function renderNotesList() {
                 btn.addEventListener('click', async (e) => {
                     // avoid conflict with dragging
                     if (btn.classList.contains('dragging')) return;
-                    await setActiveNote(note.id);
-                    scrollNotesEditorIntoView();
+
+                    // Handle selection mode
+                    if (shouldIgnoreNoteSelection(e.target)) {
+                        return;
+                    }
+
+                    // Toggle selection if in selection mode or shift/ctrl key pressed
+                    if (selectedNotes.size > 0 || e.shiftKey || e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        const nowSelected = !selectedNotes.has(note.id);
+                        setNoteSelected(note.id, nowSelected);
+                        updateNotesBulkBar();
+                    } else {
+                        await setActiveNote(note.id);
+                        scrollNotesEditorIntoView();
+                    }
                 });
                 const pinBtn = btn.querySelector('.pin-btn');
                 if (pinBtn) {
@@ -2227,7 +2442,9 @@ function renderNotesList() {
     } else {
         regularNotes.forEach(note => {
         const btn = document.createElement('button');
-        btn.className = `notes-list-item ${note.id === notesState.activeNoteId ? 'active' : ''}`;
+        const isSelected = selectedNotes.has(note.id);
+        btn.className = `notes-list-item ${note.id === notesState.activeNoteId ? 'active' : ''} ${isSelected ? 'selected' : ''}`;
+        btn.dataset.noteId = note.id;
 
         // Use auto-generated title if note title is default
         let displayTitle = note.title;
@@ -2248,6 +2465,7 @@ function renderNotesList() {
         }
 
         btn.innerHTML = `
+            <div class="note-select-indicator"><i class="fa-solid fa-check"></i></div>
             <div class="note-title-row">
                 <div class="note-title">${displayTitle}</div>
                 <div class="note-actions">
@@ -2258,9 +2476,22 @@ function renderNotesList() {
             </div>
             <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
         `;
-        btn.addEventListener('click', async () => {
-            await setActiveNote(note.id);
-            scrollNotesEditorIntoView();
+        btn.addEventListener('click', async (e) => {
+            // Handle selection mode
+            if (shouldIgnoreNoteSelection(e.target)) {
+                return;
+            }
+
+            // Toggle selection if in selection mode or shift/ctrl key pressed
+            if (selectedNotes.size > 0 || e.shiftKey || e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                const nowSelected = !selectedNotes.has(note.id);
+                setNoteSelected(note.id, nowSelected);
+                updateNotesBulkBar();
+            } else {
+                await setActiveNote(note.id);
+                scrollNotesEditorIntoView();
+            }
         });
 
         const pinBtn = btn.querySelector('.pin-btn');
@@ -5691,6 +5922,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initDragAndDrop();
     normalizePhaseParents();
+    organizePhaseDoneTasks();
     restorePhaseVisibility();
     initStickyListHeader();
     initTaskFilters();
@@ -6124,9 +6356,7 @@ function renderRecallList() {
             recallState.selectedId = null;
         }
     }
-    if (!recallState.selectedId && recallState.items.length) {
-        recallState.selectedId = recallState.items[0].id;
-    }
+    // Don't auto-select first recall - keep detail box empty until user clicks
     renderRecallDetail(getSelectedRecall());
 }
 
