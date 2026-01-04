@@ -5,6 +5,16 @@ from datetime import datetime, date, time
 
 db = SQLAlchemy()
 
+
+def _split_tags(raw):
+    """Normalize a comma-separated tag string into a list."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [t.strip() for t in raw if t and str(t).strip()]
+    return [t.strip() for t in str(raw).split(',') if t.strip()]
+
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -174,8 +184,12 @@ class Note(db.Model):
     calendar_event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     title = db.Column(db.String(150), nullable=False, default='Untitled Note')
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
+    pinned = db.Column(db.Boolean, default=False)
+    pin_order = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    share_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
+    is_public = db.Column(db.Boolean, default=False, nullable=False)
 
     def to_dict(self):
         return {
@@ -184,9 +198,59 @@ class Note(db.Model):
             'content': self.content or '',
             'todo_item_id': self.todo_item_id,
             'calendar_event_id': self.calendar_event_id,
+            'pinned': bool(self.pinned),
+            'pin_order': self.pin_order or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'is_public': self.is_public,
+            'share_token': self.share_token,
+        }
+
+
+class RecallItem(db.Model):
+    """Lightweight personal recall item (links, ideas, sources, etc.)."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    category = db.Column(db.String(80), nullable=False, default='General')
+    type = db.Column(db.String(30), nullable=False, default='note')  # link | idea | source | other
+    content = db.Column(db.Text, nullable=True)
+    tags = db.Column(db.Text, nullable=True)  # comma-separated for simplicity
+    priority = db.Column(db.String(10), nullable=False, default='medium')  # low | medium | high
+    pinned = db.Column(db.Boolean, default=False)
+    reminder_at = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='active')  # active | archived
+    source_url = db.Column(db.String(400), nullable=True)
+    summary = db.Column(db.Text, nullable=True)
+    search_blob = db.Column(db.Text, nullable=True)
+    embedding = db.Column(db.Text, nullable=True)  # JSON array of floats
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def tag_list(self):
+        return _split_tags(self.tags)
+
+    def to_dict(self, include_similarity=False, similarity=None):
+        data = {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'category': self.category,
+            'type': self.type,
+            'content': self.content or '',
+            'tags': self.tag_list(),
+            'priority': self.priority,
+            'pinned': bool(self.pinned),
+            'reminder_at': self.reminder_at.isoformat() if self.reminder_at else None,
+            'status': self.status,
+            'source_url': self.source_url,
+            'summary': self.summary,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+        if include_similarity and similarity is not None:
+            data['similarity'] = similarity
+        return data
 
 
 class CalendarEvent(db.Model):

@@ -128,19 +128,31 @@ def ensure_note_table(cur):
                 calendar_event_id INTEGER,
                 title VARCHAR(150) NOT NULL DEFAULT 'Untitled Note',
                 content TEXT,
+                pinned BOOLEAN DEFAULT 0,
+                pin_order INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                share_token VARCHAR(64) UNIQUE,
+                is_public BOOLEAN DEFAULT 0 NOT NULL
             )
             """
         )
         print("[add] note table created")
+        # Create index on share_token
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_note_share_token ON note(share_token)")
         return
     add_column(cur, "note", "todo_item_id", "INTEGER")
     add_column(cur, "note", "calendar_event_id", "INTEGER")
     add_column(cur, "note", "title", "VARCHAR(150) NOT NULL DEFAULT 'Untitled Note'")
     add_column(cur, "note", "content", "TEXT")
+    add_column(cur, "note", "pinned", "BOOLEAN DEFAULT 0")
+    add_column(cur, "note", "pin_order", "INTEGER DEFAULT 0")
     add_column(cur, "note", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "note", "share_token", "VARCHAR(64)")
+    add_column(cur, "note", "is_public", "BOOLEAN DEFAULT 0 NOT NULL")
+    # Create index on share_token if it doesn't exist
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_note_share_token ON note(share_token)")
 
 
 def ensure_calendar_event_table(cur):
@@ -194,6 +206,51 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
     add_column(cur, "calendar_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "calendar_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_recall_table(cur):
+    """Create or align the recalls table used for the Recall module."""
+    if not table_exists(cur, "recall_item"):
+        cur.execute(
+            """
+            CREATE TABLE recall_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                category VARCHAR(80) NOT NULL DEFAULT 'General',
+                type VARCHAR(30) NOT NULL DEFAULT 'note',
+                content TEXT,
+                tags TEXT,
+                priority VARCHAR(10) NOT NULL DEFAULT 'medium',
+                pinned BOOLEAN DEFAULT 0,
+                reminder_at TIMESTAMP,
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
+                source_url VARCHAR(400),
+                summary TEXT,
+                search_blob TEXT,
+                embedding TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] recall_item table created")
+        return
+
+    add_column(cur, "recall_item", "category", "VARCHAR(80) NOT NULL DEFAULT 'General'")
+    add_column(cur, "recall_item", "type", "VARCHAR(30) NOT NULL DEFAULT 'note'")
+    add_column(cur, "recall_item", "content", "TEXT")
+    add_column(cur, "recall_item", "tags", "TEXT")
+    add_column(cur, "recall_item", "priority", "VARCHAR(10) NOT NULL DEFAULT 'medium'")
+    add_column(cur, "recall_item", "pinned", "BOOLEAN DEFAULT 0")
+    add_column(cur, "recall_item", "reminder_at", "TIMESTAMP")
+    add_column(cur, "recall_item", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'")
+    add_column(cur, "recall_item", "source_url", "VARCHAR(400)")
+    add_column(cur, "recall_item", "summary", "TEXT")
+    add_column(cur, "recall_item", "search_blob", "TEXT")
+    add_column(cur, "recall_item", "embedding", "TEXT")
+    add_column(cur, "recall_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "recall_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
 def ensure_notification_tables(cur):
@@ -286,6 +343,7 @@ def main():
         ensure_todo_item_table(cur)
         ensure_note_table(cur)
         ensure_calendar_event_table(cur)
+        ensure_recall_table(cur)
         ensure_notification_tables(cur)
         conn.commit()
         print("Baseline migration complete.")

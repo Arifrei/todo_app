@@ -10,13 +10,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='3') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='mobile-enhancements.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 
     <!-- Capacitor Core (for native app) -->
-    <script type="module" src="/capacitor.js"></script>
+    <!-- <script type="module" src="/capacitor.js"></script> -->
 
     <script>
         window.VAPID_PUBLIC_KEY = "{{ config.get('VAPID_PUBLIC_KEY', '') }}";
@@ -73,6 +73,12 @@
                         <a href="/notes" class="{{ 'active' if request.path.startswith('/notes') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-note-sticky"></i></span>
                             <span class="nav-label">Notes</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/recalls" class="{{ 'active' if request.path.startswith('/recalls') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-inbox"></i></span>
+                            <span class="nav-label">Recalls</span>
                         </a>
                     </li>
                     <li>
@@ -172,7 +178,7 @@
         <div class="ai-panel-header">
             <div>
                 <strong>AI Assistant</strong>
-                <div class="ai-subtitle">Ask to add/list/move tasks</div>
+                <div class="ai-subtitle">Ask to add/list/move tasks or capture/find recalls</div>
             </div>
             <button class="btn-icon" onclick="toggleAIPanel()" aria-label="Close AI panel">
                 <i class="fa-solid fa-xmark"></i>
@@ -180,7 +186,7 @@
         </div>
         <div class="ai-messages" id="ai-messages"></div>
         <div class="ai-input-row">
-            <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Add ‘Finish onboarding’ under Phase Week 1 in Project Onboarding"></textarea>
+            <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Remember https://example.com as a research link tagged ai, or move “Finish onboarding” into Phase Week 1"></textarea>
             <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('panel')" aria-label="Toggle voice input">
                 <i class="fa-solid fa-microphone"></i>
             </button>
@@ -199,7 +205,7 @@
     <!-- Capacitor Notification Service -->
     <script src="{{ url_for('static', filename='capacitor-notifications.js') }}"></script>
 
-    <script src="{{ url_for('static', filename='app.js', v='3') }}"></script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
     <script>
         // Disable all service workers to avoid caching issues (not needed in native app)
         if ('serviceWorker' in navigator && !window.isNativeApp?.()) {

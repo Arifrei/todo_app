@@ -2,15 +2,18 @@ import os
 import re
 import json
 import logging
+import math
 import pytz
+import secrets
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
-from ai_service import run_ai_chat
-from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription
+from ai_service import run_ai_chat, get_openai_client
+from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription, RecallItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
+from bs4 import BeautifulSoup
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DOTENV_PATH = find_dotenv() or os.path.join(BASE_DIR, '.env')
@@ -56,6 +59,203 @@ def get_current_user():
     if user_id:
         return db.session.get(User, user_id)
     return None
+
+
+def _normalize_tags(raw):
+    """Turn comma-delimited or list input into a clean list of tags."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    return [t.strip() for t in str(raw).split(',') if t.strip()]
+
+
+def _tags_to_string(tags):
+    return ','.join(_normalize_tags(tags))
+
+
+def _parse_reminder(dt_str):
+    if not dt_str:
+        return None
+    try:
+        return datetime.fromisoformat(dt_str)
+    except Exception:
+        return None
+
+
+def _build_recall_blob(title, content, category, type_name, tags, source_url=None, summary=None):
+    fields = [
+        title or '',
+        category or '',
+        type_name or '',
+        content or '',
+        summary or '',
+        ' '.join(_normalize_tags(tags)),
+        source_url or '',
+    ]
+    return ' '.join([f.strip() for f in fields if f]).strip()
+
+
+def _fetch_url_content(url, max_length=3000):
+    """Fetch and extract text content from a URL. Returns None on failure."""
+    try:
+        response = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Remove script and style elements
+        for script in soup(['script', 'style', 'nav', 'footer', 'header']):
+            script.decompose()
+
+        # Get text content
+        text = soup.get_text()
+
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = ' '.join(chunk for chunk in chunks if chunk)
+
+        # Truncate if too long
+        if len(text) > max_length:
+            text = text[:max_length] + '...'
+
+        return text if text else None
+    except Exception as exc:
+        app.logger.warning(f"URL fetch failed for {url}: {exc}")
+        return None
+
+
+def _generate_recall_summary(title, content, category, type_name, source_url=None):
+    """Generate an intelligent summary. Returns None if not enough context or on failure."""
+    if not app.config.get('OPENAI_API_KEY'):
+        return None
+
+    # If it's a link, try to fetch the actual content
+    url_content = None
+    if source_url:
+        url_content = _fetch_url_content(source_url)
+
+    # Determine what to summarize
+    if url_content:
+        # URL content available - summarize that
+        main_content = url_content[:2500]
+    elif content and len(content.strip()) >= 30:
+        # We have substantial user content - summarize that
+        main_content = content
+    else:
+        # Not enough content to warrant a summary
+        return None
+
+    # Build the prompt focusing on CONTENT, not title
+    if url_content:
+        prompt = f"""Summarize what this webpage is about in one brief sentence (max 15 words).
+Focus on the actual content, not just the title. Be concise.
+
+Webpage: {main_content}"""
+    else:
+        prompt = f"""Summarize what this is about in one brief sentence (max 15 words).
+Focus on the actual information, not just restating the title. Be concise.
+
+Content: {main_content}"""
+
+    try:
+        client = get_openai_client()
+        model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "You write brief, informative summaries that describe WHAT the content is about in 15 words or less. Focus on substance over titles. If the content lacks substance or is just a title, return an empty response."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=40,
+            temperature=0.3
+        )
+        summary = (resp.choices[0].message.content or '').strip()
+
+        # Quality checks
+        if len(summary) < 15:
+            return None
+
+        # Check if summary is just rephrasing the title
+        title_lower = title.lower()
+        summary_lower = summary.lower()
+        # If more than 60% of title words are in summary in same order, it's probably just restating
+        title_words = set(title_lower.split())
+        summary_words = set(summary_lower.split())
+        overlap = len(title_words & summary_words) / max(len(title_words), 1)
+        if overlap > 0.7 and len(summary_words) < len(title_words) + 3:
+            # Summary is too similar to title, skip it
+            return None
+
+        return summary
+    except Exception as exc:
+        app.logger.warning(f"Recall summary failed: {exc}")
+        return None
+
+
+def _generate_recall_embedding(text):
+    """Create an embedding vector for recall search; returns list or None on failure."""
+    cleaned = (text or '').strip()
+    if not cleaned:
+        return None
+    if not app.config.get('OPENAI_API_KEY'):
+        return None
+    try:
+        client = get_openai_client()
+        model_name = os.environ.get('OPENAI_EMBED_MODEL', 'text-embedding-3-small')
+        resp = client.embeddings.create(model=model_name, input=cleaned[:7000])
+        return resp.data[0].embedding
+    except Exception as exc:
+        app.logger.warning(f"Embedding generation failed: {exc}")
+        return None
+
+
+def _cosine_similarity(vec_a, vec_b):
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    mag_a = math.sqrt(sum(a * a for a in vec_a))
+    mag_b = math.sqrt(sum(b * b for b in vec_b))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _semantic_search_recalls(user_id, query_text, limit=6, include_archived=False):
+    """Rank recalls by semantic similarity with keyword fallback."""
+    if not query_text:
+        return []
+
+    base_q = RecallItem.query.filter(RecallItem.user_id == user_id)
+    if not include_archived:
+        base_q = base_q.filter(RecallItem.status != 'archived')
+    recalls = base_q.all()
+
+    query_embedding = _generate_recall_embedding(query_text)
+    normalized_query = query_text.lower()
+    results = []
+
+    for r in recalls:
+        emb = None
+        if r.embedding:
+            try:
+                emb = json.loads(r.embedding)
+            except Exception:
+                emb = None
+        similarity = _cosine_similarity(query_embedding, emb) if query_embedding and emb else 0.0
+
+        # Keyword bonus if embedding is unavailable or ties are close
+        blob = (r.search_blob or '').lower()
+        if normalized_query and normalized_query in blob:
+            similarity = max(similarity, 0.35)
+        results.append((similarity, r))
+
+    results.sort(key=lambda x: x[0], reverse=True)
+    top = results[:limit]
+    return [r.to_dict(include_similarity=True, similarity=score) for score, r in top]
 
 
 def parse_outline(outline_text, list_type='list'):
@@ -904,6 +1104,15 @@ def notes_page():
         return redirect(url_for('select_user'))
     return render_template('notes.html')
 
+
+@app.route('/recalls')
+def recalls_page():
+    """Recall inbox/workspace for links, ideas, and sources."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('recalls.html')
+
+
 @app.route('/ai')
 def ai_page():
     """AI assistant full page."""
@@ -1104,8 +1313,222 @@ def handle_notes():
         db.session.commit()
         return jsonify(note.to_dict()), 201
 
-    notes = Note.query.filter_by(user_id=user.id).order_by(Note.updated_at.desc()).all()
+    notes = Note.query.filter_by(user_id=user.id).order_by(
+        Note.pinned.desc(),
+        Note.pin_order.asc(),
+        Note.updated_at.desc()
+    ).all()
     return jsonify([n.to_dict() for n in notes])
+
+
+@app.route('/api/notes/reorder', methods=['POST'])
+def reorder_notes():
+    """Reorder pinned notes by explicit id list (pinned only)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    ids = data.get('ids')
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'ids array required'}), 400
+
+    pinned_notes = Note.query.filter(
+        Note.user_id == user.id,
+        Note.pinned.is_(True),
+        Note.id.in_(ids)
+    ).all()
+    pinned_map = {n.id: n for n in pinned_notes}
+    order_val = 1
+    for raw_id in ids:
+        try:
+            nid = int(raw_id)
+        except (ValueError, TypeError):
+            continue
+        note = pinned_map.get(nid)
+        if note:
+            note.pin_order = order_val
+            order_val += 1
+    db.session.commit()
+    return jsonify({'pinned': order_val - 1})
+
+
+@app.route('/api/recalls', methods=['GET', 'POST'])
+def handle_recalls():
+    """List or create recall items."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'POST':
+        data = request.json or request.form or {}
+        title = (data.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'Title is required'}), 400
+
+        category = (data.get('category') or 'General').strip() or 'General'
+        type_name = (data.get('type') or 'note').strip() or 'note'
+        content = (data.get('content') or '').strip()
+        keywords = data.get('keywords') or data.get('tags')
+        tags = _normalize_tags(keywords)
+        pinned = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
+        reminder_at = _parse_reminder(data.get('reminder_at'))
+        status = (data.get('status') or 'active').strip()
+        source_url = (data.get('source_url') or '').strip() or None
+        summary = (data.get('summary') or '').strip() or None
+
+        if not summary:
+            summary = _generate_recall_summary(title, content, category, type_name, source_url)
+        blob = _build_recall_blob(title, content, category, type_name, tags, source_url, summary)
+        embedding = _generate_recall_embedding(blob)
+
+        recall = RecallItem(
+            user_id=user.id,
+            title=title,
+            category=category,
+            type=type_name,
+            content=content,
+            tags=_tags_to_string(tags),
+            priority='medium',
+            pinned=pinned,
+            reminder_at=reminder_at,
+            status=status if status in ['active', 'archived'] else 'active',
+            source_url=source_url,
+            summary=summary,
+            search_blob=blob,
+            embedding=json.dumps(embedding) if embedding else None,
+        )
+        db.session.add(recall)
+        db.session.commit()
+        return jsonify(recall.to_dict()), 201
+
+    # GET
+    query = RecallItem.query.filter_by(user_id=user.id)
+    status_filter = request.args.get('status', 'active')
+    if status_filter:
+        query = query.filter(RecallItem.status == status_filter)
+    category = request.args.get('category')
+    if category and category.lower() != 'all':
+        query = query.filter(RecallItem.category.ilike(category))
+    type_filter = request.args.get('type')
+    if type_filter and type_filter.lower() != 'all':
+        query = query.filter(RecallItem.type.ilike(type_filter))
+    tag_filter = request.args.get('tag')
+    if tag_filter:
+        query = query.filter(RecallItem.tags.ilike(f"%{tag_filter}%"))
+    pinned_only = request.args.get('pinned') in ['1', 'true', 'yes', 'on']
+    if pinned_only:
+        query = query.filter(RecallItem.pinned.is_(True))
+
+    search_q = (request.args.get('q') or '').strip()
+    if search_q:
+        like_expr = f"%{search_q}%"
+        query = query.filter(db.or_(
+            RecallItem.title.ilike(like_expr),
+            RecallItem.content.ilike(like_expr),
+            RecallItem.category.ilike(like_expr),
+            RecallItem.tags.ilike(like_expr),
+            RecallItem.summary.ilike(like_expr),
+        ))
+
+    sort = request.args.get('sort', 'smart')
+    if sort == 'newest':
+        query = query.order_by(RecallItem.created_at.desc())
+    elif sort == 'oldest':
+        query = query.order_by(RecallItem.created_at.asc())
+    elif sort == 'reminder':
+        query = query.order_by(RecallItem.reminder_at.is_(None), RecallItem.reminder_at.asc())
+    else:
+        # smart: pinned desc, reminder asc, created desc
+        query = query.order_by(RecallItem.pinned.desc(), RecallItem.reminder_at.is_(None), RecallItem.reminder_at.asc(), RecallItem.created_at.desc())
+
+    recalls = query.all()
+    return jsonify([r.to_dict() for r in recalls])
+
+
+@app.route('/api/recalls/<int:recall_id>', methods=['GET', 'PUT', 'DELETE'])
+def recall_detail(recall_id):
+    """Get, update, or delete a single recall item."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    recall = RecallItem.query.filter_by(id=recall_id, user_id=user.id).first()
+    if not recall:
+        return jsonify({'error': 'Recall not found'}), 404
+
+    if request.method == 'GET':
+        return jsonify(recall.to_dict())
+
+    if request.method == 'DELETE':
+        db.session.delete(recall)
+        db.session.commit()
+        return jsonify({'deleted': True})
+
+    data = request.json or request.form or {}
+    if 'title' in data:
+        title_val = (data.get('title') or '').strip()
+        if title_val:
+            recall.title = title_val
+    if 'category' in data:
+        category_val = (data.get('category') or '').strip()
+        if category_val:
+            recall.category = category_val
+    if 'type' in data:
+        type_val = (data.get('type') or '').strip()
+        if type_val:
+            recall.type = type_val
+    if 'content' in data:
+        recall.content = (data.get('content') or '').strip()
+    if 'tags' in data or 'keywords' in data:
+        recall.tags = _tags_to_string(data.get('keywords') or data.get('tags'))
+    if 'pinned' in data:
+        recall.pinned = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
+    if 'reminder_at' in data:
+        recall.reminder_at = _parse_reminder(data.get('reminder_at'))
+    if 'status' in data:
+        status_val = (data.get('status') or '').strip()
+        if status_val in ['active', 'archived']:
+            recall.status = status_val
+    if 'source_url' in data:
+        recall.source_url = (data.get('source_url') or '').strip() or None
+    if 'summary' in data:
+        recall.summary = (data.get('summary') or '').strip() or None
+
+    # Refresh search blob + embedding if contentful fields changed
+    recall.search_blob = _build_recall_blob(
+        recall.title,
+        recall.content,
+        recall.category,
+        recall.type,
+        _normalize_tags(recall.tags),
+        recall.source_url,
+        recall.summary
+    )
+    embedding = _generate_recall_embedding(recall.search_blob)
+    recall.embedding = json.dumps(embedding) if embedding else None
+    recall.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(recall.to_dict())
+
+
+@app.route('/api/recalls/search', methods=['POST'])
+def search_recalls():
+    """Semantic + keyword recall search for the AI helper and UI."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    query_text = (data.get('query') or '').strip()
+    if not query_text:
+        return jsonify({'error': 'Query is required'}), 400
+    limit = data.get('limit', 6)
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 6
+    limit = max(1, min(limit, 15))
+    matches = _semantic_search_recalls(user.id, query_text, limit=limit, include_archived=False)
+    return jsonify({'query': query_text, 'results': matches})
 
 
 @app.route('/api/notes/<int:note_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -1124,9 +1547,22 @@ def handle_note(note_id):
 
     if request.method == 'PUT':
         data = request.json or {}
-        note.title = (data.get('title') or '').strip() or 'Untitled Note'
-        note.content = data.get('content', note.content)
+        if 'title' in data:
+            note.title = (data.get('title') or '').strip() or 'Untitled Note'
+        if 'content' in data:
+            note.content = data.get('content', note.content)
         note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+        if 'pinned' in data:
+            is_pin = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
+            if is_pin and not note.pinned:
+                max_pin = db.session.query(db.func.coalesce(db.func.max(Note.pin_order), 0)).filter(
+                    Note.user_id == user.id,
+                    Note.pinned.is_(True)
+                ).scalar()
+                note.pin_order = (max_pin or 0) + 1
+            if not is_pin:
+                note.pin_order = 0
+            note.pinned = is_pin
         if 'todo_item_id' in data:
             todo_item_id = data.get('todo_item_id')
             if todo_item_id is None:
@@ -1162,6 +1598,43 @@ def handle_note(note_id):
         return jsonify(note.to_dict())
 
     return jsonify(note.to_dict())
+
+
+@app.route('/api/notes/<int:note_id>/share', methods=['POST', 'DELETE'])
+def share_note(note_id):
+    """Generate or revoke a shareable link for a note."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+
+    if request.method == 'POST':
+        # Generate a new share token
+        note.share_token = secrets.token_urlsafe(32)
+        note.is_public = True
+        db.session.commit()
+        share_url = url_for('view_shared_note', token=note.share_token, _external=True)
+        return jsonify({
+            'share_token': note.share_token,
+            'share_url': share_url,
+            'is_public': note.is_public
+        })
+
+    if request.method == 'DELETE':
+        # Revoke sharing
+        note.share_token = None
+        note.is_public = False
+        db.session.commit()
+        return jsonify({'message': 'Sharing revoked'})
+
+
+@app.route('/shared/<token>')
+def view_shared_note(token):
+    """Public view for shared notes (no authentication required)."""
+    note = Note.query.filter_by(share_token=token, is_public=True).first_or_404()
+    return render_template('shared_note.html', note=note)
+
 
 # Calendar API
 ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
@@ -2552,4 +3025,4 @@ def reorder_items(list_id):
     return jsonify({'updated': len(ordered_ids)})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, ssl_context=('cert.pem', 'key.pem'))
+    app.run(host='0.0.0.0', port=5000)

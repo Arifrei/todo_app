@@ -24,9 +24,10 @@ let moveItemType = 'task';
 let touchDragActive = false;
 let touchDragId = null;
 let touchDragBlock = [];
-let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null };
+let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false };
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
+let recallState = { items: [], selectedId: null, editingId: null, filters: { q: '', category: 'all', type: 'all', status: 'active', sort: 'smart', pinnedOnly: false, tag: null }, aiResults: [] };
 let currentTaskFilter = 'all';
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false };
 const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
@@ -1678,14 +1679,30 @@ function initNotesPage() {
     const newBtn = document.getElementById('note-new-btn');
     const deleteBtn = document.getElementById('note-delete-btn');
     const refreshBtn = document.getElementById('note-refresh-btn');
+    const shareBtn = document.getElementById('note-share-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote());
     if (newBtn) newBtn.addEventListener('click', () => createNote());
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
     if (refreshBtn) refreshBtn.addEventListener('click', () => loadNotes({ keepSelection: true }));
+    if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
 
-    editor.addEventListener('input', refreshNoteDirtyState);
+    editor.addEventListener('input', () => {
+        refreshNoteDirtyState();
+        autoGenerateTitle();
+    });
     titleInput.addEventListener('input', refreshNoteDirtyState);
+
+    // Add keydown listener for checkbox auto-continuation
+    editor.addEventListener('keydown', handleNoteEditorKeydown);
+
+    // Add selection change listener to update toolbar states
+    document.addEventListener('selectionchange', () => {
+        const activeEl = document.activeElement;
+        if (activeEl === editor) {
+            updateNoteToolbarStates();
+        }
+    });
 
     bindNoteToolbar();
     loadNotes({ keepSelection: false, targetNoteId });
@@ -1729,7 +1746,14 @@ function applyNoteCommand(command) {
     editor.focus();
 
     if (command === 'checkbox') {
-        document.execCommand('insertHTML', false, '<label class="note-inline-checkbox"><input type="checkbox"> </label>');
+        // Toggle checkbox mode
+        notesState.checkboxMode = !notesState.checkboxMode;
+        updateNoteToolbarStates();
+
+        // If turning on checkbox mode, insert a checkbox at current position
+        if (notesState.checkboxMode) {
+            insertCheckbox();
+        }
         setNoteDirty(true);
         return;
     }
@@ -1737,6 +1761,7 @@ function applyNoteCommand(command) {
         if (toggleBlockquote()) return;
         document.execCommand('formatBlock', false, 'blockquote');
         setNoteDirty(true);
+        updateNoteToolbarStates();
         return;
     }
     if (command === 'code') {
@@ -1745,11 +1770,14 @@ function applyNoteCommand(command) {
         const html = selection ? `<code>${selection}</code>` : '<code></code>';
         document.execCommand('insertHTML', false, html);
         setNoteDirty(true);
+        updateNoteToolbarStates();
         return;
     }
 
     document.execCommand(command, false, null);
     refreshNoteDirtyState();
+    // Update toolbar states after a short delay to let the DOM update
+    setTimeout(() => updateNoteToolbarStates(), 10);
 }
 
 function applyNoteFontSize(sizePx) {
@@ -1851,6 +1879,165 @@ function toggleInlineCode() {
     return true;
 }
 
+function insertCheckbox() {
+    document.execCommand('insertHTML', false, '<label class="note-inline-checkbox"><input type="checkbox"> </label>');
+
+    // Bind the newly inserted checkbox
+    setTimeout(() => {
+        const editor = document.getElementById('note-editor');
+        if (editor) {
+            bindNoteCheckboxes();
+        }
+    }, 0);
+}
+
+function bindNoteCheckboxes() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    const checkboxes = editor.querySelectorAll('.note-inline-checkbox input[type="checkbox"]');
+    checkboxes.forEach(checkbox => {
+        // Remove existing listener to avoid duplicates
+        checkbox.removeEventListener('change', handleCheckboxChange);
+        // Add the event listener
+        checkbox.addEventListener('change', handleCheckboxChange);
+
+        // Apply initial state
+        const label = checkbox.closest('.note-inline-checkbox');
+        if (label) {
+            if (checkbox.checked) {
+                label.style.textDecoration = 'line-through';
+                label.style.opacity = '0.6';
+            } else {
+                label.style.textDecoration = 'none';
+                label.style.opacity = '1';
+            }
+        }
+    });
+}
+
+function handleCheckboxChange(e) {
+    const checkbox = e.target;
+    const label = checkbox.closest('.note-inline-checkbox');
+
+    if (label) {
+        if (checkbox.checked) {
+            label.style.textDecoration = 'line-through';
+            label.style.opacity = '0.6';
+        } else {
+            label.style.textDecoration = 'none';
+            label.style.opacity = '1';
+        }
+    }
+
+    setNoteDirty(true);
+}
+
+function updateNoteToolbarStates() {
+    const toolbar = document.getElementById('note-toolbar');
+    if (!toolbar) return;
+
+    // Update checkbox button state
+    const checkboxBtn = toolbar.querySelector('[data-command="checkbox"]');
+    if (checkboxBtn) {
+        if (notesState.checkboxMode) {
+            checkboxBtn.classList.add('active');
+        } else {
+            checkboxBtn.classList.remove('active');
+        }
+    }
+
+    // Update other formatting buttons based on current selection
+    const commands = ['bold', 'italic', 'underline', 'strikeThrough', 'insertUnorderedList', 'insertOrderedList'];
+    commands.forEach(cmd => {
+        const btn = toolbar.querySelector(`[data-command="${cmd}"]`);
+        if (btn) {
+            try {
+                const isActive = document.queryCommandState(cmd);
+                if (isActive) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            } catch (e) {
+                // Some commands might not be supported
+                btn.classList.remove('active');
+            }
+        }
+    });
+
+    // Check for code and quote formatting
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (sel && sel.rangeCount > 0) {
+        const node = sel.focusNode;
+        const el = node && (node.nodeType === 1 ? node : node.parentElement);
+
+        const codeBtn = toolbar.querySelector('[data-command="code"]');
+        if (codeBtn) {
+            const inCode = el && findAncestor(el, 'CODE');
+            if (inCode) {
+                codeBtn.classList.add('active');
+            } else {
+                codeBtn.classList.remove('active');
+            }
+        }
+
+        const quoteBtn = toolbar.querySelector('[data-command="quote"]');
+        if (quoteBtn) {
+            const inQuote = el && findAncestor(el, 'BLOCKQUOTE');
+            if (inQuote) {
+                quoteBtn.classList.add('active');
+            } else {
+                quoteBtn.classList.remove('active');
+            }
+        }
+    }
+}
+
+function handleNoteEditorKeydown(e) {
+    const editor = document.getElementById('note-editor');
+    if (!editor || e.key !== 'Enter') return;
+
+    // Handle checkbox mode
+    if (notesState.checkboxMode) {
+        const sel = window.getSelection ? window.getSelection() : null;
+        if (!sel || sel.rangeCount === 0) return;
+
+        // Check if we're on an empty line with just a checkbox
+        const range = sel.getRangeAt(0);
+        const container = range.startContainer;
+        const parentEl = container.nodeType === 1 ? container : container.parentElement;
+
+        // Find the current line/label
+        let label = parentEl;
+        while (label && label !== editor && label.tagName !== 'LABEL') {
+            label = label.parentElement;
+        }
+
+        if (label && label.classList.contains('note-inline-checkbox')) {
+            // Check if the label only contains the checkbox and whitespace
+            const textContent = label.textContent || '';
+            if (textContent.trim() === '') {
+                // Empty checkbox line - exit checkbox mode
+                e.preventDefault();
+                notesState.checkboxMode = false;
+                updateNoteToolbarStates();
+
+                // Remove the empty checkbox and insert a new line
+                label.remove();
+                document.execCommand('insertParagraph', false, null);
+                return;
+            }
+        }
+
+        // Not an empty line, insert new checkbox on next line
+        e.preventDefault();
+        document.execCommand('insertParagraph', false, null);
+        insertCheckbox();
+        setNoteDirty(true);
+    }
+}
+
 function setNoteDirty(dirty) {
     notesState.dirty = dirty;
     const saveBtn = document.getElementById('note-save-btn');
@@ -1913,29 +2100,147 @@ async function loadNotes(options = {}) {
 }
 
 function renderNotesList() {
-    const listEl = document.getElementById('notes-list');
-    if (!listEl) return;
-    if (!notesState.notes.length) {
-        listEl.innerHTML = `<div class="empty-state">
-            <p style="color: var(--text-muted); margin: 0;">No notes yet. Create one to get started.</p>
-        </div>`;
-        return;
+    const listPinned = document.getElementById('notes-list-pinned');
+    const listAll = document.getElementById('notes-list');
+    if (!listPinned || !listAll) return;
+
+    const pinnedNotes = notesState.notes.filter(n => n.pinned);
+    const regularNotes = notesState.notes.filter(n => !n.pinned);
+
+    if (listPinned) {
+        listPinned.innerHTML = '';
+        if (!pinnedNotes.length) {
+            listPinned.innerHTML = `<div class="empty-state"><p style="color: var(--text-muted); margin: 0;">No pinned notes.</p></div>`;
+        } else {
+            pinnedNotes.forEach(note => {
+                const btn = document.createElement('button');
+                btn.className = `notes-list-item draggable ${note.id === notesState.activeNoteId ? 'active' : ''}`;
+                btn.draggable = true;
+                btn.dataset.noteId = note.id;
+
+                let displayTitle = note.title;
+                if (!displayTitle || displayTitle === 'Untitled Note' || displayTitle === 'Untitled note') {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = note.content || '';
+                    const plainText = tempDiv.textContent || tempDiv.innerText || '';
+                    if (plainText.trim()) {
+                        const firstLine = plainText.split('\n')[0].trim();
+                        displayTitle = firstLine.substring(0, 35).trim();
+                        if (firstLine.length > 35 || plainText.split('\n').length > 1) {
+                            displayTitle += '...';
+                        }
+                    } else {
+                        displayTitle = 'Untitled';
+                    }
+                }
+
+                btn.innerHTML = `
+                    <div class="note-title-row">
+                        <div class="note-title">${displayTitle}</div>
+                        <div class="note-actions">
+                            <button class="btn-icon pin-btn active" title="Unpin">
+                                <i class="fa-solid fa-thumbtack"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
+                `;
+                btn.addEventListener('click', async (e) => {
+                    // avoid conflict with dragging
+                    if (btn.classList.contains('dragging')) return;
+                    await setActiveNote(note.id);
+                    scrollNotesEditorIntoView();
+                });
+                const pinBtn = btn.querySelector('.pin-btn');
+                if (pinBtn) {
+                    pinBtn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        await toggleNotePin(note.id, false);
+                    });
+                }
+
+                btn.addEventListener('dragstart', (e) => {
+                    btn.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', note.id);
+                    // Mark current drag index
+                    btn.dataset.dragIndex = Array.from(listPinned.children).indexOf(btn);
+                });
+                btn.addEventListener('dragend', async (e) => {
+                    btn.classList.remove('dragging');
+                    await reorderPinnedFromDOM();
+                });
+                btn.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    const dragging = listPinned.querySelector('.dragging');
+                    if (!dragging || dragging === btn) return;
+                    const afterElement = getDragAfterElement(listPinned, e.clientY);
+                    if (afterElement == null) {
+                        listPinned.appendChild(dragging);
+                    } else {
+                        listPinned.insertBefore(dragging, afterElement);
+                    }
+                });
+                listPinned.appendChild(btn);
+            });
+        }
     }
 
-    listEl.innerHTML = '';
-    notesState.notes.forEach(note => {
+    listAll.innerHTML = '';
+    if (!regularNotes.length) {
+        listAll.innerHTML = `<div class="empty-state">
+            <p style="color: var(--text-muted); margin: 0;">No notes yet. Create one to get started.</p>
+        </div>`;
+    } else {
+        regularNotes.forEach(note => {
         const btn = document.createElement('button');
         btn.className = `notes-list-item ${note.id === notesState.activeNoteId ? 'active' : ''}`;
+
+        // Use auto-generated title if note title is default
+        let displayTitle = note.title;
+        if (!displayTitle || displayTitle === 'Untitled Note' || displayTitle === 'Untitled note') {
+            // Extract first line from content
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = note.content || '';
+            const plainText = tempDiv.textContent || tempDiv.innerText || '';
+            if (plainText.trim()) {
+                const firstLine = plainText.split('\n')[0].trim();
+                displayTitle = firstLine.substring(0, 35).trim();
+                if (firstLine.length > 35 || plainText.split('\n').length > 1) {
+                    displayTitle += '...';
+                }
+            } else {
+                displayTitle = 'Untitled';
+            }
+        }
+
         btn.innerHTML = `
-            <div class="note-title">${note.title || 'Untitled'}</div>
+            <div class="note-title-row">
+                <div class="note-title">${displayTitle}</div>
+                <div class="note-actions">
+                    <button class="btn-icon pin-btn ${note.pinned ? 'active' : ''}" title="${note.pinned ? 'Unpin' : 'Pin'}">
+                        <i class="fa-solid fa-thumbtack"></i>
+                    </button>
+                </div>
+            </div>
             <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
         `;
         btn.addEventListener('click', async () => {
             await setActiveNote(note.id);
             scrollNotesEditorIntoView();
         });
-        listEl.appendChild(btn);
-    });
+
+        const pinBtn = btn.querySelector('.pin-btn');
+        if (pinBtn) {
+            pinBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await toggleNotePin(note.id, !note.pinned);
+            });
+        }
+
+        listAll.appendChild(btn);
+        });
+    }
 }
 
 function formatNoteDate(dateStr) {
@@ -1964,14 +2269,52 @@ async function setActiveNote(noteId, options = {}) {
 
     notesState.activeNoteId = noteId;
     titleInput.value = note.title || '';
+    titleInput.placeholder = 'Untitled note';
     editor.innerHTML = note.content || '';
     updatedLabel.textContent = `Updated ${formatNoteDate(note.updated_at)}`;
     notesState.activeSnapshot = {
         title: (note.title || '').trim(),
         content: (note.content || '').trim()
     };
+    notesState.checkboxMode = false; // Reset checkbox mode when switching notes
     setNoteDirty(false);
     renderNotesList();
+    updateNoteToolbarStates(); // Update toolbar button states
+    bindNoteCheckboxes(); // Bind checkbox event handlers
+}
+
+async function toggleNotePin(noteId, pinned) {
+    const note = notesState.notes.find(n => n.id === noteId);
+    const fallbackTitle = note ? deriveNoteAutoTitleFromHtml(note.content || '') : 'Untitled';
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned, title: (note && note.title) ? note.title : fallbackTitle })
+        });
+        if (!res.ok) throw new Error('Failed to update pin');
+        await loadNotes({ keepSelection: true });
+    } catch (err) {
+        console.error('Pin toggle failed', err);
+    }
+}
+
+async function movePinnedNote(noteId, direction) {
+    // Drag-based reordering supersedes arrow controls; keep function to avoid breaks if called elsewhere
+    return;
+}
+
+function getDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('.draggable:not(.dragging)')];
+    return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset, element: child };
+        } else {
+            return closest;
+        }
+    }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
 }
 
 async function saveCurrentNote(options = {}) {
@@ -1990,8 +2333,14 @@ async function saveCurrentNote(options = {}) {
         return;
     }
 
+    // Use auto-generated title if no explicit title is set
+    let title = titleInput.value.trim();
+    if (!title || title === 'Untitled note') {
+        title = titleInput.placeholder || 'Untitled Note';
+    }
+
     const payload = {
-        title: titleInput.value.trim() || 'Untitled Note',
+        title: title,
         content: editor.innerHTML.trim()
     };
 
@@ -2055,7 +2404,10 @@ async function createNote() {
         renderNotesList();
         setActiveNote(newNote.id, { skipAutosave: true });
         const titleInput = document.getElementById('note-title');
-        if (titleInput) titleInput.focus();
+        if (titleInput) {
+            titleInput.placeholder = 'Untitled note';
+            titleInput.focus();
+        }
     } catch (err) {
         console.error('Error creating note:', err);
     }
@@ -2082,10 +2434,314 @@ function clearNoteEditor() {
     const updatedLabel = document.getElementById('note-updated-label');
     if (editor) editor.innerHTML = '';
     if (titleInput) titleInput.value = '';
+    if (titleInput) titleInput.placeholder = 'Untitled note';
     if (updatedLabel) updatedLabel.textContent = 'No note selected';
     notesState.activeNoteId = null;
     notesState.activeSnapshot = null;
+    notesState.checkboxMode = false; // Reset checkbox mode
     setNoteDirty(false);
+    updateNoteToolbarStates(); // Update toolbar button states
+}
+
+function autoGenerateTitle() {
+    const titleInput = document.getElementById('note-title');
+    const editor = document.getElementById('note-editor');
+
+    if (!titleInput || !editor) return;
+
+    // Only auto-generate if title is empty or default "Untitled note"
+    const currentTitle = titleInput.value.trim();
+    if (currentTitle && currentTitle !== 'Untitled note') return;
+
+    // Get plain text with preserved newlines
+    const rawText = (editor.innerText || editor.textContent || '').replace(/\u00a0/g, ' ');
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    if (!lines.length) {
+        titleInput.placeholder = 'Untitled note';
+        return;
+    }
+
+    const firstLine = lines[0];
+    const words = firstLine.split(/\s+/).filter(Boolean);
+    let autoTitle;
+
+    if (words.length <= 5) {
+        autoTitle = firstLine; // use full first line when short
+    } else {
+        autoTitle = words.slice(0, 3).join(' ') + '...';
+    }
+
+    titleInput.placeholder = autoTitle;
+}
+
+function deriveNoteAutoTitleFromHtml(html) {
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html || '';
+    const rawText = (tempDiv.innerText || tempDiv.textContent || '').replace(/\u00a0/g, ' ');
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return 'Untitled';
+    const firstLine = lines[0];
+    const words = firstLine.split(/\s+/).filter(Boolean);
+    if (words.length <= 5) return firstLine;
+    return words.slice(0, 3).join(' ') + '...';
+}
+
+// Share Note Functions
+async function openShareNoteModal() {
+    const noteId = notesState.activeNoteId;
+    if (!noteId) {
+        alert('Please select a note to share');
+        return;
+    }
+
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    // Try to use native Web Share API first (works like Google/real apps)
+    if (navigator.share) {
+        console.log('Web Share API is available, attempting to share...');
+        try {
+            // Convert HTML content to plain text for sharing
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = note.content || '';
+            const plainText = tempDiv.textContent || tempDiv.innerText || '';
+
+            await navigator.share({
+                title: note.title || 'Untitled Note',
+                text: plainText
+            });
+            console.log('Share successful!');
+            return; // Successfully shared, exit
+        } catch (err) {
+            // User cancelled or share failed, show modal as fallback
+            console.log('Share error:', err.name, err.message);
+            if (err.name !== 'AbortError') {
+                console.log('Share failed, showing modal as fallback');
+            } else {
+                console.log('User cancelled share');
+                return; // User cancelled, don't show modal
+            }
+        }
+    } else {
+        console.log('Web Share API not available - Protocol:', window.location.protocol, 'Host:', window.location.host);
+    }
+
+    // Fallback: Show modal with share options
+    const modal = document.getElementById('share-note-modal');
+    if (!modal) return;
+
+    modal.classList.add('active');
+    setupShareModalControls();
+
+    // Check if note is already shared
+    if (note.is_public && note.share_token) {
+        showShareLink(note.share_token);
+    } else {
+        hideShareLink();
+    }
+}
+
+function setupShareModalControls() {
+    const modal = document.getElementById('share-note-modal');
+    const closeBtn = document.getElementById('share-note-close-btn');
+    const generateBtn = document.getElementById('share-note-generate-btn');
+    const copyBtn = document.getElementById('share-note-copy-btn');
+    const revokeBtn = document.getElementById('share-note-revoke-btn');
+    const copyContentBtn = document.getElementById('share-note-content-btn');
+    const emailBtn = document.getElementById('share-note-email-btn');
+
+    // Close modal
+    const closeModal = () => modal.classList.remove('active');
+
+    if (closeBtn) {
+        closeBtn.onclick = closeModal;
+    }
+
+    // Click outside to close
+    modal.onclick = (e) => {
+        if (e.target === modal) closeModal();
+    };
+
+    // Copy note content to clipboard
+    if (copyContentBtn) {
+        copyContentBtn.onclick = async () => {
+            const note = notesState.notes.find(n => n.id === notesState.activeNoteId);
+            if (!note) return;
+
+            // Convert HTML to plain text
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = note.content || '';
+            const plainText = tempDiv.textContent || tempDiv.innerText || '';
+
+            const textToCopy = `${note.title || 'Untitled Note'}\n\n${plainText}`;
+
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(textToCopy);
+                } else {
+                    // Fallback for older browsers
+                    const textarea = document.createElement('textarea');
+                    textarea.value = textToCopy;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                }
+
+                // Visual feedback
+                const originalText = copyContentBtn.innerHTML;
+                copyContentBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+                setTimeout(() => {
+                    copyContentBtn.innerHTML = originalText;
+                }, 2000);
+            } catch (err) {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy to clipboard');
+            }
+        };
+    }
+
+    // Share via email
+    if (emailBtn) {
+        emailBtn.onclick = () => {
+            const note = notesState.notes.find(n => n.id === notesState.activeNoteId);
+            if (!note) return;
+
+            // Convert HTML to plain text
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = note.content || '';
+            const plainText = tempDiv.textContent || tempDiv.innerText || '';
+
+            const subject = encodeURIComponent(note.title || 'Untitled Note');
+            const body = encodeURIComponent(plainText);
+            window.location.href = `mailto:?subject=${subject}&body=${body}`;
+        };
+    }
+
+    // Generate share link
+    if (generateBtn) {
+        generateBtn.onclick = async () => {
+            await generateShareLink();
+        };
+    }
+
+    // Copy link to clipboard
+    if (copyBtn) {
+        copyBtn.onclick = () => {
+            const urlInput = document.getElementById('share-note-url');
+            if (urlInput) {
+                urlInput.select();
+                document.execCommand('copy');
+
+                // Visual feedback
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+                setTimeout(() => {
+                    copyBtn.innerHTML = originalText;
+                }, 2000);
+            }
+        };
+    }
+
+    // Revoke share access
+    if (revokeBtn) {
+        revokeBtn.onclick = async () => {
+            if (confirm('Are you sure you want to revoke access to this shared note?')) {
+                await revokeShareLink();
+            }
+        };
+    }
+}
+
+async function generateShareLink() {
+    const noteId = notesState.activeNoteId;
+    if (!noteId) return;
+
+    try {
+        const res = await fetch(`/api/notes/${noteId}/share`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!res.ok) throw new Error('Failed to generate share link');
+
+        const data = await res.json();
+
+        // Update local note data
+        const note = notesState.notes.find(n => n.id === noteId);
+        if (note) {
+            note.share_token = data.share_token;
+            note.is_public = data.is_public;
+        }
+
+        // Show the share link
+        showShareLink(data.share_token);
+
+    } catch (err) {
+        console.error('Error generating share link:', err);
+        alert('Failed to generate share link. Please try again.');
+    }
+}
+
+async function revokeShareLink() {
+    const noteId = notesState.activeNoteId;
+    if (!noteId) return;
+
+    try {
+        const res = await fetch(`/api/notes/${noteId}/share`, {
+            method: 'DELETE'
+        });
+
+        if (!res.ok) throw new Error('Failed to revoke share link');
+
+        // Update local note data
+        const note = notesState.notes.find(n => n.id === noteId);
+        if (note) {
+            note.share_token = null;
+            note.is_public = false;
+        }
+
+        // Hide the share link section
+        hideShareLink();
+
+        // Show success message
+        const statusDiv = document.getElementById('share-note-status');
+        if (statusDiv) {
+            statusDiv.innerHTML = '<p style="color: var(--accent-color); padding: 0.75rem; background: var(--accent-light); border-radius: 8px; margin-bottom: 1rem;"><i class="fa-solid fa-check"></i> Sharing has been revoked</p>';
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 3000);
+        }
+
+    } catch (err) {
+        console.error('Error revoking share link:', err);
+        alert('Failed to revoke share link. Please try again.');
+    }
+}
+
+function showShareLink(shareToken) {
+    const linkSection = document.getElementById('share-note-link-section');
+    const generateBtn = document.getElementById('share-note-generate-btn');
+    const urlInput = document.getElementById('share-note-url');
+
+    if (linkSection) linkSection.style.display = 'block';
+    if (generateBtn) generateBtn.style.display = 'none';
+
+    if (urlInput) {
+        const shareUrl = `${window.location.origin}/shared/${shareToken}`;
+        urlInput.value = shareUrl;
+    }
+}
+
+function hideShareLink() {
+    const linkSection = document.getElementById('share-note-link-section');
+    const generateBtn = document.getElementById('share-note-generate-btn');
+
+    if (linkSection) linkSection.style.display = 'none';
+    if (generateBtn) generateBtn.style.display = 'inline-flex';
 }
 
 function scrollNotesEditorIntoView() {
@@ -4976,6 +5632,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target == confirmModal) closeConfirmModal();
         const editListModal = document.getElementById('edit-list-modal');
         if (event.target == editListModal) closeEditListModal();
+        const recallModal = document.getElementById('recall-modal');
+        if (event.target == recallModal) closeRecallModal();
 
         const mainMenu = document.getElementById('phase-menu-main');
         if (!event.target.closest('.phase-add-dropdown')) {
@@ -5005,6 +5663,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTaskFilters();
     initMobileTopbar();
     initNotesPage();
+    initRecallsPage();
     initAIPage();
     initCalendarPage();
     autoEnableCalendarNotificationsIfGranted();
@@ -5110,6 +5769,543 @@ function initTaskSelectionUI() {
         row.addEventListener('mouseleave', handleMouseHoldEnd);
         row.addEventListener('click', handleTaskClick);
     });
+}
+
+// --- Recalls ---
+let recallSearchTimer = null;
+
+function initRecallsPage() {
+    const listEl = document.getElementById('recall-list');
+    const modal = document.getElementById('recall-modal');
+    if (!listEl || !modal) return; // Not on recalls page
+
+    // If any legacy filter/helper blocks remain in DOM, hide them defensively
+    ['recall-tag-cloud', 'recall-ai-input', 'recall-ai-results'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    document.querySelectorAll('.recall-filter-card, .recall-ai-card, .recalls-toolbar').forEach(el => {
+        el.style.display = 'none';
+    });
+
+    const searchInput = document.getElementById('recall-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            recallState.filters.q = e.target.value.trim();
+            scheduleRecallReload();
+        });
+    }
+
+    const menuBtn = document.getElementById('recall-actions-btn');
+    const menu = document.getElementById('recall-actions-menu');
+    if (menuBtn && menu) {
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.classList.toggle('open');
+        });
+        document.addEventListener('click', () => menu.classList.remove('open'));
+    }
+    const menuAI = document.getElementById('recall-menu-ai');
+    if (menuAI) menuAI.addEventListener('click', () => { promptRecallAISearch(); menu?.classList.remove('open'); });
+    const menuRefresh = document.getElementById('recall-menu-refresh');
+    if (menuRefresh) menuRefresh.addEventListener('click', () => { loadRecalls(); menu?.classList.remove('open'); });
+
+    // Toggle quick add panel
+    const toggleAddBtn = document.getElementById('recall-toggle-add-btn');
+    const quickAddPanel = document.getElementById('recall-quick-add-panel');
+    if (toggleAddBtn && quickAddPanel) {
+        toggleAddBtn.addEventListener('click', () => {
+            quickAddPanel.classList.toggle('is-hidden');
+            if (!quickAddPanel.classList.contains('is-hidden')) {
+                const quickInput = document.getElementById('recall-quick-input');
+                if (quickInput) quickInput.focus();
+            }
+        });
+    }
+    const quickAddCloseBtn = document.getElementById('recall-quick-add-close');
+    if (quickAddCloseBtn && quickAddPanel) {
+        quickAddCloseBtn.addEventListener('click', () => {
+            quickAddPanel.classList.add('is-hidden');
+        });
+    }
+
+    const quickAddBtn = document.getElementById('recall-quick-add-btn');
+    if (quickAddBtn) quickAddBtn.addEventListener('click', handleRecallQuickAdd);
+    const quickInput = document.getElementById('recall-quick-input');
+    if (quickInput) {
+        quickInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                await handleRecallQuickAdd();
+            }
+        });
+    }
+    const quickHelpBtn = document.getElementById('recall-quick-help-btn');
+    if (quickHelpBtn) quickHelpBtn.addEventListener('click', toggleRecallQuickHelp);
+
+    const saveBtn = document.getElementById('recall-save-btn');
+    if (saveBtn) saveBtn.addEventListener('click', saveRecall);
+    const pinBtn = document.getElementById('recall-pin-btn');
+    if (pinBtn) pinBtn.addEventListener('click', toggleSelectedRecallPin);
+    const editBtn = document.getElementById('recall-edit-btn');
+    if (editBtn) editBtn.addEventListener('click', () => {
+        const selected = getSelectedRecall();
+        if (selected) openRecallModal(selected);
+    });
+    const deleteBtn = document.getElementById('recall-delete-btn');
+    if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
+
+    loadRecalls();
+}
+
+function scheduleRecallReload() {
+    if (recallSearchTimer) clearTimeout(recallSearchTimer);
+    recallSearchTimer = setTimeout(() => loadRecalls(), 200);
+}
+
+function parseRecallQuickInput(text) {
+    let raw = (text || '').trim();
+    if (!raw) return null;
+    const entry = { title: '', content: '', category: 'General', type: 'note', keywords: [], reminder_at: null };
+
+    // Reminder: *YYYY-MM-DD or *YYYY-MM-DD HH:MM
+    const reminderMatch = raw.match(/\*(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?)/);
+    if (reminderMatch) {
+        entry.reminder_at = reminderMatch[1].trim();
+        raw = raw.replace(reminderMatch[0], '').trim();
+    }
+
+    // Type: @link|@idea|@source|@note|@other
+    const typeMatch = raw.match(/@(link|idea|source|note|other)/i);
+    if (typeMatch) {
+        entry.type = typeMatch[1].toLowerCase();
+        raw = raw.replace(typeMatch[0], '').trim();
+    }
+
+    // Category: #Category
+    const catMatch = raw.match(/#([A-Za-z0-9 _-]+)/);
+    if (catMatch) {
+        entry.category = catMatch[1].trim() || 'General';
+        raw = raw.replace(catMatch[0], '').trim();
+    }
+
+    // Keywords: +word
+    const keywordMatches = raw.match(/\+([A-Za-z0-9_-]+)/g) || [];
+    if (keywordMatches.length) {
+        entry.keywords = keywordMatches.map(k => k.substring(1));
+        keywordMatches.forEach(k => { raw = raw.replace(k, '').trim(); });
+    }
+
+    // Split title ; content
+    if (raw.includes(';')) {
+        const parts = raw.split(';');
+        entry.title = parts[0].trim();
+        entry.content = parts.slice(1).join(';').trim();
+    } else {
+        entry.title = raw;
+        entry.content = '';
+    }
+
+    // Source URL detection
+    const urlMatch = (entry.content || raw).match(/https?:\/\/\S+/);
+    if (urlMatch) {
+        entry.source_url = urlMatch[0];
+    }
+
+    if (!entry.title) return null;
+    return entry;
+}
+
+async function handleRecallQuickAdd() {
+    const input = document.getElementById('recall-quick-input');
+    if (!input) return;
+    const parsed = parseRecallQuickInput(input.value);
+    if (!parsed) return;
+    const payload = {
+        title: parsed.title,
+        content: parsed.content,
+        category: parsed.category,
+        type: parsed.type,
+        reminder_at: parsed.reminder_at,
+        keywords: parsed.keywords,
+        source_url: parsed.source_url
+    };
+    try {
+        const res = await fetch('/api/recalls', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Create failed');
+        input.value = '';
+        await loadRecalls();
+        // Close the quick add panel after successful add
+        const quickAddPanel = document.getElementById('recall-quick-add-panel');
+        if (quickAddPanel) quickAddPanel.classList.add('is-hidden');
+    } catch (err) {
+        console.error(err);
+        alert('Could not create recall.');
+    }
+}
+
+function toggleRecallQuickHelp() {
+    const guide = document.getElementById('recall-syntax-guide');
+    if (!guide) return;
+    const nowHidden = guide.classList.toggle('is-hidden');
+    guide.style.display = nowHidden ? 'none' : 'block';
+}
+
+async function loadRecalls() {
+    const listEl = document.getElementById('recall-list');
+    if (listEl) listEl.innerHTML = '<div class=\"recall-empty\">Loading...</div>';
+    const params = new URLSearchParams();
+    const f = recallState.filters;
+    if (f.q) params.set('q', f.q);
+    if (f.status) params.set('status', f.status);
+    try {
+        const res = await fetch(`/api/recalls?${params.toString()}`);
+        if (!res.ok) throw new Error('Failed to load recalls');
+        recallState.items = await res.json();
+        renderRecallList();
+    } catch (err) {
+        console.error(err);
+        if (listEl) listEl.innerHTML = '<div class=\"recall-empty\">Could not load recalls.</div>';
+    }
+}
+
+function renderRecallFilters() {
+    // Reduced UI: no-op placeholder to avoid errors if called
+}
+
+function renderRecallList() {
+    const container = document.getElementById('recall-list');
+    if (!container) return;
+    if (!recallState.items.length) {
+        container.innerHTML = '<div class=\"recall-empty\"><i class=\"fa-solid fa-inbox\"></i><p>No recalls yet. Add one to get started.</p></div>';
+        renderRecallDetail(null);
+        return;
+    }
+    container.innerHTML = '';
+    recallState.items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = `recall-row ${item.pinned ? 'pinned' : ''} ${recallState.selectedId === item.id ? 'active' : ''} ${item.status === 'archived' ? 'archived' : ''}`;
+        row.dataset.id = item.id;
+        const snippet = (item.summary || item.content || '').slice(0, 100);
+        const typeIcon = {
+            'link': 'fa-link',
+            'idea': 'fa-lightbulb',
+            'source': 'fa-book',
+            'note': 'fa-note-sticky',
+            'other': 'fa-circle'
+        }[item.type || 'note'] || 'fa-note-sticky';
+
+        row.innerHTML = `
+            <div class=\"recall-row-top\">
+                <div class=\"recall-row-header\">
+                    <i class=\"fa-solid ${typeIcon} recall-type-icon\"></i>
+                    <div class=\"recall-row-title\">${recallEscape(item.title)}</div>
+                </div>
+                <div class=\"recall-pill\">${recallEscape(item.category || 'General')}</div>
+            </div>
+            ${snippet ? `<div class=\"recall-row-snippet\">${recallEscape(snippet)}${snippet.length >= 100 ? '...' : ''}</div>` : ''}
+        `;
+        row.addEventListener('click', () => selectRecall(item.id));
+        container.appendChild(row);
+    });
+    if (recallState.selectedId) {
+        const selectedExists = recallState.items.some(i => i.id === recallState.selectedId);
+        if (!selectedExists) {
+            recallState.selectedId = null;
+        }
+    }
+    if (!recallState.selectedId && recallState.items.length) {
+        recallState.selectedId = recallState.items[0].id;
+    }
+    renderRecallDetail(getSelectedRecall());
+}
+
+function selectRecall(id) {
+    recallState.selectedId = id;
+    renderRecallList();
+}
+
+function getSelectedRecall() {
+    return recallState.items.find(i => i.id === recallState.selectedId) || null;
+}
+
+function renderRecallDetail(item) {
+    const empty = document.getElementById('recall-detail-empty');
+    const body = document.getElementById('recall-detail-body');
+    if (!empty || !body) return;
+    if (!item) {
+        empty.style.display = 'flex';
+        body.style.display = 'none';
+        return;
+    }
+    empty.style.display = 'none';
+    body.style.display = 'block';
+
+    // Build the detail view HTML
+    const typeLabels = {
+        'link': 'Link',
+        'idea': 'Idea',
+        'source': 'Source',
+        'note': 'Note',
+        'other': 'Other'
+    };
+    const typeIcons = {
+        'link': 'fa-link',
+        'idea': 'fa-lightbulb',
+        'source': 'fa-book',
+        'note': 'fa-note-sticky',
+        'other': 'fa-circle'
+    };
+    const typeLabel = typeLabels[item.type] || 'Note';
+    const typeIcon = typeIcons[item.type] || 'fa-note-sticky';
+
+    let detailHTML = `
+        <div class=\"recall-detail-header\">
+            <div class=\"recall-detail-header-left\">
+                ${item.pinned ? '<i class=\"fa-solid fa-thumbtack recall-pin-icon\" title=\"Pinned\"></i>' : ''}
+                <h2>${recallEscape(item.title)}</h2>
+            </div>
+            <div class=\"recall-actions\">
+                <button class=\"btn btn-secondary btn-small recall-pin-btn\" id=\"recall-pin-btn\" title=\"${item.pinned ? 'Unpin' : 'Pin'}\">
+                    <i class=\"fa-solid fa-thumbtack\"></i><span class=\"btn-text\">${item.pinned ? 'Unpin' : 'Pin'}</span>
+                </button>
+                <button class=\"btn btn-small recall-edit-btn\" id=\"recall-edit-btn\" title=\"Edit\">
+                    <i class=\"fa-solid fa-pen\"></i><span class=\"btn-text\">Edit</span>
+                </button>
+                <button class=\"btn btn-danger btn-small recall-delete-btn\" id=\"recall-delete-btn\" title=\"Delete\">
+                    <i class=\"fa-solid fa-trash\"></i><span class=\"btn-text\">Delete</span>
+                </button>
+            </div>
+        </div>
+
+        <div class=\"recall-detail-meta\">
+            <span class=\"pill recall-type-pill\"><i class=\"fa-solid ${typeIcon}\"></i> ${typeLabel}</span>
+            <span class=\"pill recall-category-pill\">${recallEscape(item.category || 'General')}</span>
+            ${item.priority && item.priority !== 'medium' ? `<span class=\"pill priority-${item.priority}\">${recallEscape(item.priority).toUpperCase()}</span>` : ''}
+            ${item.status && item.status !== 'active' ? `<span class=\"pill\">${recallEscape(item.status).toUpperCase()}</span>` : ''}
+        </div>
+
+        ${item.content ? `
+        <div class=\"recall-detail-section\">
+            <h3 class=\"recall-section-title\">Content</h3>
+            <div class=\"recall-detail-content\">${linkifyRecallContent(item.content)}</div>
+        </div>` : ''}
+
+        ${item.source_url ? `
+        <div class=\"recall-detail-section\">
+            <h3 class=\"recall-section-title\">Source</h3>
+            <a href=\"${recallEscape(item.source_url)}\" target=\"_blank\" rel=\"noopener\" class=\"recall-source-link\">
+                <i class=\"fa-solid fa-external-link-alt\"></i> ${recallEscape(item.source_url)}
+            </a>
+        </div>` : ''}
+
+        ${item.summary ? `
+        <div class=\"recall-summary-section\">
+            <div class=\"recall-summary\">${recallEscape(item.summary)}</div>
+        </div>` : ''}
+
+        ${item.reminder_at ? `
+        <div class=\"recall-detail-section\">
+            <h3 class=\"recall-section-title\">Reminder</h3>
+            <div class=\"recall-reminder-info\">
+                <i class=\"fa-solid fa-bell\"></i> ${formatRecallDate(item.reminder_at)}
+            </div>
+        </div>` : ''}
+
+        ${item.updated_at ? `
+        <div class=\"recall-detail-footer\">
+            <span class=\"recall-timestamp\">Last updated: ${formatRecallDate(item.updated_at)}</span>
+        </div>` : ''}
+    `;
+
+    body.innerHTML = detailHTML;
+
+    // Re-attach event listeners
+    const pinBtn = document.getElementById('recall-pin-btn');
+    const editBtn = document.getElementById('recall-edit-btn');
+    const deleteBtn = document.getElementById('recall-delete-btn');
+    if (pinBtn) pinBtn.addEventListener('click', toggleSelectedRecallPin);
+    if (editBtn) editBtn.addEventListener('click', () => {
+        const selected = getSelectedRecall();
+        if (selected) openRecallModal(selected);
+    });
+    if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
+}
+
+function openRecallModal(item = null) {
+    const modal = document.getElementById('recall-modal');
+    if (!modal) return;
+    recallState.editingId = item ? item.id : null;
+    const title = document.getElementById('recall-modal-title');
+    const titleInput = document.getElementById('recall-title-input');
+    const categoryInput = document.getElementById('recall-category-input');
+    const typeInput = document.getElementById('recall-type-input');
+    const priorityInput = document.getElementById('recall-priority-input');
+    const statusInput = document.getElementById('recall-status-input');
+    const pinnedInput = document.getElementById('recall-pinned-input');
+    const contentInput = document.getElementById('recall-content-input');
+    const summaryInput = document.getElementById('recall-summary-input');
+    const tagsInput = document.getElementById('recall-tags-input');
+    const sourceInput = document.getElementById('recall-source-input');
+    const reminderInput = document.getElementById('recall-reminder-input');
+
+    if (title) title.textContent = item ? 'Edit Recall' : 'New Recall';
+    if (titleInput) titleInput.value = item ? item.title : '';
+    if (categoryInput) categoryInput.value = item ? item.category : 'General';
+    if (typeInput) typeInput.value = item ? item.type : 'note';
+    if (priorityInput) priorityInput.value = item ? item.priority : 'medium';
+    if (statusInput) statusInput.value = item ? item.status : 'active';
+    if (pinnedInput) pinnedInput.checked = item ? !!item.pinned : false;
+    if (contentInput) contentInput.value = item ? (item.content || '') : '';
+    if (summaryInput) summaryInput.value = item ? (item.summary || '') : '';
+    if (tagsInput) tagsInput.value = item ? (item.tags || []).join(', ') : '';
+    if (sourceInput) sourceInput.value = item ? (item.source_url || '') : '';
+    if (reminderInput) reminderInput.value = item && item.reminder_at ? item.reminder_at.slice(0, 16) : '';
+
+    modal.classList.add('active');
+    if (titleInput) titleInput.focus();
+}
+
+function closeRecallModal() {
+    const modal = document.getElementById('recall-modal');
+    if (modal) modal.classList.remove('active');
+    recallState.editingId = null;
+}
+
+async function saveRecall() {
+    const titleInput = document.getElementById('recall-title-input');
+    if (!titleInput || !titleInput.value.trim()) return;
+    const payload = {
+        title: titleInput.value.trim(),
+        category: document.getElementById('recall-category-input')?.value || 'General',
+        type: document.getElementById('recall-type-input')?.value || 'note',
+        pinned: document.getElementById('recall-pinned-input')?.checked || false,
+        content: document.getElementById('recall-content-input')?.value || '',
+        keywords: document.getElementById('recall-tags-input')?.value || '',
+        source_url: document.getElementById('recall-source-input')?.value || '',
+        reminder_at: document.getElementById('recall-reminder-input')?.value || '',
+    };
+    const isEdit = !!recallState.editingId;
+    const url = isEdit ? `/api/recalls/${recallState.editingId}` : '/api/recalls';
+    try {
+        const res = await fetch(url, {
+            method: isEdit ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Save failed');
+        const saved = await res.json();
+        recallState.editingId = null;
+        closeRecallModal();
+        await loadRecalls();
+        recallState.selectedId = saved.id;
+        renderRecallList();
+    } catch (err) {
+        console.error(err);
+        alert('Could not save recall. Please try again.');
+    }
+}
+
+async function deleteSelectedRecall() {
+    const target = getSelectedRecall();
+    if (!target) return;
+    if (!confirm('Delete this recall?')) return;
+    try {
+        const res = await fetch(`/api/recalls/${target.id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed');
+        recallState.selectedId = null;
+        await loadRecalls();
+    } catch (err) {
+        console.error(err);
+        alert('Could not delete recall.');
+    }
+}
+
+async function toggleSelectedRecallPin() {
+    const target = getSelectedRecall();
+    if (!target) return;
+    try {
+        const res = await fetch(`/api/recalls/${target.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned: !target.pinned })
+        });
+        if (!res.ok) throw new Error('Failed to update pin');
+        await loadRecalls();
+        recallState.selectedId = target.id;
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function runRecallAISearch() {
+    const input = document.getElementById('recall-ai-input');
+    const text = input ? (input.value || '').trim() : '';
+    if (!text) return;
+    await runRecallAISearchWithQuery(text);
+}
+
+function promptRecallAISearch() {
+    const query = prompt('What do you remember?');
+    if (!query) return;
+    runRecallAISearchWithQuery(query);
+}
+
+async function runRecallAISearchWithQuery(query) {
+    try {
+        const res = await fetch('/api/recalls/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, limit: 6 })
+        });
+        if (!res.ok) throw new Error('Search failed');
+        const data = await res.json();
+        recallState.aiResults = data.results || [];
+        if (recallState.aiResults.length) {
+            recallState.selectedId = recallState.aiResults[0].id;
+            renderRecallList();
+        } else {
+            alert('No matching recalls found.');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Recall AI search failed.');
+    }
+}
+
+function renderRecallAIResults() {
+    // AI results list removed from UI on simplified recall page
+}
+
+function formatRecallDate(val) {
+    try {
+        return new Date(val).toLocaleString();
+    } catch (e) {
+        return val;
+    }
+}
+
+function recallEscape(str) {
+    if (str === undefined || str === null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function linkifyRecallContent(str) {
+    if (!str) return '';
+    // First escape HTML
+    const escaped = recallEscape(str);
+    // Then convert URLs to clickable links
+    const urlPattern = /(https?:\/\/[^\s<]+)/g;
+    return escaped.replace(urlPattern, '<a href="$1" target="_blank" rel="noopener" class="recall-content-link">$1</a>');
 }
 
 // --- AI Assistant ---

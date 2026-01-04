@@ -5,11 +5,13 @@
     <header class="notes-header">
         <div>
             <h1>Notes</h1>
-            <p style="color: var(--text-muted);">Rich text notes, separate from your task lists</p>
         </div>
         <div class="notes-header-actions">
             <button class="btn btn-secondary" id="note-new-btn">
                 <i class="fa-solid fa-plus"></i> New Note
+            </button>
+            <button class="btn" id="note-share-btn">
+                <i class="fa-solid fa-share-nodes"></i> Share
             </button>
             <button class="btn" id="note-delete-btn">
                 <i class="fa-solid fa-trash"></i> Delete
@@ -23,14 +25,16 @@
     <aside class="notes-sidebar card">
         <div class="notes-sidebar-header">
             <div>
-                <h3>All Notes</h3>
-                <p class="notes-subtitle">Click to open, or create a fresh one.</p>
+                <h3>Pinned</h3>
+                <p class="notes-subtitle">Drag to reorder. Click to open.</p>
             </div>
             <button class="btn-icon" id="note-refresh-btn" title="Refresh">
                 <i class="fa-solid fa-arrows-rotate"></i>
             </button>
         </div>
-        <div class="notes-list" id="notes-list"></div>
+        <div class="notes-list pinned" id="notes-list-pinned"></div>
+        <div class="notes-list-divider">All Notes</div>
+        <div class="notes-list unpinned" id="notes-list"></div>
     </aside>
 
     <section class="notes-editor card">
@@ -68,4 +72,50 @@
         <div id="note-editor" class="note-editor-surface" contenteditable="true" data-placeholder="Start typing your note..."></div>
     </section>
 </div>
+
+<!-- Share Note Modal -->
+<div class="modal" id="share-note-modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <h2>Share Note</h2>
+        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Choose how to share this note</p>
+
+        <div id="share-note-status"></div>
+
+        <!-- Share Options -->
+        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
+            <button class="btn btn-primary" id="share-note-content-btn" style="width: 100%; justify-content: center;">
+                <i class="fa-solid fa-copy"></i> Copy Note Content
+            </button>
+            <button class="btn btn-secondary" id="share-note-email-btn" style="width: 100%; justify-content: center;">
+                <i class="fa-solid fa-envelope"></i> Share via Email
+            </button>
+        </div>
+
+        <div style="border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Or create a shareable link that anyone can view:</p>
+
+            <div id="share-note-link-section" style="display: none;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Shareable Link</label>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                    <input type="text" id="share-note-url" readonly style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); font-size: 0.9rem;">
+                    <button class="btn btn-secondary" id="share-note-copy-btn">
+                        <i class="fa-solid fa-copy"></i> Copy
+                    </button>
+                </div>
+                <button class="btn" id="share-note-revoke-btn" style="width: 100%;">
+                    <i class="fa-solid fa-xmark"></i> Revoke Access
+                </button>
+            </div>
+
+            <button class="btn" id="share-note-generate-btn" style="width: 100%;">
+                <i class="fa-solid fa-link"></i> Generate Link
+            </button>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+            <button class="btn" id="share-note-close-btn">Close</button>
+        </div>
+    </div>
+</div>
+
 {% endblock %}

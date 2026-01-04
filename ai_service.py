@@ -1,11 +1,12 @@
 import json
 import os
 from datetime import datetime, date, time
+import math
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 from flask import current_app
-from models import db, TodoList, TodoItem, CalendarEvent
+from models import db, TodoList, TodoItem, CalendarEvent, RecallItem
 
 
 ALLOWED_STATUSES = {"not_started", "in_progress", "done"}
@@ -44,6 +45,26 @@ def get_openai_client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
+def embed_text(text: str) -> Optional[List[float]]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    try:
+        client = get_openai_client()
+    except Exception as exc:
+        if current_app:
+            current_app.logger.warning(f"Embedding unavailable: {exc}")
+        return None
+    try:
+        model_name = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+        resp = client.embeddings.create(model=model_name, input=cleaned[:7000])
+        return resp.data[0].embedding
+    except Exception as exc:
+        if current_app:
+            current_app.logger.warning(f"Embedding failed: {exc}")
+        return None
+
+
 def _list_lists(user_id: int, list_type: Optional[str] = None, search: Optional[str] = None) -> List[Dict[str, Any]]:
     query = TodoList.query.filter_by(user_id=user_id)
     if list_type:
@@ -79,6 +100,130 @@ def _list_items(
 
     items = sorted(items, key=lambda i: i.order_index or 0)
     return [_item_dict(i) for i in items]
+
+
+def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    mag_a = math.sqrt(sum(a * a for a in vec_a))
+    mag_b = math.sqrt(sum(b * b for b in vec_b))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _recall_dict(item: RecallItem, similarity: Optional[float] = None) -> Dict[str, Any]:
+    data = item.to_dict()
+    if similarity is not None:
+        data["similarity"] = similarity
+    return data
+
+
+def _list_recalls(
+    user_id: int,
+    search: Optional[str] = None,
+    category: Optional[str] = None,
+    type_name: Optional[str] = None,
+    tag: Optional[str] = None,
+    status: Optional[str] = "active",
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    query = RecallItem.query.filter(RecallItem.user_id == user_id)
+    if status:
+        query = query.filter(RecallItem.status == status)
+    if category:
+        query = query.filter(RecallItem.category.ilike(category))
+    if type_name:
+        query = query.filter(RecallItem.type.ilike(type_name))
+    if tag:
+        query = query.filter(RecallItem.tags.ilike(f"%{tag}%"))
+    if search:
+        like_expr = f"%{search}%"
+        query = query.filter(
+            db.or_(
+                RecallItem.title.ilike(like_expr),
+                RecallItem.content.ilike(like_expr),
+                RecallItem.tags.ilike(like_expr),
+                RecallItem.category.ilike(like_expr),
+                RecallItem.summary.ilike(like_expr),
+            )
+        )
+    query = query.order_by(RecallItem.pinned.desc(), RecallItem.reminder_at.is_(None), RecallItem.reminder_at.asc(), RecallItem.created_at.desc())
+    items = query.limit(max(1, min(limit, 200))).all()
+    return [_recall_dict(i) for i in items]
+
+
+def _create_recall(
+    user_id: int,
+    title: str,
+    content: Optional[str] = None,
+    category: Optional[str] = None,
+    type_name: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    priority: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    source_url: Optional[str] = None,
+    summary: Optional[str] = None,
+) -> Dict[str, Any]:
+    cat_val = (category or "General").strip() or "General"
+    type_val = (type_name or "note").strip() or "note"
+    priority_val = (priority or "medium").lower()
+    if priority_val not in ALLOWED_PRIORITIES:
+        priority_val = "medium"
+    blob = " ".join(
+        [
+            title or "",
+            content or "",
+            cat_val,
+            type_val,
+            " ".join(tags or []),
+            source_url or "",
+            summary or "",
+        ]
+    ).strip()
+    embedding = embed_text(blob)
+    recall = RecallItem(
+        user_id=user_id,
+        title=title.strip(),
+        content=(content or "").strip(),
+        category=cat_val,
+        type=type_val,
+        tags=",".join(tags or []),
+        priority=priority_val,
+        pinned=bool(pinned),
+        source_url=(source_url or "").strip() or None,
+        summary=(summary or "").strip() or None,
+        search_blob=blob,
+        embedding=json.dumps(embedding) if embedding else None,
+    )
+    db.session.add(recall)
+    db.session.commit()
+    return _recall_dict(recall)
+
+
+def _search_recalls_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    items = RecallItem.query.filter(RecallItem.user_id == user_id, RecallItem.status != "archived").all()
+    query_embedding = embed_text(query)
+    query_lower = query.lower()
+    results = []
+    for item in items:
+        emb = None
+        if item.embedding:
+            try:
+                emb = json.loads(item.embedding)
+            except Exception:
+                emb = None
+        similarity = _cosine_similarity(query_embedding, emb) if query_embedding and emb else 0.0
+        blob = (item.search_blob or "").lower()
+        if query_lower in blob:
+            similarity = max(similarity, 0.35)
+        results.append((similarity, item))
+    results.sort(key=lambda tup: tup[0], reverse=True)
+    trimmed = results[: max(1, min(limit, 15))]
+    return [_recall_dict(item, similarity=score) for score, item in trimmed]
 
 
 def _list_hub_tasks(
@@ -662,14 +807,74 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_recalls",
+            "description": "List recall items (links/ideas/sources) with filters",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search": {"type": "string"},
+                    "category": {"type": "string"},
+                    "type_name": {"type": "string", "description": "link, idea, source, note, other"},
+                    "tag": {"type": "string"},
+                    "status": {"type": "string", "default": "active"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_recall",
+            "description": "Create a recall item with category/type/content/tags",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "category": {"type": "string"},
+                    "type_name": {"type": "string", "description": "link, idea, source, note, other"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "pinned": {"type": "boolean"},
+                    "source_url": {"type": "string"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_recalls_semantic",
+            "description": "Semantic + keyword search across recall items to find fuzzy matches",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 6},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
 def _build_system_prompt(today_iso: str, timezone: str) -> str:
-    return f"""You are a task/project assistant. Follow these rules:
+    return f"""You are a task, project, and recall assistant. Follow these rules:
 - Today's date is {today_iso} (timezone: {timezone}). When the user says things like "today", "tomorrow", "next Monday", convert them to an explicit YYYY-MM-DD in that timezone before calling tools. If ambiguous, ask a short clarifying question.
-- Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content.
+- Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content; add/find recall items (links/ideas/sources/notes) with fuzzy matching.
 - You can also manage the calendar: list calendar entries by day/range and create new entries (tasks/events/phases/groups). Always set day (YYYY-MM-DD) and use precise fields (start_time/end_time HH:MM 24h, status, priority, flags is_event/is_phase/is_group, phase_id/group_id when nesting, reminder_minutes_before, description).
+- For recall capture: when the user wants to remember something, call create_recall with title, category, type_name (link/idea/source/other), tags, summary, source_url (if link), and pinned flag. Default category "General" and type_name based on content (URL -> link, otherwise idea/note).
+- For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with category/type/tag/status filters.
+- Recall response format (concise markdown):
+  * Header: "**Recall matches**" (only when showing results)
+  * Each match: "- <title> · <category> · <type> · tags: <tag1, tag2>; summary or first 120 chars of content"
 - Always use tools to fetch ids before mutating. Do not guess ids.
 - When user refers to names, search then pick the closest; if multiple matches, ask a short clarifying question.
 - If user says "first/second/third/last phase", choose that phase by order_index (1-based; last = final phase).
@@ -777,6 +982,35 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
             group_id=args.get("group_id"),
             reminder_minutes_before=args.get("reminder_minutes_before"),
             description=args.get("description"),
+        )
+    if name == "list_recalls":
+        return _list_recalls(
+            user_id=user_id,
+            search=args.get("search"),
+            category=args.get("category"),
+            type_name=args.get("type_name"),
+            tag=args.get("tag"),
+            status=args.get("status", "active"),
+            limit=args.get("limit", 20),
+        )
+    if name == "create_recall":
+        return _create_recall(
+            user_id=user_id,
+            title=args.get("title", ""),
+            content=args.get("content"),
+            category=args.get("category"),
+            type_name=args.get("type_name"),
+            tags=args.get("tags") or [],
+            priority=args.get("priority"),
+            pinned=args.get("pinned"),
+            source_url=args.get("source_url"),
+            summary=args.get("summary"),
+        )
+    if name == "search_recalls_semantic":
+        return _search_recalls_semantic(
+            user_id=user_id,
+            query=args.get("query", ""),
+            limit=args.get("limit", 6),
         )
     raise ValueError(f"Unknown tool: {name}")
 
