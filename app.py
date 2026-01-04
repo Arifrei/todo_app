@@ -21,7 +21,8 @@ if DOTENV_PATH and os.path.exists(DOTENV_PATH):
     load_dotenv(DOTENV_PATH)
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///todo.db'
+# Keep DB path aligned with migration scripts (instance/todo.db)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///instance/todo.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
@@ -1027,20 +1028,47 @@ def select_user():
 
 @app.route('/api/set-user/<int:user_id>', methods=['POST'])
 def set_user(user_id):
-    """Set the current user in session"""
+    """Set the current user in session after validating PIN (or set it for legacy users)."""
+    data = request.get_json(silent=True) or {}
+    pin = str(data.get('pin', '')).strip()
+
+    if not re.fullmatch(r'\d{4}', pin):
+        return jsonify({'error': 'A 4-digit PIN is required'}), 400
+
     user = db.get_or_404(User, user_id)
+    pin_created = False
+    # Treat anything missing/placeholder/empty as "no PIN set"
+    pin_hash_val = str(user.pin_hash or '').strip()
+    has_pin = bool(pin_hash_val and pin_hash_val.lower() not in ['none', 'null'])
+
+    if not has_pin:
+        # First-time PIN setup for legacy users without a valid PIN
+        try:
+            user.set_pin(pin)
+            db.session.commit()
+            pin_created = True
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+    else:
+        if not user.check_pin(pin):
+            return jsonify({'error': 'Invalid PIN'}), 401
+
     session['user_id'] = user.id
     session.permanent = True  # Make session persistent across browser restarts
-    return jsonify({'success': True, 'username': user.username})
+    return jsonify({'success': True, 'username': user.username, 'user_id': user.id, 'pin_created': pin_created})
 
 @app.route('/api/create-user', methods=['POST'])
 def create_user():
     """Create a new user (simplified - no password)"""
-    data = request.json
+    data = request.get_json(silent=True) or {}
     username = data.get('username', '').strip()
+    pin = str(data.get('pin', '')).strip()
 
     if not username:
         return jsonify({'error': 'Username is required'}), 400
+
+    if not re.fullmatch(r'\d{4}', pin):
+        return jsonify({'error': 'PIN must be exactly 4 digits'}), 400
 
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username already exists'}), 400
@@ -1048,6 +1076,10 @@ def create_user():
     # Create user with a dummy password (not used anymore)
     user = User(username=username, email=None)
     user.set_password('dummy')
+    try:
+        user.set_pin(pin)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     db.session.add(user)
     db.session.commit()
 
@@ -1084,6 +1116,8 @@ def tasks_page():
 @app.route('/download/app')
 def download_app():
     """Serve the Android APK for download."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
     downloads_dir = os.path.join(app.root_path, 'downloads')
     apk_filename = 'taskflow.apk'
     apk_path = os.path.join(downloads_dir, apk_filename)
@@ -1202,40 +1236,21 @@ def list_view(list_id):
     parent_item = TodoItem.query.filter_by(linked_list_id=list_id).first()
     parent_list = parent_item.list if parent_item else None
 
-    # Custom sorting: group by phase, then sort incomplete by order_index and complete by completed_at
-    sorted_items = []
-    phase_groups = []
-    current_phase_items = []
+    # Backfill phase_id if not set, but preserve order_index for display
     current_phase = None
-
-    # The relationship is already ordered by order_index
     for item in todo_list.items:
         if is_phase_header(item):
-            if current_phase_items:
-                phase_groups.append(current_phase_items)
-            phase_groups.append([item]) # The phase header itself
             current_phase = item
-            current_phase_items = []
         else:
             # Backfill phase_id if not set
             if current_phase and not item.phase_id:
                 item.phase_id = current_phase.id
-            current_phase_items.append(item)
-    if current_phase_items:
-        phase_groups.append(current_phase_items)
 
     # Commit any backfilled phase_id values
     db.session.commit()
 
-    for group in phase_groups:
-        if len(group) == 1 and is_phase_header(group[0]):
-            sorted_items.extend(group)
-        else:
-            incomplete = sorted([i for i in group if i.status != 'done'], key=lambda x: x.order_index)
-            complete = sorted([i for i in group if i.status == 'done'], key=lambda x: x.order_index)
-            sorted_items.extend(incomplete + complete)
-
-    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list, items=sorted_items, default_timezone=app.config.get('DEFAULT_TIMEZONE'))
+    # Use items in their order_index order (no re-sorting by completion status)
+    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list, items=todo_list.items, default_timezone=app.config.get('DEFAULT_TIMEZONE'))
 
 # API Routes
 @app.route('/api/lists', methods=['GET', 'POST'])
@@ -3012,14 +3027,24 @@ def reorder_items(list_id):
 
     items = {item.id: item for item in todo_list.items}
     order_val = 1
+    current_phase_id = None
+
     for item_id in ordered_ids:
         try:
             item_id_int = int(item_id)
         except (ValueError, TypeError):
             continue
         if item_id_int in items:
-            items[item_id_int].order_index = order_val
+            item = items[item_id_int]
+            item.order_index = order_val
             order_val += 1
+
+            # Update phase tracking and assignment based on position
+            if is_phase_header(item):
+                current_phase_id = item.id
+            else:
+                # Assign task to current phase (or None if not under any phase)
+                item.phase_id = current_phase_id
 
     db.session.commit()
     return jsonify({'updated': len(ordered_ids)})

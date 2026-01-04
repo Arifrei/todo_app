@@ -20,6 +20,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.String(200), nullable=False)
+    pin_hash = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -32,6 +33,17 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def set_pin(self, pin: str):
+        """Persist a hashed 4-digit PIN (digits only)."""
+        if not pin or not str(pin).isdigit() or len(str(pin)) != 4:
+            raise ValueError("PIN must be exactly 4 digits")
+        self.pin_hash = generate_password_hash(str(pin))
+
+    def check_pin(self, pin: str) -> bool:
+        if not self.pin_hash:
+            return False
+        return check_password_hash(self.pin_hash, str(pin))
 
 class TodoList(db.Model):
     id = db.Column(db.Integer, primary_key=True)

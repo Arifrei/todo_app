@@ -41,6 +41,7 @@ def add_column(cur, table: str, column: str, col_type: str, default_sql: str | N
 
 def ensure_user_table(cur):
     if table_exists(cur, "user"):
+        add_column(cur, "user", "pin_hash", "VARCHAR(200)")
         print("[ok] user table exists")
         return
     cur.execute(
@@ -50,6 +51,7 @@ def ensure_user_table(cur):
             username VARCHAR(80) UNIQUE NOT NULL,
             email VARCHAR(120) UNIQUE,
             password_hash VARCHAR(200) NOT NULL,
+            pin_hash VARCHAR(200),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """

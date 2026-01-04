@@ -10,6 +10,54 @@ const confirmModal = document.getElementById('confirm-modal');
 const confirmMessage = document.getElementById('confirm-message');
 const confirmYesButton = document.getElementById('confirm-yes-button');
 let pendingConfirm = null;
+
+// --- Toast Notification System ---
+function showToast(message, type = 'info', duration = 4000) {
+    // Ensure toast container exists
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+
+    // Icon mapping based on type
+    const icons = {
+        success: '<i class="fa-solid fa-circle-check"></i>',
+        error: '<i class="fa-solid fa-circle-exclamation"></i>',
+        warning: '<i class="fa-solid fa-triangle-exclamation"></i>',
+        info: '<i class="fa-solid fa-circle-info"></i>'
+    };
+
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.info}</span>
+        <span class="toast-message">${message}</span>
+        <button class="toast-close" onclick="this.parentElement.remove()">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    `;
+
+    // Add to container
+    container.appendChild(toast);
+
+    // Auto-remove after duration
+    if (duration > 0) {
+        setTimeout(() => {
+            toast.classList.add('hiding');
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 300);
+        }, duration);
+    }
+
+    return toast;
+}
 let currentDragId = null;
 let currentDragBlock = [];
 let longPressTimer = null;
@@ -1575,52 +1623,20 @@ function applyPhaseVisibility(phaseId, modeInput) {
         if (!hideDone || !isDone) el.classList.remove('hidden-by-done');
     }
 
-    // Primary: hide/show tasks explicitly assigned to this phase
+    // Hide/show tasks explicitly assigned to this phase by data-phase-parent
+    // No positional fallback needed - phase_id is managed by backend
     document.querySelectorAll(`.task-item[data-phase-parent='${phaseIdStr}']`).forEach(el => {
         toggleTaskVisibility(el);
     });
-
-    // Fallback: also hide tasks visually under this phase that lack a parent attribute
-    // but are marked as under-phase, stopping at the next phase header or an item
-    // explicitly tied to another phase.
-    let sibling = phaseEl.nextElementSibling;
-    while (sibling && !sibling.classList.contains('phase')) {
-        const parentAttr = sibling.getAttribute('data-phase-parent') || '';
-        const isUnderPhase = sibling.classList.contains('under-phase');
-
-        if (parentAttr) {
-            if (parentAttr !== phaseIdStr) break; // belongs to another phase
-            toggleTaskVisibility(sibling);
-        } else if (isUnderPhase) {
-            toggleTaskVisibility(sibling);
-        } else {
-            break; // not under this phase, stop scanning
-        }
-
-        sibling = sibling.nextElementSibling;
-    }
 
     return mode;
 }
 
 function normalizePhaseParents() {
-    const items = Array.from(document.querySelectorAll('.task-item'));
-    let currentPhaseId = null;
-
-    items.forEach(el => {
-        const isPhase = el.classList.contains('phase');
-        if (isPhase) {
-            currentPhaseId = el.dataset.phaseId || null;
-            return;
-        }
-
-        // Only set when missing/empty to avoid overwriting real data
-        const existingParent = el.dataset.phaseParent;
-        if (!existingParent && currentPhaseId) {
-            el.dataset.phaseParent = currentPhaseId;
-            el.classList.add('under-phase');
-        }
-    });
+    // This function is now a no-op since phase_id is managed by the backend
+    // and the template renders data-phase-parent from the database.
+    // The reorder endpoint automatically updates phase_id based on position.
+    // Keeping this function for backwards compatibility but it does nothing.
 }
 
 function persistPhaseVisibility(phaseId, collapsed) {
@@ -5944,7 +5960,7 @@ async function handleRecallQuickAdd() {
         if (quickAddPanel) quickAddPanel.classList.add('is-hidden');
     } catch (err) {
         console.error(err);
-        alert('Could not create recall.');
+        showToast('Could not create recall.', 'error');
     }
 }
 
@@ -5966,6 +5982,18 @@ async function loadRecalls() {
         const res = await fetch(`/api/recalls?${params.toString()}`);
         if (!res.ok) throw new Error('Failed to load recalls');
         recallState.items = await res.json();
+
+        // Check if there's a ?note= parameter in the URL to auto-select a recall
+        const urlParams = new URLSearchParams(window.location.search);
+        const targetNoteId = parseInt(urlParams.get('note'), 10);
+        if (targetNoteId && !isNaN(targetNoteId)) {
+            // Check if this recall exists in the loaded items
+            const targetRecall = recallState.items.find(item => item.id === targetNoteId);
+            if (targetRecall) {
+                recallState.selectedId = targetNoteId;
+            }
+        }
+
         renderRecallList();
     } catch (err) {
         console.error(err);
@@ -6206,23 +6234,26 @@ async function saveRecall() {
         renderRecallList();
     } catch (err) {
         console.error(err);
-        alert('Could not save recall. Please try again.');
+        showToast('Could not save recall. Please try again.', 'error');
     }
 }
 
 async function deleteSelectedRecall() {
     const target = getSelectedRecall();
     if (!target) return;
-    if (!confirm('Delete this recall?')) return;
-    try {
-        const res = await fetch(`/api/recalls/${target.id}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error('Delete failed');
-        recallState.selectedId = null;
-        await loadRecalls();
-    } catch (err) {
-        console.error(err);
-        alert('Could not delete recall.');
-    }
+    openConfirmModal('Delete this recall?', async () => {
+        try {
+            const res = await fetch(`/api/recalls/${target.id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            recallState.selectedId = null;
+            await loadRecalls();
+            closeConfirmModal();
+        } catch (err) {
+            console.error(err);
+            showToast('Could not delete recall.', 'error');
+            closeConfirmModal();
+        }
+    });
 }
 
 async function toggleSelectedRecallPin() {
@@ -6250,9 +6281,24 @@ async function runRecallAISearch() {
 }
 
 function promptRecallAISearch() {
-    const query = prompt('What do you remember?');
-    if (!query) return;
-    runRecallAISearchWithQuery(query);
+    // Open AI panel with a pre-filled recall search prompt
+    const panel = document.getElementById('ai-panel');
+    const input = document.getElementById('ai-input');
+    if (!panel || !input) return;
+
+    // Pre-fill the input with a recall search prompt
+    input.value = 'Find recalls about ';
+
+    // Open the panel
+    if (!panel.classList.contains('open')) {
+        toggleAIPanel();
+    }
+
+    // Focus and position cursor at the end
+    setTimeout(() => {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }, 100);
 }
 
 async function runRecallAISearchWithQuery(query) {
@@ -6269,11 +6315,11 @@ async function runRecallAISearchWithQuery(query) {
             recallState.selectedId = recallState.aiResults[0].id;
             renderRecallList();
         } else {
-            alert('No matching recalls found.');
+            showToast('No matching recalls found.', 'info');
         }
     } catch (err) {
         console.error(err);
-        alert('Recall AI search failed.');
+        showToast('Recall AI search failed.', 'error');
     }
 }
 
@@ -6421,7 +6467,7 @@ function toggleAIVoice(context = 'panel') {
 
     // If native speech is available, prefer it
     if (!hasNative && !hasMediaRecorder) {
-        alert('Speech recognition is not available in this environment.');
+        showToast('Speech recognition is not available in this environment.', 'warning');
         return;
     }
 
@@ -6464,12 +6510,12 @@ function startServerVoice(context = 'panel') {
     aiRecorderTranscript = aiRecorderBaseText;
 
     if (!isSecureVoiceContext()) {
-        alert('Microphone access is blocked because this page is not served over HTTPS/localhost. Use HTTPS or the installed app.');
+        showToast('Microphone access is blocked because this page is not served over HTTPS/localhost. Use HTTPS or the installed app.', 'warning');
         return;
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert('Microphone is not available in this environment.');
+        showToast('Microphone is not available in this environment.', 'warning');
         return;
     }
 
@@ -6529,7 +6575,7 @@ function startServerVoice(context = 'panel') {
         setAIMicButtonState(true, aiRecorderContext);
     }).catch(err => {
         console.error('Unable to access microphone:', err);
-        alert('Could not access the microphone. Please check permissions.');
+        showToast('Could not access the microphone. Please check permissions.', 'error');
     });
 }
 
@@ -6612,6 +6658,9 @@ function toggleAIPanel() {
 function formatAIMessage(text) {
     // Convert markdown-style formatting to HTML
     let formatted = text;
+
+    // Convert markdown links [text](url) to HTML <a> tags (must be done before other conversions)
+    formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="ai-link">$1</a>');
 
     // Convert **📋 Project:** to styled project header
     formatted = formatted.replace(/\*\*📋 Project: (.+?)\*\*/g, '<strong class="ai-project-header">📋 Project: $1</strong>');
@@ -6705,6 +6754,22 @@ async function sendAIPrompt(context = 'panel') {
         renderAIMessages(context);
         saveAIMessagesToStorage();
     }
+}
+
+function clearAIConversation() {
+    openConfirmModal('Clear all AI conversation history? This cannot be undone.', () => {
+        aiMessages = [];
+        saveAIMessagesToStorage();
+
+        // Re-render both contexts in case both are visible
+        const panelMessages = document.getElementById('ai-messages');
+        const pageMessages = document.getElementById('ai-page-messages');
+        if (panelMessages) renderAIMessages('panel');
+        if (pageMessages) renderAIMessages('page');
+
+        showToast('AI conversation cleared. Start a new conversation to use the updated AI instructions.', 'success', 5000);
+        closeConfirmModal();
+    });
 }
 
 function openFullAIPage() {

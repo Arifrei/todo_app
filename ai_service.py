@@ -872,9 +872,21 @@ def _build_system_prompt(today_iso: str, timezone: str) -> str:
 - You can also manage the calendar: list calendar entries by day/range and create new entries (tasks/events/phases/groups). Always set day (YYYY-MM-DD) and use precise fields (start_time/end_time HH:MM 24h, status, priority, flags is_event/is_phase/is_group, phase_id/group_id when nesting, reminder_minutes_before, description).
 - For recall capture: when the user wants to remember something, call create_recall with title, category, type_name (link/idea/source/other), tags, summary, source_url (if link), and pinned flag. Default category "General" and type_name based on content (URL -> link, otherwise idea/note).
 - For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with category/type/tag/status filters.
-- Recall response format (concise markdown):
+- Recall response format (concise markdown with clickable links):
   * Header: "**Recall matches**" (only when showing results)
-  * Each match: "- <title> · <category> · <type> · tags: <tag1, tag2>; summary or first 120 chars of content"
+  * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) · <category> · <type> · tags: <tag1, tag2>; summary or first 120 chars of content"
+  * CRITICAL RULES FOR RECALL LINKS:
+    - The markdown link href MUST ALWAYS be: /recalls?note=<id>
+    - The <id> is the "id" field from the search_recalls_semantic result
+    - NEVER EVER use source_url, content, or any external URL as the link href
+    - NEVER use https:// or http:// URLs in the recall title link
+    - The source_url belongs in the summary text ONLY, not in the markdown link
+  * Example 1: recall with id=42, title="ML Research", source_url="https://example.com"
+    - CORRECT: "- [ML Research](/recalls?note=42) · Tech · link · summary: https://example.com - Research about..."
+    - WRONG: "- [ML Research](https://example.com) · Tech · link"
+  * Example 2: recall with id=15, title="Funny video", source_url="https://youtube.com/watch"
+    - CORRECT: "- [Funny video](/recalls?note=15) · General · link · summary: YouTube video at https://youtube.com/watch"
+    - WRONG: "- [Funny video](https://youtube.com/watch) · General · link"
 - Always use tools to fetch ids before mutating. Do not guess ids.
 - When user refers to names, search then pick the closest; if multiple matches, ask a short clarifying question.
 - If user says "first/second/third/last phase", choose that phase by order_index (1-based; last = final phase).

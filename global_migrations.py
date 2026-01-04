@@ -44,6 +44,13 @@ def ensure_todo_list(cur):
     add_column(cur, "todo_list", "user_id", "INTEGER", default_sql="1")
 
 
+def ensure_user(cur):
+    if not table_exists(cur, "user"):
+        print("[warn] user table missing; run baseline migrate.py first")
+        return
+    add_column(cur, "user", "pin_hash", "VARCHAR(200)")
+
+
 def ensure_todo_item(cur):
     if not table_exists(cur, "todo_item"):
         print("[warn] todo_item missing; run baseline migrate.py first")
@@ -259,6 +266,7 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
+        ensure_user(cur)
         ensure_todo_list(cur)
         ensure_todo_item(cur)
         ensure_note(cur)

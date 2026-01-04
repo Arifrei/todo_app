@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='2') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
     <style>
@@ -176,6 +176,80 @@
             display: none;
         }
 
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 1rem;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .pin-modal {
+            background: white;
+            border-radius: 16px;
+            padding: 1.5rem;
+            max-width: 420px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            position: relative;
+        }
+
+        .pin-modal h3 {
+            margin: 0 0 0.25rem 0;
+        }
+
+        .pin-subtitle {
+            margin: 0 0 1rem 0;
+            color: var(--text-muted);
+        }
+
+        .pin-input {
+            width: 100%;
+            padding: 0.85rem;
+            font-size: 1.15rem;
+            text-align: center;
+            letter-spacing: 0.4rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: #f8f9ff;
+            outline: none;
+        }
+
+        .pin-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        .btn-secondary {
+            background: #f3f4ff;
+            color: var(--text-color);
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .pin-error {
+            color: #c00;
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+            display: none;
+        }
+
+        .new-pin-input {
+            max-width: 140px;
+        }
+
         @media (max-width: 640px) {
             .user-select-card {
                 padding: 1.5rem;
@@ -207,6 +281,10 @@
                 width: 100%;
                 text-align: center;
             }
+            .new-pin-input {
+                max-width: none;
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -228,7 +306,7 @@
 
             <div class="user-list">
                 {% for user in users %}
-                <div class="user-card" onclick="selectUser({{ user.id }}, '{{ user.username }}')">
+                <div class="user-card" data-user-id="{{ user.id }}" data-username="{{ user.username|e }}" onclick='openPinModal({{ user.id }}, {{ user.username|tojson }})'>
                     <div class="user-icon">
                         {{ user.username[0].upper() }}
                     </div>
@@ -248,6 +326,8 @@
             <div class="new-user-form">
                 <input type="text" id="new-username" class="new-user-input" placeholder="Enter username"
                        onkeypress="if(event.key==='Enter') createUser()">
+                <input type="password" id="new-pin" class="new-user-input new-pin-input" placeholder="4-digit PIN"
+                       maxlength="4" inputmode="numeric" pattern="\\d{4}" onkeypress="if(event.key==='Enter') createUser()">
                 <button class="btn-create" onclick="createUser()">
                     <i class="fa-solid fa-plus"></i> Create
                 </button>
@@ -256,23 +336,95 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="pin-modal">
+        <div class="pin-modal">
+            <h3>Enter PIN</h3>
+            <p class="pin-subtitle">Unlock access for <strong id="pin-username">User</strong></p>
+            <input type="password" id="pin-input" class="pin-input" maxlength="4" inputmode="numeric" pattern="\\d{4}"
+                   placeholder="0000">
+            <div class="pin-error" id="pin-error"></div>
+            <div class="pin-actions" style="justify-content: flex-end; align-items: center;">
+                <button class="btn" type="button" onclick="closePinModal()">Cancel</button>
+                <button class="btn btn-create" id="pin-submit" type="button" onclick="submitPin()">Unlock</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        function selectUser(userId, username) {
-            fetch(`/api/set-user/${userId}`, { method: 'POST' })
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        window.location.href = '/';
-                    }
-                })
-                .catch(err => {
-                    console.error('Error selecting user:', err);
-                });
+        let pendingUserId = null;
+
+        function openPinModal(userId, username) {
+            pendingUserId = userId;
+            const modal = document.getElementById('pin-modal');
+            const pinInput = document.getElementById('pin-input');
+            document.getElementById('pin-username').textContent = username;
+            document.getElementById('pin-error').style.display = 'none';
+            document.getElementById('pin-error').textContent = '';
+            pinInput.value = '';
+            modal.classList.add('open');
+            setTimeout(() => pinInput.focus(), 50);
+        }
+
+        function closePinModal() {
+            const modal = document.getElementById('pin-modal');
+            modal.classList.remove('open');
+            pendingUserId = null;
+        }
+
+        function submitPin() {
+            const pinInput = document.getElementById('pin-input');
+            const errorMsg = document.getElementById('pin-error');
+            const btn = document.getElementById('pin-submit');
+
+            const pin = pinInput.value.trim();
+            if (!/^[0-9]{4}$/.test(pin)) {
+                errorMsg.textContent = 'Enter your 4-digit PIN.';
+                errorMsg.style.display = 'block';
+                return;
+            }
+            if (!pendingUserId) {
+                errorMsg.textContent = 'Select a user first.';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Unlocking...';
+
+            fetch(`/api/set-user/${pendingUserId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ pin })
+            })
+            .then(async (r) => {
+                let data = {};
+                try { data = await r.json(); } catch (err) { /* ignore json parse issues */ }
+                console.debug('set-user response', r.status, data);
+                  if (r.ok && data.success) {
+                      window.location.href = '/';
+                  } else {
+                    const msg = data.error || 'Invalid PIN. Try again.';
+                    errorMsg.textContent = msg;
+                    errorMsg.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                console.error('Error selecting user:', err);
+                errorMsg.textContent = 'Unable to verify PIN. Please try again.';
+                errorMsg.style.display = 'block';
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = 'Unlock';
+            });
         }
 
         function createUser() {
             const input = document.getElementById('new-username');
+            const pinInput = document.getElementById('new-pin');
             const username = input.value.trim();
+            const pin = pinInput.value.trim();
             const errorMsg = document.getElementById('error-message');
 
             if (!username) {
@@ -281,15 +433,23 @@
                 return;
             }
 
+            if (!/^[0-9]{4}$/.test(pin)) {
+                errorMsg.textContent = 'Set a 4-digit PIN for this user';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
             fetch('/api/create-user', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username })
+                credentials: 'include',
+                body: JSON.stringify({ username, pin })
             })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    window.location.href = '/';
+              .then(r => r.json())
+              .then(data => {
+                  console.debug('create-user response', data);
+                  if (data.success) {
+                      window.location.href = '/';
                 } else if (data.error) {
                     errorMsg.textContent = data.error;
                     errorMsg.style.display = 'block';
@@ -301,6 +461,26 @@
                 errorMsg.style.display = 'block';
             });
         }
+
+        document.getElementById('pin-input').addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+                submitPin();
+            }
+        });
+
+        document.getElementById('pin-modal').addEventListener('click', (ev) => {
+            if (ev.target.id === 'pin-modal') {
+                closePinModal();
+            }
+        });
+
+        document.querySelectorAll('.user-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const uid = card.getAttribute('data-user-id');
+                const uname = card.getAttribute('data-username') || 'User';
+                openPinModal(uid, uname);
+            });
+        });
     </script>
 </body>
 </html>
