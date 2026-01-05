@@ -291,7 +291,7 @@ class CalendarEvent(db.Model):
     reminder_job_id = db.Column(db.String(255), nullable=True)
     reminder_sent = db.Column(db.Boolean, default=False)
     reminder_snoozed_until = db.Column(db.DateTime, nullable=True)
-    rollover_enabled = db.Column(db.Boolean, default=True)
+    rollover_enabled = db.Column(db.Boolean, default=False)
     rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

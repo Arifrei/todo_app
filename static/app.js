@@ -527,6 +527,18 @@ async function updateLinkedTaskStatus(taskId, status) {
     }
 }
 
+async function updateLinkedTaskDueDate(taskId, dayStr) {
+    try {
+        await fetch(`/api/items/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ due_date: dayStr })
+        });
+    } catch (e) {
+        console.error('Error updating task date:', e);
+    }
+}
+
 async function unpinTaskDate(taskId) {
     if (!confirm('Remove this task from this date?')) return;
     try {
@@ -1172,6 +1184,39 @@ function updateBulkBar() {
     window.scrollTo(0, scrollY);
 }
 
+function toggleBulkMenu(event, forceClose = false) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('bulk-menu-dropdown');
+    if (!menu) return;
+    if (forceClose) {
+        menu.classList.remove('show');
+        return;
+    }
+
+    // Position the menu above the button on mobile
+    if (window.innerWidth <= 768 && event && event.currentTarget) {
+        const button = event.currentTarget;
+        const rect = button.getBoundingClientRect();
+        const menuHeight = menu.offsetHeight || 120; // Estimate if not visible yet
+
+        // Position above the button
+        menu.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+        menu.style.left = `${rect.left}px`;
+    }
+
+    menu.classList.toggle('show');
+}
+
+// Close bulk menu when clicking outside
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('bulk-menu-dropdown');
+    if (!menu) return;
+    if (!e.target.closest('.bulk-menu')) {
+        menu.classList.remove('show');
+    }
+});
+
+
 function setTaskSelected(itemId, isSelected, skipPhaseCascade = false) {
     const row = document.getElementById(`item-${itemId}`);
     if (!row) return;
@@ -1415,16 +1460,40 @@ async function bulkUnpinNotes() {
 // --- Drag & Drop Reorder ---
 
 function getDragAfterElement(container, y) {
-    const elements = [...container.querySelectorAll('.task-item:not(.dragging)')];
-    return elements.reduce((closest, child) => {
+    const elements = [...container.querySelectorAll('.task-item:not(.dragging):not(.drag-placeholder)')];
+
+    if (elements.length === 0) {
+        return null; // No elements to compare, will append to container
+    }
+
+    let closestElement = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    let closestChild = null;
+
+    elements.forEach(child => {
         const box = child.getBoundingClientRect();
-        const offset = y - box.top - box.height / 2;
-        if (offset < 0 && offset > closest.offset) {
-            return { offset, element: child };
-        } else {
-            return closest;
+        const elementCenter = box.top + box.height / 2;
+        const distance = Math.abs(y - elementCenter);
+
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestChild = child;
+            // If touch is above center, insert before this element
+            // If touch is below center, insert after (which means before next element)
+            if (y < elementCenter) {
+                closestElement = child;
+            } else {
+                // Find next non-dragging sibling
+                let next = child.nextElementSibling;
+                while (next && (next.classList.contains('dragging') || next.classList.contains('drag-placeholder'))) {
+                    next = next.nextElementSibling;
+                }
+                closestElement = next; // Could be null if at end
+            }
         }
-    }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+    });
+
+    return closestElement;
 }
 
 function handleDragStart(e) {
@@ -1629,6 +1698,12 @@ function handleTaskClick(e) {
 }
 
 // Touch drag for mobile (reorder)
+let touchDragStartY = 0;
+let touchDragCurrentY = 0;
+let touchDragPlaceholder = null;
+
+
+
 function touchHandleDragStart(e) {
     const handle = e.currentTarget;
     const itemId = handle.getAttribute('data-drag-id');
@@ -1637,11 +1712,20 @@ function touchHandleDragStart(e) {
         e.preventDefault();
         return;
     }
+
+    console.log('🔵 ===== DRAG START =====');
+    console.log('🔵 Item ID:', itemId);
+
+    const touch = e.touches[0];
+    touchDragStartY = touch.clientY;
+    touchDragCurrentY = touch.clientY;
     touchDragActive = true;
     touchDragId = itemId;
     touchDragBlock = [];
+
     const row = document.getElementById(`item-${itemId}`);
     if (row) {
+        console.log('🔵 Row found:', row);
         const isPhase = row.classList.contains('phase');
         if (isPhase) {
             const siblings = Array.from(document.querySelectorAll('.task-item'));
@@ -1650,11 +1734,75 @@ function touchHandleDragStart(e) {
                 const el = siblings[i];
                 if (i > startIdx && el.classList.contains('phase')) break;
                 touchDragBlock.push(el);
-                el.classList.add('dragging');
             }
         } else {
             touchDragBlock.push(row);
-            row.classList.add('dragging');
+        }
+
+        console.log('🔵 Dragging', touchDragBlock.length, 'items');
+
+        const container = document.getElementById('items-container');
+        if (container && touchDragBlock.length > 0) {
+            // Get INITIAL positions BEFORE any DOM changes
+            const initialPositions = touchDragBlock.map(el => {
+                const rect = el.getBoundingClientRect();
+                return {
+                    el: el,
+                    id: el.dataset.itemId,
+                    top: rect.top,
+                    left: rect.left,
+                    width: rect.width,
+                    height: rect.height
+                };
+            });
+
+            console.log('🔵 INITIAL positions (before placeholder):', initialPositions);
+
+            // Create placeholder first
+            touchDragPlaceholder = document.createElement('div');
+            touchDragPlaceholder.className = 'drag-placeholder';
+            const totalHeight = touchDragBlock.reduce((sum, el) => sum + el.offsetHeight, 0);
+            touchDragPlaceholder.style.height = `${totalHeight}px`;
+            touchDragPlaceholder.style.margin = '0.25rem 0';
+            touchDragPlaceholder.style.border = '2px dashed var(--primary-color)';
+            touchDragPlaceholder.style.borderRadius = '8px';
+            touchDragPlaceholder.style.background = 'var(--primary-light)';
+            touchDragPlaceholder.style.opacity = '0.5';
+
+            // Insert placeholder
+            container.insertBefore(touchDragPlaceholder, touchDragBlock[0]);
+            console.log('🔵 Placeholder inserted before first item');
+
+            // Now get positions AFTER placeholder is inserted
+            const afterPlaceholderPositions = touchDragBlock.map(el => {
+                const rect = el.getBoundingClientRect();
+                return {
+                    id: el.dataset.itemId,
+                    top: rect.top,
+                    left: rect.left
+                };
+            });
+
+            console.log('🔵 Positions AFTER placeholder:', afterPlaceholderPositions);
+
+            // Make items fixed using initial positions (before placeholder was inserted)
+            touchDragBlock.forEach((el, index) => {
+                const initialPos = initialPositions[index];
+                el.classList.add('dragging');
+                el.style.position = 'fixed';
+                el.style.left = initialPos.left + 'px';
+                el.style.top = initialPos.top + 'px';
+                el.style.width = initialPos.width + 'px';
+                el.style.zIndex = '9999';
+                el.style.pointerEvents = 'none';
+
+                console.log(`🔵 Item ${initialPos.id} set to fixed at:`, {
+                    top: initialPos.top,
+                    left: initialPos.left,
+                    appliedTop: el.style.top,
+                    appliedLeft: el.style.left
+                });
+            });
         }
     }
     e.preventDefault();
@@ -1663,35 +1811,125 @@ function touchHandleDragStart(e) {
 function touchHandleDragMove(e) {
     if (!touchDragActive || !touchDragBlock.length) return;
     if (!e.touches || !e.touches.length) return;
-    const y = e.touches[0].clientY;
+
+    const touch = e.touches[0];
+    const deltaY = touch.clientY - touchDragCurrentY;
+    touchDragCurrentY = touch.clientY;
     const container = document.getElementById('items-container');
     if (!container) return;
-    const afterElement = getDragAfterElement(container, y);
 
-    // Remove current block to reinsert
-    touchDragBlock.forEach(el => {
-        if (el.parentElement === container) {
-            container.removeChild(el);
+    console.log('🟢 DRAG MOVE - Y:', touchDragCurrentY, 'deltaY:', deltaY);
+
+    // Move the dragged items with the finger
+    touchDragBlock.forEach((el, index) => {
+        const currentTop = parseFloat(el.style.top);
+        const newTop = currentTop + deltaY;
+        el.style.top = newTop + 'px';
+        if (index === 0) {
+            console.log('🟢 Moving item to:', newTop, '(was:', currentTop, ')');
         }
     });
 
-    if (afterElement == null) {
-        touchDragBlock.forEach(el => container.appendChild(el));
-    } else {
-        touchDragBlock.forEach(el => container.insertBefore(el, afterElement));
+    // Auto-scroll when dragging near edges
+    const scrollThreshold = 80;
+    const scrollSpeed = 10;
+    const viewportHeight = window.innerHeight;
+    if (touchDragCurrentY < scrollThreshold) {
+        window.scrollBy(0, -scrollSpeed);
+    } else if (touchDragCurrentY > viewportHeight - scrollThreshold) {
+        window.scrollBy(0, scrollSpeed);
     }
+
+    // Find where to insert placeholder based on touch position
+    const afterElement = getDragAfterElement(container, touchDragCurrentY);
+
+    console.log('🟢 Placeholder should be inserted', afterElement ? 'before item ' + afterElement.dataset.itemId : 'at end');
+
+    if (touchDragPlaceholder && touchDragPlaceholder.parentElement) {
+        touchDragPlaceholder.parentElement.removeChild(touchDragPlaceholder);
+    }
+
+    if (afterElement == null) {
+        container.appendChild(touchDragPlaceholder);
+    } else {
+        container.insertBefore(touchDragPlaceholder, afterElement);
+    }
+
     e.preventDefault();
 }
 
 async function touchHandleDragEnd(e) {
     if (!touchDragActive) return;
+    console.log('🔴 ===== DRAG END =====');
     touchDragActive = false;
     touchDragId = null;
-    await commitOrderFromDOM();
-    touchDragBlock.forEach(el => el.classList.remove('dragging'));
-    touchDragBlock = [];
-}
 
+    const container = document.getElementById('items-container');
+    if (container && touchDragPlaceholder && touchDragPlaceholder.parentElement) {
+        console.log('🔴 Restoring items to placeholder position');
+
+        // Restore normal positioning for dragged elements
+        touchDragBlock.forEach((el, index) => {
+            console.log(`🔴 Item ${el.dataset.itemId} - before restore:`, {
+                position: el.style.position,
+                top: el.style.top,
+                left: el.style.left
+            });
+
+            el.style.position = '';
+            el.style.left = '';
+            el.style.top = '';
+            el.style.width = '';
+            el.style.zIndex = '';
+            el.style.pointerEvents = '';
+            el.classList.remove('dragging');
+            delete el.dataset.originalTop;
+            delete el.dataset.originalLeft;
+            delete el.dataset.originalWidth;
+
+            if (index === 0) {
+                const newRect = el.getBoundingClientRect();
+                console.log(`🔴 Item ${el.dataset.itemId} - after restore, new position:`, {
+                    top: newRect.top,
+                    left: newRect.left
+                });
+            }
+        });
+
+        // Move elements to placeholder position
+        console.log('🔴 Moving items to placeholder location in DOM');
+        touchDragBlock.forEach(el => {
+            container.insertBefore(el, touchDragPlaceholder);
+        });
+
+        // Remove placeholder
+        touchDragPlaceholder.parentElement.removeChild(touchDragPlaceholder);
+        touchDragPlaceholder = null;
+        console.log('🔴 Placeholder removed');
+    } else {
+        console.log('🔴 No placeholder, just cleaning up');
+        // Cleanup even if no placeholder
+        touchDragBlock.forEach(el => {
+            el.style.position = '';
+            el.style.left = '';
+            el.style.top = '';
+            el.style.width = '';
+            el.style.zIndex = '';
+            el.style.pointerEvents = '';
+            el.classList.remove('dragging');
+            delete el.dataset.originalTop;
+            delete el.dataset.originalLeft;
+            delete el.dataset.originalWidth;
+        });
+    }
+
+    console.log('🔴 Committing order to server');
+    await commitOrderFromDOM();
+    touchDragBlock = [];
+    touchDragStartY = 0;
+    touchDragCurrentY = 0;
+    console.log('🔴 ===== DRAG COMPLETE =====');
+}
 // --- Phase Visibility ---
 
 function getPhaseVisibilityKey() {
@@ -3218,6 +3456,26 @@ function openReminderEditor(ev) {
     });
 }
 
+function openCalendarMovePrompt(ev) {
+    const currentDay = ev.day || calendarState.selectedDay || '';
+    openCalendarPrompt({
+        title: 'Move to day',
+        message: 'Pick a new date for this item',
+        type: 'date',
+        defaultValue: currentDay,
+        onSubmit: async (val) => {
+            if (!val) return;
+            if (ev.is_task_link && ev.task_id) {
+                await updateLinkedTaskDueDate(ev.task_id, val);
+                await loadCalendarDay(calendarState.selectedDay);
+                if (calendarState.monthCursor) await loadCalendarMonth();
+                return;
+            }
+            await updateCalendarEvent(ev.id, { day: val }, { skipReload: false, skipMonth: false });
+        }
+    });
+}
+
 async function setCalendarDay(dayStr, options = {}) {
     const { skipLoad = false, skipLabel = false } = options;
     calendarState.selectedDay = dayStr;
@@ -3580,34 +3838,86 @@ function renderCalendarEvents() {
             meta.append(listChip, statusChip);
             titleWrap.appendChild(meta);
 
-            const actions = document.createElement('div');
-            actions.className = 'calendar-actions-row';
-            const reminderBtn = document.createElement('button');
-            reminderBtn.className = 'calendar-icon-btn';
-            reminderBtn.title = 'Reminders not supported for task links';
-            reminderBtn.innerHTML = '<i class="fa-solid fa-bell-slash"></i>';
-            reminderBtn.disabled = true;
+        const actions = document.createElement('div');
+        actions.className = 'calendar-actions-row';
+        const priorityDot = document.createElement('button');
+        priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
+        priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
+        priorityDot.onclick = (e) => {
+            e.stopPropagation();
+            openPriorityMenu(priorityDot, ev.priority || 'medium', async (val) => {
+                // Only update UI; task link priority isn't editable here
+                ev.priority = val;
+                renderCalendarEvents();
+            }, { readOnly: true });
+        };
 
-            const rolloverBtn = document.createElement('button');
-            rolloverBtn.className = 'calendar-icon-btn';
-            rolloverBtn.title = 'Rollover not supported for task links';
-            rolloverBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
-            rolloverBtn.disabled = true;
+        const overflowMenuContainer = document.createElement('div');
+        overflowMenuContainer.className = 'calendar-overflow-menu';
+        const overflowBtn = document.createElement('button');
+        overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+        overflowBtn.title = 'More options';
+        overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+        overflowBtn.style.display = 'inline-flex';
+        overflowBtn.style.width = '28px';
+        overflowBtn.style.height = '28px';
 
-            const openBtn = document.createElement('a');
-            openBtn.className = 'btn btn-secondary btn-small';
-            openBtn.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
-            openBtn.textContent = 'Open task';
-            const unpinBtn = document.createElement('button');
-            unpinBtn.className = 'btn btn-secondary btn-small';
-            unpinBtn.textContent = 'Unpin';
-            unpinBtn.onclick = () => unpinTaskDate(ev.task_id);
+        const overflowDropdown = document.createElement('div');
+        overflowDropdown.className = 'calendar-item-dropdown';
 
-            actions.append(reminderBtn, rolloverBtn, openBtn, unpinBtn);
+        const openBtn = document.createElement('a');
+        openBtn.className = 'calendar-item-menu-option';
+        openBtn.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
+        openBtn.innerHTML = '<i class="fa-solid fa-up-right-from-square"></i> Open task';
 
-            row.append(left, titleWrap, actions);
-            attachCalendarRowSelection(row, ev);
-            return row;
+        const unpinBtn = document.createElement('button');
+        unpinBtn.className = 'calendar-item-menu-option';
+        unpinBtn.innerHTML = '<i class="fa-solid fa-thumbtack"></i> Unpin from day';
+        unpinBtn.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            unpinTaskDate(ev.task_id);
+        };
+
+        overflowDropdown.append(openBtn, unpinBtn);
+        overflowMenuContainer.append(overflowBtn);
+        document.body.appendChild(overflowDropdown);
+
+        const positionDropdown = () => {
+            const rect = overflowBtn.getBoundingClientRect();
+            const dropdownWidth = 200;
+            const dropdownHeight = overflowDropdown.offsetHeight || 120;
+            const screenWidth = window.innerWidth;
+            const screenHeight = window.innerHeight;
+            const padding = 8;
+            overflowDropdown.style.position = 'fixed';
+            let topPos = rect.bottom + 8;
+            if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
+                topPos = rect.top - dropdownHeight - 8;
+            }
+            let leftPos = rect.right - dropdownWidth;
+            if (leftPos < padding) leftPos = padding;
+            if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
+            overflowDropdown.style.top = `${topPos}px`;
+            overflowDropdown.style.left = `${leftPos}px`;
+        };
+
+        overflowBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
+            overflowDropdown.classList.toggle('active');
+            positionDropdown();
+        });
+
+        window.addEventListener('scroll', () => {
+            if (overflowDropdown.classList.contains('active')) positionDropdown();
+        }, { passive: true });
+
+        actions.append(priorityDot, overflowMenuContainer);
+
+        row.append(left, titleWrap, actions);
+        attachCalendarRowSelection(row, ev);
+        return row;
         }
 
         if (ev.is_phase) {
@@ -3744,6 +4054,9 @@ function renderCalendarEvents() {
         overflowBtn.className = 'calendar-icon-btn overflow-trigger';
         overflowBtn.title = 'More options';
         overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+        overflowBtn.style.display = 'inline-flex';
+        overflowBtn.style.width = '28px';
+        overflowBtn.style.height = '28px';
 
         const overflowDropdown = document.createElement('div');
         overflowDropdown.className = 'calendar-item-dropdown';
@@ -3756,6 +4069,15 @@ function renderCalendarEvents() {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
             openReminderEditor(ev);
+        };
+
+        const moveMenuItem = document.createElement('button');
+        moveMenuItem.className = 'calendar-item-menu-option';
+        moveMenuItem.innerHTML = '<i class="fa-solid fa-calendar-day"></i> Move to day';
+        moveMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            openCalendarMovePrompt(ev);
         };
 
         const noteMenuItem = document.createElement('button');
@@ -3791,7 +4113,8 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, noteMenuItem, deleteMenuItem);
+        // Order: reminder, rollover, note, move, delete
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
@@ -3938,59 +4261,130 @@ function renderCalendarEvents() {
             });
         };
 
-        const reminderBtn = document.createElement('button');
+        // Overflow menu for events (matching tasks)
+        const overflowMenuContainer = document.createElement('div');
+        overflowMenuContainer.className = 'calendar-overflow-menu';
+
+        const overflowBtn = document.createElement('button');
+        overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+        overflowBtn.title = 'More options';
+        overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+        overflowBtn.style.display = 'inline-flex';
+        overflowBtn.style.width = '28px';
+        overflowBtn.style.height = '28px';
+
+        const overflowDropdown = document.createElement('div');
+        overflowDropdown.className = 'calendar-item-dropdown';
+
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
-        reminderBtn.className = `calendar-icon-btn reminder-btn ${reminderActive ? 'active' : ''}`;
-        reminderBtn.title = reminderActive ? `Reminder: ${ev.reminder_minutes_before}m` : 'Set reminder';
-        const reminderIcon = document.createElement('span');
-        reminderIcon.className = 'reminder-toggle';
-        reminderIcon.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'}"></i>`;
-        reminderBtn.appendChild(reminderIcon);
-        if (reminderActive) {
-            const label = document.createElement('span');
-            label.className = 'reminder-time-label';
-            label.textContent = `${ev.reminder_minutes_before}m`;
-            reminderBtn.appendChild(label);
-        }
-        reminderBtn.onclick = async (e) => {
-            if (reminderActive && e.target.closest('.reminder-toggle')) {
-                await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
-                return;
-            }
+        const reminderMenuItem = document.createElement('button');
+        reminderMenuItem.className = 'calendar-item-menu-option';
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
             openReminderEditor(ev);
         };
 
-        const noteBtn = document.createElement('button');
-        const hasNotes = ev.linked_notes && ev.linked_notes.length > 0;
-        noteBtn.className = `calendar-icon-btn ${hasNotes ? 'active' : ''}`;
-        noteBtn.title = hasNotes ? `${ev.linked_notes.length} note(s) linked` : 'Link note';
-        noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
-        noteBtn.onclick = () => linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+        const noteMenuItem = document.createElement('button');
+        noteMenuItem.className = 'calendar-item-menu-option';
+        noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Link Note';
+        noteMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+        };
 
-        const rolloverBtn = document.createElement('button');
-        const rolloverEnabled = ev.rollover_enabled !== false; // true by default
-        rolloverBtn.className = `calendar-icon-btn ${rolloverEnabled ? 'active' : ''}`;
-        rolloverBtn.title = rolloverEnabled ? 'Rollover enabled' : 'Rollover disabled';
-        rolloverBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
-        rolloverBtn.onclick = async () => {
-            const next = !rolloverEnabled;
+        const rolloverMenuItem = document.createElement('button');
+        rolloverMenuItem.className = 'calendar-item-menu-option';
+        rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+        rolloverMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const next = !ev.rollover_enabled;
             try {
                 await updateCalendarEvent(ev.id, { rollover_enabled: next });
                 ev.rollover_enabled = next;
-                rolloverBtn.classList.toggle('active', next);
-                rolloverBtn.title = next ? 'Rollover enabled' : 'Rollover disabled';
             } catch (err) {
                 console.error('Failed to toggle rollover', err);
             }
         };
 
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'btn-icon';
-        deleteBtn.title = 'Delete';
-        deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-        deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
+        const moveMenuItem = document.createElement('button');
+        moveMenuItem.className = 'calendar-item-menu-option';
+        moveMenuItem.innerHTML = '<i class="fa-solid fa-calendar-day"></i> Move to day';
+        moveMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            openCalendarMovePrompt(ev);
+        };
 
-        actions.append(priorityDot, reminderBtn, noteBtn, rolloverBtn, deleteBtn);
+        const deleteMenuItem = document.createElement('button');
+        deleteMenuItem.className = 'calendar-item-menu-option delete-option';
+        deleteMenuItem.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
+        deleteMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            deleteCalendarEvent(ev.id);
+        };
+
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        overflowMenuContainer.append(overflowBtn);
+        document.body.appendChild(overflowDropdown);
+
+        const positionDropdown = () => {
+            const rect = overflowBtn.getBoundingClientRect();
+            const dropdownWidth = 180;
+            const dropdownHeight = overflowDropdown.offsetHeight || 150;
+            const screenWidth = window.innerWidth;
+            const screenHeight = window.innerHeight;
+            const padding = 8;
+
+            overflowDropdown.style.position = 'fixed';
+
+            let topPos;
+            const spaceBelow = screenHeight - rect.bottom;
+            const spaceAbove = rect.top;
+
+            if (spaceBelow < dropdownHeight + padding && spaceAbove > spaceBelow) {
+                topPos = rect.top - dropdownHeight - 8;
+            } else {
+                topPos = rect.bottom + 8;
+            }
+
+            overflowDropdown.style.top = `${topPos}px`;
+
+            let leftPos = rect.right - dropdownWidth;
+            if (leftPos < padding) {
+                leftPos = padding;
+            }
+            if (leftPos + dropdownWidth > screenWidth - padding) {
+                leftPos = screenWidth - dropdownWidth - padding;
+            }
+
+            overflowDropdown.style.left = `${leftPos}px`;
+        };
+
+        overflowDropdown.updatePosition = positionDropdown;
+        overflowDropdown.triggerButton = overflowBtn;
+
+        overflowBtn.onclick = (e) => {
+            e.stopPropagation();
+            const isOpen = overflowDropdown.classList.contains('active');
+            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
+                if (d !== overflowDropdown) {
+                    d.classList.remove('active');
+                }
+            });
+            if (!isOpen) {
+                positionDropdown();
+                overflowDropdown.classList.add('active');
+            } else {
+                overflowDropdown.classList.remove('active');
+            }
+        };
+
+        actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
         attachCalendarRowSelection(row, ev);
         return row;
@@ -4508,7 +4902,7 @@ function parseCalendarQuickInput(text) {
     let priority = 'medium';
     let reminder = null;
     let phaseName = null;
-    let rollover = true;
+    let rollover = false;
     let isEvent = false;
     let groupName = null;
 
@@ -4559,10 +4953,10 @@ function parseCalendarQuickInput(text) {
         working = working.replace(groupMatch[0], '').trim();
     }
 
-    // No rollover: -
-    if (working.includes('-')) {
-        rollover = false;
-        working = working.replace(/-/g, '').trim();
+    // Enable rollover: + (dash previously disabled; now explicit opt-in)
+    if (working.includes('+')) {
+        rollover = true;
+        working = working.replace(/\+/g, '').trim();
     }
 
     const title = working.trim();
@@ -5298,6 +5692,8 @@ async function createCalendarEvent(payload) {
 
 async function updateCalendarEvent(id, payload, options = {}) {
     const { skipReload = false, skipMonth = false } = options;
+    const prevEvent = Array.isArray(calendarState.events) ? calendarState.events.find(e => e.id === id) : null;
+    const prevDay = prevEvent?.day;
     try {
         const res = await fetch(`/api/calendar/events/${id}`, {
             method: 'PUT',
@@ -5315,12 +5711,26 @@ async function updateCalendarEvent(id, payload, options = {}) {
 
         // Optimistically update local state so the UI reflects changes without waiting on a reload
         if (updated && Array.isArray(calendarState.events)) {
-            calendarState.events = calendarState.events.map(ev => ev.id === id ? { ...ev, ...updated } : ev);
+            const movedOffDay = updated.day && calendarState.selectedDay && updated.day !== calendarState.selectedDay;
+            calendarState.events = calendarState.events
+                .map(ev => ev.id === id ? { ...ev, ...updated } : ev)
+                .filter(ev => !(ev.id === id && movedOffDay));
         }
 
-        const dayKey = updated?.day || calendarState.selectedDay;
-        if (dayKey && calendarState.monthEventsByDay && Array.isArray(calendarState.monthEventsByDay[dayKey])) {
-            calendarState.monthEventsByDay[dayKey] = calendarState.monthEventsByDay[dayKey].map(ev => ev.id === id ? { ...ev, ...updated } : ev);
+        const newDay = updated?.day || calendarState.selectedDay;
+        if (calendarState.monthEventsByDay) {
+            // Remove from previous day bucket if it changed
+            if (prevDay && updated?.day && prevDay !== updated.day && Array.isArray(calendarState.monthEventsByDay[prevDay])) {
+                calendarState.monthEventsByDay[prevDay] = calendarState.monthEventsByDay[prevDay].filter(ev => ev.id !== id);
+            }
+            if (newDay) {
+                const bucket = calendarState.monthEventsByDay[newDay] || [];
+                const replaced = bucket.some(ev => ev.id === id);
+                const nextBucket = replaced
+                    ? bucket.map(ev => ev.id === id ? { ...ev, ...updated } : ev)
+                    : [...bucket, { ...updated }];
+                calendarState.monthEventsByDay[newDay] = nextBucket;
+            }
         }
 
         if (!skipReload) {
@@ -6280,6 +6690,8 @@ function initRecallsPage() {
     if (menuAI) menuAI.addEventListener('click', () => { promptRecallAISearch(); menu?.classList.remove('open'); });
     const menuRefresh = document.getElementById('recall-menu-refresh');
     if (menuRefresh) menuRefresh.addEventListener('click', () => { loadRecalls(); menu?.classList.remove('open'); });
+    const menuEdit = document.getElementById('recall-menu-edit');
+    if (menuEdit) menuEdit.addEventListener('click', () => { editSelectedRecall(); menu?.classList.remove('open'); });
 
     // Toggle quick add panel
     const toggleAddBtn = document.getElementById('recall-toggle-add-btn');
@@ -6319,10 +6731,7 @@ function initRecallsPage() {
     const pinBtn = document.getElementById('recall-pin-btn');
     if (pinBtn) pinBtn.addEventListener('click', toggleSelectedRecallPin);
     const editBtn = document.getElementById('recall-edit-btn');
-    if (editBtn) editBtn.addEventListener('click', () => {
-        const selected = getSelectedRecall();
-        if (selected) openRecallModal(selected);
-    });
+    if (editBtn) editBtn.addEventListener('click', editSelectedRecall);
     const deleteBtn = document.getElementById('recall-delete-btn');
     if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
 
@@ -6493,6 +6902,11 @@ function renderRecallList() {
             ${snippet ? `<div class=\"recall-row-snippet\">${recallEscape(snippet)}${snippet.length >= 100 ? '...' : ''}</div>` : ''}
         `;
         row.addEventListener('click', () => selectRecall(item.id));
+        row.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            recallState.selectedId = item.id;
+            editSelectedRecall();
+        });
         container.appendChild(row);
     });
     if (recallState.selectedId) {
@@ -6512,6 +6926,15 @@ function selectRecall(id) {
 
 function getSelectedRecall() {
     return recallState.items.find(i => i.id === recallState.selectedId) || null;
+}
+
+function editSelectedRecall() {
+    const selected = getSelectedRecall();
+    if (!selected) {
+        showToast('Select a recall to edit.', 'info');
+        return;
+    }
+    openRecallModal(selected);
 }
 
 function renderRecallDetail(item) {
@@ -6610,10 +7033,7 @@ function renderRecallDetail(item) {
     const editBtn = document.getElementById('recall-edit-btn');
     const deleteBtn = document.getElementById('recall-delete-btn');
     if (pinBtn) pinBtn.addEventListener('click', toggleSelectedRecallPin);
-    if (editBtn) editBtn.addEventListener('click', () => {
-        const selected = getSelectedRecall();
-        if (selected) openRecallModal(selected);
-    });
+    if (editBtn) editBtn.addEventListener('click', editSelectedRecall);
     if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
 }
 

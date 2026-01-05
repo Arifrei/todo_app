@@ -1875,7 +1875,7 @@ def calendar_events():
         phase_id=resolved_phase_id if not is_phase and not is_group else None,
         group_id=resolved_group_id if not is_group else None,
         reminder_minutes_before=reminder_minutes if not is_phase and not is_group else None,
-        rollover_enabled=bool(data.get('rollover_enabled', True) if not is_group else False),
+        rollover_enabled=bool(data.get('rollover_enabled', False) if not is_group else False),
         order_index=_next_calendar_order(day_obj, user.id)
     )
     db.session.add(new_event)

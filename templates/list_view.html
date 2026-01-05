@@ -104,11 +104,24 @@
         <button class="btn btn-secondary btn-small" type="button" onclick="resetTaskSelection()" style="margin-left: 0.5rem;">Clear</button>
     </div>
     <div class="bulk-buttons">
-        <button class="btn-status status-pending" onclick="bulkUpdateStatus('not_started')">Not Started</button>
-        <button class="btn-status status-in_progress" onclick="bulkUpdateStatus('in_progress')">Started</button>
-        <button class="btn-status status-done" onclick="bulkUpdateStatus('done')">Done</button>
-        <button class="btn btn-secondary" onclick="openBulkMoveModal()">Move to…</button>
+        <button class="btn btn-secondary" onclick="openBulkMoveModal()">Move selected</button>
         <button class="btn-icon delete" onclick="bulkDelete()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
+        <div class="bulk-menu">
+            <button class="btn-icon bulk-more-btn" type="button" aria-label="More bulk actions" onclick="toggleBulkMenu(event)">
+                <i class="fa-solid fa-ellipsis-vertical"></i>
+            </button>
+            <div class="bulk-menu-dropdown" id="bulk-menu-dropdown">
+                <button class="bulk-menu-item" onclick="bulkUpdateStatus('not_started'); toggleBulkMenu(event, true);">
+                    <i class="fa-solid fa-circle-dot"></i> Not Started
+                </button>
+                <button class="bulk-menu-item" onclick="bulkUpdateStatus('in_progress'); toggleBulkMenu(event, true);">
+                    <i class="fa-solid fa-play"></i> Started
+                </button>
+                <button class="bulk-menu-item" onclick="bulkUpdateStatus('done'); toggleBulkMenu(event, true);">
+                    <i class="fa-solid fa-check"></i> Done
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 
