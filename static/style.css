@@ -834,6 +834,12 @@ header p {
         top: calc(64px + env(safe-area-inset-top, 0px));
         z-index: 140;
     }
+
+    .list-header-compact.sticky-header,
+    .list-header-compact {
+        top: calc(64px + env(safe-area-inset-top, 0px));
+        z-index: 140;
+    }
 }
 
 .phase-done-bar {
@@ -1107,6 +1113,9 @@ header p {
     box-shadow: 0 4px 16px -4px rgba(99, 102, 241, 0.2);
     padding: 1.75rem 1rem 1.75rem 0.25rem;
     font-size: 1.1rem;
+    position: sticky;
+    top: 58px;
+    z-index: 90;
 }
 
 .task-item.phase:hover {
@@ -1553,7 +1562,7 @@ header p {
     gap: 1rem;
     box-shadow: var(--shadow-md);
     position: sticky;
-    bottom: 1rem;
+    top: 0;
     z-index: 150;
 }
 
@@ -2044,8 +2053,8 @@ textarea.form-control {
     .task-item {
         flex-direction: column;
         align-items: stretch;
-        gap: 1rem;
-        padding: 1.25rem;
+        gap: 0.5rem;
+        padding: 0.75rem 0.6rem 0.75rem 0.2rem;
     }
 
     .task-footer {
@@ -2053,28 +2062,32 @@ textarea.form-control {
         width: 100%;
         justify-content: flex-start;
         flex-wrap: wrap;
-        gap: 0.625rem;
-        margin-top: 0.75rem;
+        gap: 0.4rem;
+        margin-top: 0.4rem;
     }
 
     .status-buttons {
         order: -1;
-        width: 100%;
+        width: auto;
         justify-content: flex-start;
+        display: inline-flex;
     }
 
     .task-actions {
-        gap: 0.5rem;
+        gap: 0.35rem;
+        display: inline-flex;
+        flex-wrap: wrap;
     }
 
     .btn-icon {
-        width: 36px;
-        height: 36px;
+        width: 30px;
+        height: 30px;
+        font-size: 0.9rem;
     }
 
     .btn-status {
-        font-size: 0.8rem;
-        padding: 0.45rem 0.75rem;
+        font-size: 0.75rem;
+        padding: 0.35rem 0.6rem;
     }
 
     .list-header .task-actions {
@@ -2125,6 +2138,128 @@ textarea.form-control {
         left: -0.75rem;
         width: 0.5rem;
     }
+
+    /* Compact phase headers on mobile with sticky positioning - single row layout */
+    .task-item.phase {
+        padding: 0.38rem 0.35rem 0.38rem 0.2rem;
+        border-width: 1.5px !important;
+        border-left-width: 3px !important;
+        position: sticky;
+        top: calc(64px + 48px + env(safe-area-inset-top, 0px));
+        z-index: 130;
+        background: linear-gradient(135deg, var(--indigo-light) 0%, var(--secondary-light) 100%) !important;
+        flex-direction: row !important;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    .task-item.phase .task-content {
+        flex-direction: row;
+        align-items: center;
+        gap: 0.3rem;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .task-item.phase .task-body {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    .task-item.phase .task-title-row {
+        gap: 0.3rem;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .task-item.phase .task-footer {
+        order: 0;
+        width: auto;
+        margin: 0;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: row;
+        gap: 0.25rem;
+    }
+
+    .task-item.phase.status-done {
+        background: linear-gradient(135deg, #ccfbf1 0%, #cffafe 100%) !important;
+    }
+
+    .task-item.phase .task-text {
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .task-item.phase.status-done .task-text::before {
+        font-size: 0.85rem;
+    }
+
+    .phase-toggle {
+        width: 24px;
+        height: 24px;
+        font-size: 0.65rem;
+        flex-shrink: 0;
+    }
+
+    .phase-pill {
+        display: none;
+    }
+
+    .task-item.phase .phase-inline-add {
+        font-size: 0.7rem;
+        padding: 0.3rem 0.5rem;
+        white-space: nowrap;
+    }
+
+    .task-item.phase .phase-inline-add i {
+        font-size: 0.65rem;
+    }
+
+    .task-item.phase .btn-icon {
+        width: 28px;
+        height: 28px;
+        font-size: 0.85rem;
+    }
+
+    /* More compact task items */
+    .task-text {
+        font-size: 0.92rem;
+        line-height: 1.3;
+    }
+
+    .task-list {
+        gap: 0.35rem;
+    }
+
+    /* Compact header */
+    .list-header-compact {
+        padding: 0.6rem 0.75rem;
+        gap: 0.5rem;
+        min-height: 48px;
+    }
+
+    .list-header-compact h1 {
+        font-size: 1.1rem;
+    }
+
+    .btn-back, .btn-home {
+        padding: 0.4rem 0.6rem;
+        font-size: 0.85rem;
+    }
+
+    .btn-icon {
+        width: 34px;
+        height: 34px;
+        font-size: 1rem;
+    }
 }
 
 @media (max-width: 700px) {
@@ -2144,10 +2279,127 @@ textarea.form-control {
 
     .task-item {
         touch-action: manipulation;
+        padding: 0.6rem 0.5rem 0.6rem 0.2rem;
     }
 
     .task-item:hover {
         transform: none;
+    }
+
+    /* Even smaller phase headers on small mobile */
+    .task-item.phase {
+        padding: 0.35rem 0.3rem 0.35rem 0.2rem;
+        position: sticky;
+        top: calc(64px + 44px + env(safe-area-inset-top, 0px));
+        z-index: 130;
+        background: linear-gradient(135deg, var(--indigo-light) 0%, var(--secondary-light) 100%) !important;
+    }
+
+    .task-item.phase.status-done {
+        background: linear-gradient(135deg, #ccfbf1 0%, #cffafe 100%) !important;
+    }
+
+    .task-item.phase .task-text {
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0px;
+    }
+
+    .phase-toggle {
+        width: 22px;
+        height: 22px;
+        font-size: 0.6rem;
+        flex-shrink: 0;
+    }
+
+    .task-item.phase .phase-inline-add {
+        font-size: 0.65rem;
+        padding: 0.28rem 0.45rem;
+        white-space: nowrap;
+    }
+
+    .task-item.phase .phase-inline-add i {
+        font-size: 0.6rem;
+    }
+
+    .task-item.phase .btn-icon {
+        width: 26px;
+        height: 26px;
+        font-size: 0.8rem;
+    }
+
+    .task-text {
+        font-size: 0.88rem;
+    }
+
+    .task-description {
+        font-size: 0.82rem;
+        margin-top: 0.25rem;
+        line-height: 1.3;
+    }
+
+    .task-notes {
+        font-size: 0.75rem;
+        margin-top: 0.2rem;
+        line-height: 1.3;
+    }
+
+    .task-meta-lite {
+        margin-top: 0.35rem;
+        gap: 0.3rem;
+    }
+
+    .meta-chip {
+        font-size: 0.68rem;
+        padding: 0.2rem 0.45rem;
+    }
+
+    .task-filter-row {
+        margin: 0.5rem 0 0.75rem;
+    }
+
+    .btn-filter-trigger {
+        font-size: 0.8rem;
+        padding: 0.45rem 0.7rem;
+    }
+
+    .list-header-compact {
+        padding: 0.5rem 0.65rem;
+        min-height: 44px;
+    }
+
+    .list-header-compact h1 {
+        font-size: 1rem;
+    }
+
+    .home-label {
+        display: none;
+    }
+
+    .task-list {
+        gap: 0.3rem;
+    }
+
+    /* Further reduce indentation on small screens */
+    .task-item.under-phase {
+        margin-left: 0.85rem;
+    }
+
+    .task-item.under-phase::before {
+        left: -0.5rem;
+        width: 0.4rem;
+    }
+
+    /* Compact progress bars */
+    .progress-container {
+        height: 5px;
+        margin-top: 0.35rem;
+        width: 120px;
+    }
+
+    /* Reduce content padding */
+    .content {
+        padding: 0.85rem 0.65rem;
     }
 
     .nav-row {
@@ -3379,6 +3631,10 @@ body.note-selection-mode-active .notes-sidebar-header {
     flex-shrink: 0;
 }
 
+.calendar-month-event .dot.priority-high { background: #ef4444; }
+.calendar-month-event .dot.priority-medium { background: #f59e0b; }
+.calendar-month-event .dot.priority-low { background: #10b981; }
+
 .calendar-month-event .title {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3572,11 +3828,73 @@ body.note-selection-mode-active .notes-sidebar-header {
     font-size: 0.9rem;
 }
 
-.calendar-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    .calendar-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .calendar-sort-menu {
+        display: none;
+    }
+
+
+.calendar-sort-menu {
+    position: relative;
 }
+
+.calendar-sort-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: var(--white);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.12);
+    padding: 0.4rem;
+    display: none;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 140px;
+    z-index: 200;
+}
+
+.calendar-sort-dropdown.active {
+    display: flex;
+}
+
+.calendar-sort-option {
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    padding: 0.45rem 0.6rem;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text-color);
+    text-align: left;
+}
+
+.calendar-sort-option.active {
+    background: rgba(59,130,246,0.12);
+    color: var(--primary-color);
+}
+
+.calendar-sort-option:hover {
+    background: rgba(59,130,246,0.08);
+}
+
+.calendar-sort-mobile {
+    display: none;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.35rem 0.4rem 0.45rem 0.4rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.calendar-sort-mobile.active {
+    display: flex;
+}
+
 
 #calendar-back-month {
     height: 36px;
@@ -3691,10 +4009,31 @@ body.note-selection-mode-active .notes-sidebar-header {
     overflow: visible;
 }
 
+.calendar-quick-title {
+    display: none;
+    font-weight: 600;
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+
 .quick-add-input-wrapper {
     position: relative;
     flex: 1;
     overflow: visible;
+}
+
+.calendar-quick-add.is-collapsed .quick-add-input-wrapper,
+.calendar-quick-add.is-collapsed #calendar-syntax-hint,
+.calendar-quick-add.is-collapsed #calendar-help-btn {
+    display: none;
+}
+
+.calendar-quick-add.is-collapsed .calendar-quick-title {
+    display: block;
+}
+
+.calendar-quick-add.is-collapsed {
+    padding-bottom: 0.75rem;
 }
 
 .calendar-help-btn {
@@ -3718,6 +4057,31 @@ body.note-selection-mode-active .notes-sidebar-header {
 }
 
 .calendar-help-btn i {
+    font-size: 0.95rem;
+}
+
+.calendar-quick-toggle {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    background: rgba(59,130,246,0.1);
+    color: var(--primary-color);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    margin-left: auto;
+}
+
+.calendar-quick-toggle:hover {
+    background: rgba(59,130,246,0.2);
+    transform: scale(1.2);
+}
+
+.calendar-quick-toggle i {
     font-size: 0.95rem;
 }
 
@@ -4125,7 +4489,7 @@ section.card.calendar-board,
     background: white;
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.12);
     min-width: 180px;
     padding: 0.5rem;
     z-index: 9999;
@@ -4190,11 +4554,15 @@ section.card.calendar-board,
 
 .calendar-icon-btn.overflow-trigger {
     opacity: 0.6;
+    width: 24px;
+    height: 24px;
+    background: transparent;
 }
 
 .calendar-icon-btn.overflow-trigger:hover {
     opacity: 1;
-    background: rgba(59, 130, 246, 0.1);
+    background: rgba(59, 130, 246, 0.08);
+    transform: none;
 }
 
 /* Removed secondary button hiding - all buttons always visible */

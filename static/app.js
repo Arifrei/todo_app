@@ -78,7 +78,7 @@ let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
 let recallState = { items: [], selectedId: null, editingId: null, filters: { q: '', category: 'all', type: 'all', status: 'active', sort: 'smart', pinnedOnly: false, tag: null }, aiResults: [] };
 let currentTaskFilter = 'all';
-let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false };
+let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time' };
 const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
@@ -3432,6 +3432,61 @@ function formatTimeRange(ev) {
     return end ? `${start} - ${end}` : start;
 }
 
+function getCalendarSortMode() {
+    return calendarState.daySort || 'time';
+}
+
+function parseTimeToMinutes(value) {
+    if (!value) return null;
+    const parts = String(value).split(':');
+    if (!parts.length) return null;
+    const hours = parseInt(parts[0], 10);
+    const mins = parseInt(parts[1] || '0', 10);
+    if (Number.isNaN(hours) || Number.isNaN(mins)) return null;
+    return (hours * 60) + mins;
+}
+
+function sortCalendarItems(items, mode) {
+    const priorityRank = { high: 0, medium: 1, low: 2 };
+    const statusRank = { not_started: 0, in_progress: 1, done: 2 };
+    const normalizedMode = mode || 'time';
+    const orderIndex = (ev) => (Number.isFinite(ev.order_index) ? ev.order_index : 999999);
+
+    return [...items].sort((a, b) => {
+        if (normalizedMode === 'manual') {
+            return orderIndex(a) - orderIndex(b);
+        }
+
+        if (normalizedMode === 'time') {
+            const at = parseTimeToMinutes(a.start_time);
+            const bt = parseTimeToMinutes(b.start_time);
+            if (at !== null || bt !== null) {
+                if (at === null) return 1;
+                if (bt === null) return -1;
+                if (at !== bt) return at - bt;
+            }
+        }
+
+        if (normalizedMode === 'priority') {
+            const ap = priorityRank[a.priority || 'medium'] ?? 3;
+            const bp = priorityRank[b.priority || 'medium'] ?? 3;
+            if (ap !== bp) return ap - bp;
+        }
+
+        if (normalizedMode === 'status') {
+            const as = statusRank[a.status || 'not_started'] ?? 3;
+            const bs = statusRank[b.status || 'not_started'] ?? 3;
+            if (as !== bs) return as - bs;
+        }
+
+        const atitle = (a.title || '').toLowerCase();
+        const btitle = (b.title || '').toLowerCase();
+        if (atitle < btitle) return -1;
+        if (atitle > btitle) return 1;
+        return orderIndex(a) - orderIndex(b);
+    });
+}
+
 function renderCalendarEvents() {
     const container = document.getElementById('calendar-events');
     if (!container) return;
@@ -3451,11 +3506,12 @@ function renderCalendarEvents() {
         resetCalendarSelection();
         return;
     }
-    const sorted = [...calendarState.events].sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
-    const tasksDue = sorted.filter(ev => ev.is_task_link);
-    const timeline = sorted.filter(ev => !ev.is_task_link);
+    const sortMode = getCalendarSortMode();
+    const tasksDue = (calendarState.events || []).filter(ev => ev.is_task_link);
+    const timeline = (calendarState.events || []).filter(ev => !ev.is_task_link);
     const groupMap = new Map();
     const rootItems = [];
+    const rootNonGroup = [];
 
     timeline.forEach(ev => {
         if (ev.is_group) {
@@ -3471,12 +3527,20 @@ function renderCalendarEvents() {
             groupMap.get(ev.group_id).children.push(ev);
         } else {
             rootItems.push(ev);
+            rootNonGroup.push(ev);
         }
     });
 
-    const groupsList = timeline.filter(ev => ev.is_group);
-    const phasesAndTasks = [...rootItems.filter(ev => !ev.is_event && !ev.is_group), ...tasksDue];
-    const dayEvents = rootItems.filter(ev => ev.is_event && !ev.is_group);
+    const groupsList = sortCalendarItems(timeline.filter(ev => ev.is_group), sortMode);
+    groupMap.forEach(group => {
+        group.children = sortCalendarItems(group.children, sortMode);
+    });
+
+    const phasesAndTasks = [
+        ...sortCalendarItems(rootNonGroup.filter(ev => !ev.is_event && !ev.is_group), sortMode),
+        ...sortCalendarItems(tasksDue, sortMode)
+    ];
+    const dayEvents = sortCalendarItems(rootNonGroup.filter(ev => ev.is_event && !ev.is_group), sortMode);
 
     const renderPhaseOrTask = (ev, isChild = false) => {
         const row = document.createElement('div');
@@ -3727,7 +3791,7 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        overflowDropdown.append(reminderMenuItem, noteMenuItem, rolloverMenuItem, deleteMenuItem);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, noteMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
@@ -4001,9 +4065,8 @@ function renderCalendarEvents() {
         });
     };
 
-    const eventItems = rootItems.filter(ev => ev.is_event && !ev.is_group);
-    let taskItems = rootItems.filter(ev => ev.is_group || (!ev.is_event && !ev.is_group));
-    taskItems = [...taskItems, ...tasksDue];
+    const eventItems = dayEvents;
+    const taskItems = sortCalendarItems([...groupsList, ...phasesAndTasks], sortMode);
 
     const toggleSection = (sectionId) => {
         const section = document.getElementById(`calendar-section-${sectionId}`);
@@ -5661,6 +5724,10 @@ function initCalendarPage() {
     const backBtn = document.getElementById('calendar-back-month');
     const menuBtn = document.getElementById('calendar-menu-btn');
     const dropdownMenu = document.getElementById('calendar-dropdown-menu');
+    const sortBtn = document.getElementById('calendar-day-sort-btn');
+    const sortMenu = document.getElementById('calendar-day-sort-menu');
+    const sortMobileToggle = document.getElementById('calendar-sort-mobile-toggle');
+    const sortMobileMenu = document.getElementById('calendar-sort-mobile');
     const bulkClearBtn = document.getElementById('calendar-bulk-clear');
     const bulkDoneBtn = document.getElementById('calendar-bulk-done');
     const bulkUndoneBtn = document.getElementById('calendar-bulk-undone');
@@ -5670,6 +5737,30 @@ function initCalendarPage() {
     const bulkNoteBtn = document.getElementById('calendar-bulk-note');
     const bulkDeleteBtn = document.getElementById('calendar-bulk-delete');
     const selectAllCheckbox = document.getElementById('calendar-select-all');
+    const dayQuickAdd = document.getElementById('calendar-day-quick-add');
+    const quickToggleBtn = document.getElementById('calendar-quick-toggle');
+
+    const sortLabelMap = {
+        time: 'Time',
+        title: 'Title',
+        priority: 'Priority',
+        status: 'Status',
+        manual: 'Manual'
+    };
+
+    const setDaySort = (mode) => {
+        const next = mode || 'time';
+        calendarState.daySort = next;
+        localStorage.setItem('calendarDaySort', next);
+        const label = sortLabelMap[next] || 'Time';
+        if (sortBtn) sortBtn.setAttribute('title', `Sort: ${label}`);
+        document.querySelectorAll('[data-sort]').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-sort') === next);
+        });
+        if (calendarState.detailsOpen) {
+            renderCalendarEvents();
+        }
+    };
 
     // Dropdown menu toggle
     if (menuBtn && dropdownMenu) {
@@ -5681,6 +5772,10 @@ function initCalendarPage() {
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.calendar-actions-menu')) {
                 dropdownMenu.classList.remove('active');
+                if (sortMobileMenu) sortMobileMenu.classList.remove('active');
+            }
+            if (sortMenu && !e.target.closest('.calendar-sort-menu')) {
+                sortMenu.classList.remove('active');
             }
             // Also close all calendar item dropdowns
             if (!e.target.closest('.calendar-overflow-menu') && !e.target.closest('.calendar-item-dropdown')) {
@@ -5827,6 +5922,56 @@ function initCalendarPage() {
     if (bulkNoteBtn) bulkNoteBtn.onclick = startBulkCalendarNoteLink;
     if (bulkDeleteBtn) bulkDeleteBtn.onclick = bulkCalendarDelete;
     if (selectAllCheckbox) selectAllCheckbox.onchange = (e) => calendarSelectAll(e.target.checked);
+
+    const savedSort = localStorage.getItem('calendarDaySort');
+    if (savedSort) {
+        calendarState.daySort = savedSort;
+    }
+    setDaySort(calendarState.daySort || 'time');
+
+    if (sortBtn && sortMenu) {
+        sortBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sortMenu.classList.toggle('active');
+        });
+    }
+
+    if (sortMobileToggle && sortMobileMenu) {
+        sortMobileToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sortMobileMenu.classList.toggle('active');
+        });
+    }
+
+    document.querySelectorAll('.calendar-sort-option').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.getAttribute('data-sort') || 'time';
+            setDaySort(mode);
+            if (sortMenu) sortMenu.classList.remove('active');
+            if (dropdownMenu) dropdownMenu.classList.remove('active');
+            if (sortMobileMenu) sortMobileMenu.classList.remove('active');
+        });
+    });
+
+    if (dayQuickAdd && quickToggleBtn) {
+        const setQuickAddCollapsed = (collapsed) => {
+            dayQuickAdd.classList.toggle('is-collapsed', collapsed);
+            const icon = quickToggleBtn.querySelector('i');
+            if (icon) {
+                icon.className = collapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up';
+            }
+            const label = collapsed ? 'Expand quick add' : 'Minimize quick add';
+            quickToggleBtn.setAttribute('aria-label', label);
+            quickToggleBtn.setAttribute('title', label);
+        };
+
+        quickToggleBtn.addEventListener('click', () => {
+            const collapsed = !dayQuickAdd.classList.contains('is-collapsed');
+            setQuickAddCollapsed(collapsed);
+        });
+
+        setQuickAddCollapsed(false);
+    }
 
     // Quick-add panel event handlers
     const quickAddPanel = document.getElementById('calendar-quick-add-panel');

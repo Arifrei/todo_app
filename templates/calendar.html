@@ -55,6 +55,18 @@
                 <button class="btn-icon" id="calendar-next-day" aria-label="Next day"><i class="fa-solid fa-chevron-right"></i></button>
             </div>
             <div class="calendar-actions">
+                <div class="calendar-sort-menu">
+                    <button class="btn btn-secondary btn-icon-only" id="calendar-day-sort-btn" aria-label="Sort day items" title="Sort: Time">
+                        <i class="fa-solid fa-arrow-down-wide-short"></i>
+                    </button>
+                    <div class="calendar-sort-dropdown" id="calendar-day-sort-menu">
+                        <button class="calendar-sort-option" data-sort="time">Time</button>
+                        <button class="calendar-sort-option" data-sort="title">Title</button>
+                        <button class="calendar-sort-option" data-sort="priority">Priority</button>
+                        <button class="calendar-sort-option" data-sort="status">Status</button>
+                        <button class="calendar-sort-option" data-sort="manual">Manual</button>
+                    </div>
+                </div>
                 <button class="btn btn-secondary btn-icon-text" id="calendar-back-month">
                     <i class="fa-solid fa-calendar-days"></i><span class="btn-text">Back</span>
                 </button>
@@ -72,19 +84,33 @@
                         <button class="calendar-menu-item" id="calendar-send-digest">
                             <i class="fa-solid fa-envelope"></i> Email Digest
                         </button>
+                        <button class="calendar-menu-item" id="calendar-sort-mobile-toggle">
+                            <i class="fa-solid fa-arrow-down-wide-short"></i> Sort
+                        </button>
+                        <div class="calendar-sort-mobile" id="calendar-sort-mobile">
+                            <button class="calendar-sort-option" data-sort="time">Time</button>
+                            <button class="calendar-sort-option" data-sort="title">Title</button>
+                            <button class="calendar-sort-option" data-sort="priority">Priority</button>
+                            <button class="calendar-sort-option" data-sort="status">Status</button>
+                            <button class="calendar-sort-option" data-sort="manual">Manual</button>
+                        </div>
                     </div>
                 </div>
             </div>
         </header>
 
-        <section class="calendar-quick-add card">
+        <section class="calendar-quick-add card" id="calendar-day-quick-add">
             <div class="calendar-input-row">
+                <div class="calendar-quick-title">Quick add</div>
                 <div class="quick-add-input-wrapper">
                     <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
                     <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
                 </div>
                 <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help">
                     <i class="fa-solid fa-circle-question"></i>
+                </button>
+                <button class="btn-icon calendar-quick-toggle" id="calendar-quick-toggle" aria-label="Minimize quick add" title="Minimize quick add">
+                    <i class="fa-solid fa-chevron-up"></i>
                 </button>
             </div>
             <div class="quick-hint" id="calendar-syntax-hint">
