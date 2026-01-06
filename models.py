@@ -6,6 +6,13 @@ from datetime import datetime, date, time
 db = SQLAlchemy()
 
 
+class JobLock(db.Model):
+    """Simple distributed lock for background jobs to prevent concurrent execution."""
+    job_name = db.Column(db.String(100), primary_key=True)
+    locked_at = db.Column(db.DateTime, nullable=False)
+    locked_by = db.Column(db.String(100), nullable=True)
+
+
 def _split_tags(raw):
     """Normalize a comma-separated tag string into a list."""
     if not raw:
@@ -21,6 +28,8 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.String(200), nullable=False)
     pin_hash = db.Column(db.String(200), nullable=True)
+    sidebar_order = db.Column(db.Text, nullable=True)
+    homepage_order = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -51,6 +60,7 @@ class TodoList(db.Model):
     type = db.Column(db.String(20), default='list') # 'hub' or 'list'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
 
     # Relationships
     items = db.relationship(
@@ -99,6 +109,7 @@ class TodoList(db.Model):
             'title': self.title,
             'type': self.type,
             'created_at': self.created_at.isoformat(),
+            'order_index': self.order_index or 0,
             'items': [item.to_dict() for item in self.items],
             'progress': self.get_progress()
         }
@@ -109,6 +120,7 @@ class TodoItem(db.Model):
     content = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
+    tags = db.Column(db.Text, nullable=True)  # comma-separated for simplicity
     status = db.Column(db.String(20), default='not_started') # 'not_started', 'in_progress', 'done'
     order_index = db.Column(db.Integer, default=0)  # For manual ordering
     is_phase = db.Column(db.Boolean, default=False)  # Track if this is a phase header
@@ -165,6 +177,9 @@ class TodoItem(db.Model):
         else:
             self.status = 'not_started'
 
+    def tag_list(self):
+        return _split_tags(self.tags)
+
     def to_dict(self):
         self.ensure_phase_canonical()
         data = {
@@ -173,6 +188,7 @@ class TodoItem(db.Model):
             'content': self.content,
             'description': self.description,
             'notes': self.notes,
+            'tags': self.tag_list(),
             'status': self.status,
             'is_phase': self.is_phase,
             'phase_id': self.phase_id,
@@ -227,6 +243,7 @@ class RecallItem(db.Model):
     category = db.Column(db.String(80), nullable=False, default='General')
     type = db.Column(db.String(30), nullable=False, default='note')  # link | idea | source | other
     content = db.Column(db.Text, nullable=True)
+    description = db.Column(db.Text, nullable=True)
     tags = db.Column(db.Text, nullable=True)  # comma-separated for simplicity
     priority = db.Column(db.String(10), nullable=False, default='medium')  # low | medium | high
     pinned = db.Column(db.Boolean, default=False)
@@ -250,6 +267,7 @@ class RecallItem(db.Model):
             'category': self.category,
             'type': self.type,
             'content': self.content or '',
+            'description': self.description or '',
             'tags': self.tag_list(),
             'priority': self.priority,
             'pinned': bool(self.pinned),
@@ -293,6 +311,7 @@ class CalendarEvent(db.Model):
     reminder_snoozed_until = db.Column(db.DateTime, nullable=True)
     rollover_enabled = db.Column(db.Boolean, default=False)
     rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -320,6 +339,7 @@ class CalendarEvent(db.Model):
             'reminder_minutes_before': self.reminder_minutes_before,
             'rollover_enabled': self.rollover_enabled,
             'rolled_from_id': self.rolled_from_id,
+            'todo_item_id': self.todo_item_id,
             'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
         }
 
@@ -391,5 +411,31 @@ class PushSubscription(db.Model):
             'endpoint': self.endpoint,
             'p256dh': self.p256dh,
             'auth': self.auth,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class QuickAccessItem(db.Model):
+    """User's quick access pinned items."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    icon = db.Column(db.String(50), nullable=False, default='fa-solid fa-bookmark')
+    url = db.Column(db.String(500), nullable=False)
+    item_type = db.Column(db.String(30), nullable=False, default='custom')  # custom | list | note | calendar | system
+    reference_id = db.Column(db.Integer, nullable=True)  # ID of referenced list/note/event if applicable
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'icon': self.icon,
+            'url': self.url,
+            'item_type': self.item_type,
+            'reference_id': self.reference_id,
+            'order_index': self.order_index,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }

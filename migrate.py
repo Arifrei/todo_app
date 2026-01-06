@@ -42,6 +42,7 @@ def add_column(cur, table: str, column: str, col_type: str, default_sql: str | N
 def ensure_user_table(cur):
     if table_exists(cur, "user"):
         add_column(cur, "user", "pin_hash", "VARCHAR(200)")
+        add_column(cur, "user", "sidebar_order", "TEXT")
         print("[ok] user table exists")
         return
     cur.execute(
@@ -52,6 +53,7 @@ def ensure_user_table(cur):
             email VARCHAR(120) UNIQUE,
             password_hash VARCHAR(200) NOT NULL,
             pin_hash VARCHAR(200),
+            sidebar_order TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -68,13 +70,16 @@ def ensure_todo_list_table(cur):
                 title VARCHAR(100) NOT NULL,
                 type VARCHAR(20) DEFAULT 'list',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                user_id INTEGER NOT NULL
+                user_id INTEGER NOT NULL,
+                order_index INTEGER DEFAULT 0
             )
             """
         )
         print("[add] todo_list table created")
         return
     add_column(cur, "todo_list", "user_id", "INTEGER", default_sql="1")
+    add_column(cur, "todo_list", "order_index", "INTEGER DEFAULT 0")
+    cur.execute("UPDATE todo_list SET order_index = id WHERE order_index IS NULL")
 
 
 def ensure_todo_item_table(cur):
@@ -87,6 +92,7 @@ def ensure_todo_item_table(cur):
                 content VARCHAR(200) NOT NULL,
                 description TEXT,
                 notes TEXT,
+                tags TEXT,
                 status VARCHAR(20) DEFAULT 'not_started',
                 order_index INTEGER DEFAULT 0,
                 is_phase BOOLEAN DEFAULT 0,
@@ -101,6 +107,7 @@ def ensure_todo_item_table(cur):
 
     add_column(cur, "todo_item", "description", "TEXT")
     add_column(cur, "todo_item", "notes", "TEXT")
+    add_column(cur, "todo_item", "tags", "TEXT")
     add_column(cur, "todo_item", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "todo_item", "is_phase", "BOOLEAN DEFAULT 0")
     add_column(cur, "todo_item", "phase_id", "INTEGER")
@@ -175,6 +182,7 @@ def ensure_calendar_event_table(cur):
                 reminder_snoozed_until TIMESTAMP,
                 rollover_enabled BOOLEAN DEFAULT 1,
                 rolled_from_id INTEGER,
+                todo_item_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -196,6 +204,7 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "reminder_snoozed_until", "TIMESTAMP")
     add_column(cur, "calendar_event", "rollover_enabled", "BOOLEAN DEFAULT 1")
     add_column(cur, "calendar_event", "rolled_from_id", "INTEGER")
+    add_column(cur, "calendar_event", "todo_item_id", "INTEGER")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
     add_column(cur, "calendar_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
@@ -214,6 +223,7 @@ def ensure_recall_table(cur):
                 category VARCHAR(80) NOT NULL DEFAULT 'General',
                 type VARCHAR(30) NOT NULL DEFAULT 'note',
                 content TEXT,
+                description TEXT,
                 tags TEXT,
                 priority VARCHAR(10) NOT NULL DEFAULT 'medium',
                 pinned BOOLEAN DEFAULT 0,
@@ -234,6 +244,7 @@ def ensure_recall_table(cur):
     add_column(cur, "recall_item", "category", "VARCHAR(80) NOT NULL DEFAULT 'General'")
     add_column(cur, "recall_item", "type", "VARCHAR(30) NOT NULL DEFAULT 'note'")
     add_column(cur, "recall_item", "content", "TEXT")
+    add_column(cur, "recall_item", "description", "TEXT")
     add_column(cur, "recall_item", "tags", "TEXT")
     add_column(cur, "recall_item", "priority", "VARCHAR(10) NOT NULL DEFAULT 'medium'")
     add_column(cur, "recall_item", "pinned", "BOOLEAN DEFAULT 0")
@@ -327,6 +338,23 @@ def ensure_notification_tables(cur):
         add_column(cur, "push_subscription", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_job_lock_table(cur):
+    """Ensure job_lock table exists for distributed locking."""
+    if table_exists(cur, "job_lock"):
+        print("[ok] job_lock table exists")
+        return
+    cur.execute(
+        """
+        CREATE TABLE job_lock (
+            job_name VARCHAR(100) PRIMARY KEY,
+            locked_at TIMESTAMP NOT NULL,
+            locked_by VARCHAR(100)
+        )
+        """
+    )
+    print("[add] job_lock table created")
+
+
 def main():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -339,6 +367,7 @@ def main():
         ensure_calendar_event_table(cur)
         ensure_recall_table(cur)
         ensure_notification_tables(cur)
+        ensure_job_lock_table(cur)
         conn.commit()
         print("Baseline migration complete.")
     finally:

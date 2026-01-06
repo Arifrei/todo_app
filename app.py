@@ -9,7 +9,7 @@ from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from ai_service import run_ai_chat, get_openai_client
-from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription, RecallItem
+from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -39,8 +39,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-SIDEBAR_ORDER_FILE = os.path.join(app.instance_path, 'sidebar_order.json')
 DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'quick-access', 'ai', 'settings', 'download']
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -87,11 +87,12 @@ def _parse_reminder(dt_str):
         return None
 
 
-def _build_recall_blob(title, content, category, type_name, tags, source_url=None, summary=None):
+def _build_recall_blob(title, content, description, category, type_name, tags, source_url=None, summary=None):
     fields = [
         title or '',
         category or '',
         type_name or '',
+        description or '',
         content or '',
         summary or '',
         ' '.join(_normalize_tags(tags)),
@@ -132,31 +133,83 @@ def _fetch_url_content(url, max_length=3000):
         return None
 
 
-def _load_sidebar_order():
-    """Load global sidebar order from disk, falling back to defaults."""
+def _sanitize_sidebar_order(order):
+    """Ensure sidebar order is a valid, complete list of allowed items."""
+    cleaned = [str(item).strip() for item in (order or []) if isinstance(item, str) and str(item).strip()]
+    allowed = set(DEFAULT_SIDEBAR_ORDER)
+    cleaned = [item for item in cleaned if item in allowed]
+    seen = set()
+    final_order = []
+    for item in cleaned:
+        if item not in seen:
+            seen.add(item)
+            final_order.append(item)
+    for item in DEFAULT_SIDEBAR_ORDER:
+        if item not in seen:
+            final_order.append(item)
+    return final_order
+
+
+def _load_sidebar_order(user):
+    """Load sidebar order from user profile, falling back to defaults."""
+    if not user:
+        return list(DEFAULT_SIDEBAR_ORDER)
     try:
-        if os.path.exists(SIDEBAR_ORDER_FILE):
-            with open(SIDEBAR_ORDER_FILE, 'r', encoding='utf-8') as handle:
-                data = json.load(handle)
-                if isinstance(data, list):
-                    order = [str(item).strip() for item in data if isinstance(item, str) and str(item).strip()]
-                    allowed = set(DEFAULT_SIDEBAR_ORDER)
-                    order = [item for item in order if item in allowed]
-                    if order:
-                        # Ensure all items present.
-                        seen = set(order)
-                        order.extend([item for item in DEFAULT_SIDEBAR_ORDER if item not in seen])
-                        return order
+        raw = user.sidebar_order
+        if raw:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return _sanitize_sidebar_order(data)
     except Exception as exc:
-        app.logger.warning(f"Failed to load sidebar order: {exc}")
+        app.logger.warning(f"Failed to load sidebar order for user {user.id}: {exc}")
     return list(DEFAULT_SIDEBAR_ORDER)
 
 
-def _save_sidebar_order(order):
-    """Persist global sidebar order to disk."""
-    os.makedirs(app.instance_path, exist_ok=True)
-    with open(SIDEBAR_ORDER_FILE, 'w', encoding='utf-8') as handle:
-        json.dump(order, handle, indent=2)
+def _save_sidebar_order(user, order):
+    """Persist sidebar order to the user's profile."""
+    if not user:
+        return
+    user.sidebar_order = json.dumps(_sanitize_sidebar_order(order))
+
+
+def _sanitize_homepage_order(order):
+    """Ensure homepage order is a valid, complete list of allowed modules."""
+    cleaned = [str(item).strip() for item in (order or []) if isinstance(item, str) and str(item).strip()]
+    allowed = set(DEFAULT_HOMEPAGE_ORDER)
+    cleaned = [item for item in cleaned if item in allowed]
+    seen = set()
+    final_order = []
+    for item in cleaned:
+        if item not in seen:
+            seen.add(item)
+            final_order.append(item)
+    # Add any missing modules to maintain completeness
+    for item in DEFAULT_HOMEPAGE_ORDER:
+        if item not in seen:
+            final_order.append(item)
+    return final_order
+
+
+def _load_homepage_order(user):
+    """Load homepage order from user profile, falling back to defaults."""
+    if not user:
+        return list(DEFAULT_HOMEPAGE_ORDER)
+    try:
+        raw = user.homepage_order
+        if raw:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return _sanitize_homepage_order(data)
+    except Exception as exc:
+        app.logger.warning(f"Failed to load homepage order for user {user.id}: {exc}")
+    return list(DEFAULT_HOMEPAGE_ORDER)
+
+
+def _save_homepage_order(user, order):
+    """Persist homepage order to the user's profile."""
+    if not user:
+        return
+    user.homepage_order = json.dumps(_sanitize_homepage_order(order))
 
 
 def _generate_recall_summary(title, content, category, type_name, source_url=None):
@@ -603,119 +656,164 @@ def _next_calendar_order(day_value, user_id):
 def _rollover_incomplete_events():
     """Clone yesterday's incomplete events with rollover enabled into today."""
     with app.app_context():
-        today = date.today()
-        yesterday = today - timedelta(days=1)
-        app.logger.info(f"Rollover start: {yesterday} -> {today}")
+        # Acquire distributed lock to prevent concurrent execution across workers
+        import os
+        worker_id = os.getpid()
+        lock_name = 'calendar_rollover'
 
-        # Build a map of phases that need to be recreated
-        phases_yesterday = CalendarEvent.query.filter(
-            CalendarEvent.day == yesterday,
-            CalendarEvent.is_phase.is_(True)
-        ).all()
-
-        # For each user, roll their events independently
-        user_ids = [u.id for u in User.query.all()]
-        for uid in user_ids:
-            created_events = 0
-            created_phases = 0
-
-            # Track already created rollovers so reruns stay idempotent
-            existing_rollovers = CalendarEvent.query.filter(
-                CalendarEvent.user_id == uid,
-                CalendarEvent.day == today,
-                CalendarEvent.rolled_from_id.isnot(None)
-            ).all()
-            rolled_lookup = {}
-            duplicates_to_delete = []
-            for ev in existing_rollovers:
-                key = ev.rolled_from_id
-                if key in rolled_lookup:
-                    keep = rolled_lookup[key]
-                    # Keep the earliest created rollover, delete extras
-                    if ev.id < keep.id:
-                        duplicates_to_delete.append(keep)
-                        rolled_lookup[key] = ev
-                    else:
-                        duplicates_to_delete.append(ev)
+        # Try to acquire lock with a database transaction
+        try:
+            from models import JobLock
+            # Use SELECT FOR UPDATE to ensure only one worker acquires the lock
+            lock = db.session.query(JobLock).filter_by(job_name=lock_name).with_for_update(nowait=True).first()
+            if lock:
+                # Lock exists and is held - check if it's stale (>5 minutes old)
+                from datetime import datetime, timedelta
+                if datetime.utcnow() - lock.locked_at < timedelta(minutes=5):
+                    app.logger.info(f"Rollover already running (locked by {lock.locked_by}), skipping")
+                    db.session.rollback()
+                    return
                 else:
-                    rolled_lookup[key] = ev
-
-            phase_map = {}
-            # Collect phases by title to recreate only if needed
-            for ph in phases_yesterday:
-                if ph.user_id == uid:
-                    existing_phase_copy = rolled_lookup.get(ph.id)
-                    phase_map[ph.id] = existing_phase_copy.id if existing_phase_copy and existing_phase_copy.is_phase else None
-
-            events = CalendarEvent.query.filter(
-                CalendarEvent.user_id == uid,
-                CalendarEvent.day == yesterday,
-                CalendarEvent.status != 'done',
-                CalendarEvent.rollover_enabled.is_(True),
-                CalendarEvent.is_phase.is_(False)
-            ).order_by(CalendarEvent.order_index.asc()).all()
-
-            if not events:
-                continue
-
-            for ev in events:
-                # Skip if this event has already been rolled over today
-                if ev.id in rolled_lookup:
-                    continue
-
-                new_phase_id = None
-                if ev.phase_id:
-                    if ev.phase_id not in phase_map or phase_map[ev.phase_id] is None:
-                        orig_phase = next((p for p in phases_yesterday if p.id == ev.phase_id and p.user_id == uid), None)
-                        if orig_phase:
-                            copy_phase = CalendarEvent(
-                                user_id=uid,
-                                title=orig_phase.title,
-                                description=orig_phase.description,
-                                day=today,
-                                is_phase=True,
-                                status='not_started',
-                                priority=orig_phase.priority,
-                                order_index=_next_calendar_order(today, uid),
-                                reminder_minutes_before=None,
-                                rollover_enabled=orig_phase.rollover_enabled,
-                                rolled_from_id=orig_phase.id
-                            )
-                            db.session.add(copy_phase)
-                            db.session.flush()
-                            phase_map[orig_phase.id] = copy_phase.id
-                            created_phases += 1
-                    new_phase_id = phase_map.get(ev.phase_id)
-
-                copy_event = CalendarEvent(
-                    user_id=uid,
-                    title=ev.title,
-                    description=ev.description,
-                    day=today,
-                    start_time=ev.start_time,
-                    end_time=ev.end_time,
-                    status='not_started',
-                    priority=ev.priority,
-                    is_phase=False,
-                    phase_id=new_phase_id,
-                    order_index=_next_calendar_order(today, uid),
-                    reminder_minutes_before=ev.reminder_minutes_before,
-                    rollover_enabled=ev.rollover_enabled,
-                    rolled_from_id=ev.id
-                )
-                db.session.add(copy_event)
-                created_events += 1
-
-            for dup in duplicates_to_delete:
-                db.session.delete(dup)
+                    # Stale lock, update it
+                    lock.locked_at = datetime.utcnow()
+                    lock.locked_by = str(worker_id)
+            else:
+                # Create new lock
+                lock = JobLock(job_name=lock_name, locked_at=datetime.utcnow(), locked_by=str(worker_id))
+                db.session.add(lock)
 
             db.session.commit()
-            if created_events or duplicates_to_delete:
-                app.logger.info(
-                    f"Rollover user {uid}: created {created_events} events, "
-                    f"created {created_phases} phases, removed {len(duplicates_to_delete)} duplicates"
-                )
-        app.logger.info("Rollover finished")
+        except Exception as e:
+            # Lock acquisition failed (another worker has it)
+            db.session.rollback()
+            app.logger.info(f"Rollover lock acquisition failed (worker {worker_id}), skipping: {e}")
+            return
+
+        try:
+            today = date.today()
+            yesterday = today - timedelta(days=1)
+            app.logger.info(f"Rollover start (worker {worker_id}): {yesterday} -> {today}")
+
+            # Build a map of phases that need to be recreated
+            phases_yesterday = CalendarEvent.query.filter(
+                CalendarEvent.day == yesterday,
+                CalendarEvent.is_phase.is_(True)
+            ).all()
+
+            # For each user, roll their events independently
+            user_ids = [u.id for u in User.query.all()]
+            for uid in user_ids:
+                created_events = 0
+                created_phases = 0
+
+                # Track already created rollovers so reruns stay idempotent
+                existing_rollovers = CalendarEvent.query.filter(
+                    CalendarEvent.user_id == uid,
+                    CalendarEvent.day == today,
+                    CalendarEvent.rolled_from_id.isnot(None)
+                ).all()
+                rolled_lookup = {}
+                duplicates_to_delete = []
+                for ev in existing_rollovers:
+                    key = ev.rolled_from_id
+                    if key in rolled_lookup:
+                        keep = rolled_lookup[key]
+                        # Keep the earliest created rollover, delete extras
+                        if ev.id < keep.id:
+                            duplicates_to_delete.append(keep)
+                            rolled_lookup[key] = ev
+                        else:
+                            duplicates_to_delete.append(ev)
+                    else:
+                        rolled_lookup[key] = ev
+
+                phase_map = {}
+                # Collect phases by title to recreate only if needed
+                for ph in phases_yesterday:
+                    if ph.user_id == uid:
+                        existing_phase_copy = rolled_lookup.get(ph.id)
+                        phase_map[ph.id] = existing_phase_copy.id if existing_phase_copy and existing_phase_copy.is_phase else None
+
+                events = CalendarEvent.query.filter(
+                    CalendarEvent.user_id == uid,
+                    CalendarEvent.day == yesterday,
+                    CalendarEvent.status != 'done',
+                    CalendarEvent.rollover_enabled.is_(True),
+                    CalendarEvent.is_phase.is_(False)
+                ).order_by(CalendarEvent.order_index.asc()).all()
+
+                if not events:
+                    continue
+
+                for ev in events:
+                    # Skip if this event has already been rolled over today
+                    if ev.id in rolled_lookup:
+                        continue
+
+                    new_phase_id = None
+                    if ev.phase_id:
+                        if ev.phase_id not in phase_map or phase_map[ev.phase_id] is None:
+                            orig_phase = next((p for p in phases_yesterday if p.id == ev.phase_id and p.user_id == uid), None)
+                            if orig_phase:
+                                copy_phase = CalendarEvent(
+                                    user_id=uid,
+                                    title=orig_phase.title,
+                                    description=orig_phase.description,
+                                    day=today,
+                                    is_phase=True,
+                                    status='not_started',
+                                    priority=orig_phase.priority,
+                                    order_index=_next_calendar_order(today, uid),
+                                    reminder_minutes_before=None,
+                                    rollover_enabled=orig_phase.rollover_enabled,
+                                    rolled_from_id=orig_phase.id
+                                )
+                                db.session.add(copy_phase)
+                                db.session.flush()
+                                phase_map[orig_phase.id] = copy_phase.id
+                                created_phases += 1
+                        new_phase_id = phase_map.get(ev.phase_id)
+
+                    copy_event = CalendarEvent(
+                        user_id=uid,
+                        title=ev.title,
+                        description=ev.description,
+                        day=today,
+                        start_time=ev.start_time,
+                        end_time=ev.end_time,
+                        status='not_started',
+                        priority=ev.priority,
+                        is_phase=False,
+                        phase_id=new_phase_id,
+                        order_index=_next_calendar_order(today, uid),
+                        reminder_minutes_before=ev.reminder_minutes_before,
+                        rollover_enabled=ev.rollover_enabled,
+                        rolled_from_id=ev.id
+                    )
+                    db.session.add(copy_event)
+                    created_events += 1
+
+                for dup in duplicates_to_delete:
+                    db.session.delete(dup)
+
+                db.session.commit()
+                if created_events or duplicates_to_delete:
+                    app.logger.info(
+                        f"Rollover user {uid}: created {created_events} events, "
+                        f"created {created_phases} phases, removed {len(duplicates_to_delete)} duplicates"
+                    )
+            app.logger.info(f"Rollover finished (worker {worker_id})")
+        finally:
+            # Release the lock
+            try:
+                lock_to_release = db.session.query(JobLock).filter_by(job_name=lock_name).first()
+                if lock_to_release and lock_to_release.locked_by == str(worker_id):
+                    db.session.delete(lock_to_release)
+                    db.session.commit()
+                    app.logger.info(f"Rollover lock released (worker {worker_id})")
+            except Exception as e:
+                app.logger.error(f"Error releasing rollover lock: {e}")
+                db.session.rollback()
 
 
 def _send_email(to_addr, subject, body):
@@ -745,16 +843,19 @@ def _send_email(to_addr, subject, body):
 
 def _build_daily_digest_body(events_for_day, tasks_due):
     lines = []
-    for ev in events_for_day:
-        prefix = '[x]' if ev.status == 'done' else '[ ]'
-        time_block = ''
-        if ev.start_time:
-            end_str = ev.end_time.isoformat() if ev.end_time else ''
-            time_block = f" @ {ev.start_time.isoformat()}{('-' + end_str) if end_str else ''}"
-        priority = ev.priority or 'medium'
-        lines.append(f"{prefix} {ev.title} ({priority}){time_block}")
+    if events_for_day:
+        lines.append("Calendar items:")
+        for ev in events_for_day:
+            prefix = '[x]' if ev.status == 'done' else '[ ]'
+            time_block = ''
+            if ev.start_time:
+                end_str = ev.end_time.isoformat() if ev.end_time else ''
+                time_block = f" @ {ev.start_time.isoformat()}{('-' + end_str) if end_str else ''}"
+            priority = ev.priority or 'medium'
+            lines.append(f"{prefix} {ev.title} ({priority}){time_block}")
     if tasks_due:
-        lines.append("")
+        if lines:
+            lines.append("")
         lines.append("Due tasks:")
         for item in tasks_due:
             prefix = '[x]' if item.status == 'done' else '[ ]'
@@ -767,12 +868,19 @@ def _send_daily_email_digest(target_day=None):
     if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '1') != '1':
         return
     with app.app_context():
-        target_day = target_day or date.today()
+        if target_day is None:
+            tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
+            target_day = datetime.now(tz).date()
         users = User.query.filter(User.email != None).all()  # noqa: E711
         for user_obj in users:
+            prefs = _get_or_create_notification_settings(user_obj.id)
+            if not prefs.email_enabled or not prefs.digest_enabled:
+                continue
             events = CalendarEvent.query.filter(
                 CalendarEvent.user_id == user_obj.id,
-                CalendarEvent.day == target_day
+                CalendarEvent.day == target_day,
+                CalendarEvent.is_group.is_(False),
+                CalendarEvent.is_phase.is_(False)
             ).order_by(CalendarEvent.order_index.asc()).all()
             tasks_due = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
                 TodoList.user_id == user_obj.id,
@@ -1024,8 +1132,15 @@ def _start_scheduler():
         return
     scheduler = BackgroundScheduler(timezone=app.config.get('DEFAULT_TIMEZONE', 'UTC'))
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
-    # Optional daily digest at 7:00 local time
-    scheduler.add_job(_send_daily_email_digest, 'cron', hour=int(os.environ.get('DIGEST_HOUR', 7)), minute=0)
+    # Daily digest at 7:00 AM in the app's default timezone (EST/EDT by default).
+    scheduler.add_job(
+        _send_daily_email_digest,
+        'cron',
+        hour=7,
+        minute=0,
+        id='daily_email_digest',
+        replace_existing=True
+    )
     # Note: Calendar reminders now use server-scheduled jobs (scheduled per-event)
     # Legacy minute-polling has been replaced with precise scheduling
     scheduler.start()
@@ -1129,9 +1244,12 @@ def current_user_info():
 
 @app.route('/api/sidebar-order', methods=['GET', 'POST'])
 def sidebar_order():
-    """Get or update the global sidebar order (stored on disk, not per-user)."""
+    """Get or update the sidebar order stored per user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
     if request.method == 'GET':
-        order = _load_sidebar_order()
+        order = _load_sidebar_order(user)
         return jsonify({'order': order})
 
     data = request.get_json(silent=True)
@@ -1139,21 +1257,9 @@ def sidebar_order():
     if not isinstance(order, list):
         return jsonify({'error': 'Order must be a list'}), 400
 
-    cleaned = [str(item).strip() for item in order if isinstance(item, str) and str(item).strip()]
-    allowed = set(DEFAULT_SIDEBAR_ORDER)
-    cleaned = [item for item in cleaned if item in allowed]
-    # Ensure all allowed items exist exactly once, preserving requested order.
-    seen = set()
-    final_order = []
-    for item in cleaned:
-        if item not in seen:
-            seen.add(item)
-            final_order.append(item)
-    for item in DEFAULT_SIDEBAR_ORDER:
-        if item not in seen:
-            final_order.append(item)
-
-    _save_sidebar_order(final_order)
+    final_order = _sanitize_sidebar_order(order)
+    _save_sidebar_order(user, final_order)
+    db.session.commit()
     return jsonify({'success': True, 'order': final_order})
 
 @app.route('/')
@@ -1281,7 +1387,14 @@ def calendar_page():
     """Calendar day-first UI."""
     if not get_current_user():
         return redirect(url_for('select_user'))
-    return render_template('calendar.html')
+    return render_template('calendar.html', default_timezone=app.config.get('DEFAULT_TIMEZONE'))
+
+@app.route('/quick-access')
+def quick_access_page():
+    """Quick access shortcuts page."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('quick_access.html')
 
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
@@ -1320,7 +1433,13 @@ def handle_lists():
 
     if request.method == 'POST':
         data = request.json
-        new_list = TodoList(title=data['title'], type=data.get('type', 'list'), user_id=user.id)
+        list_type = data.get('type', 'list')
+        order_query = db.session.query(db.func.coalesce(db.func.max(TodoList.order_index), 0)).filter(
+            TodoList.user_id == user.id,
+            TodoList.type == list_type
+        ).outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None)
+        next_order = (order_query.scalar() or 0) + 1
+        new_list = TodoList(title=data['title'], type=list_type, user_id=user.id, order_index=next_order)
         db.session.add(new_list)
         db.session.commit()
         return jsonify(new_list.to_dict()), 201
@@ -1334,8 +1453,39 @@ def handle_lists():
     list_type = request.args.get('type')
     if list_type:
         query = query.filter(TodoList.type == list_type)
-    lists = query.all()
+    lists = query.order_by(TodoList.order_index.asc(), TodoList.id.asc()).all()
     return jsonify([l.to_dict() for l in lists])
+
+
+@app.route('/api/lists/reorder', methods=['POST'])
+def reorder_lists():
+    """Reorder top-level lists by explicit id list."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    ids = data.get('ids')
+    list_type = data.get('type')
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'ids array required'}), 400
+
+    query = TodoList.query.filter(TodoList.user_id == user.id, TodoList.id.in_(ids))
+    if list_type in ['hub', 'list']:
+        query = query.filter(TodoList.type == list_type)
+    lists = query.all()
+    list_map = {l.id: l for l in lists}
+    order_val = 1
+    for raw_id in ids:
+        try:
+            lid = int(raw_id)
+        except (ValueError, TypeError):
+            continue
+        item = list_map.get(lid)
+        if item:
+            item.order_index = order_val
+            order_val += 1
+    db.session.commit()
+    return jsonify({'updated': order_val - 1})
 
 
 @app.route('/api/notes', methods=['GET', 'POST'])
@@ -1442,6 +1592,7 @@ def handle_recalls():
         category = (data.get('category') or 'General').strip() or 'General'
         type_name = (data.get('type') or 'note').strip() or 'note'
         content = (data.get('content') or '').strip()
+        description = (data.get('description') or '').strip()
         keywords = data.get('keywords') or data.get('tags')
         tags = _normalize_tags(keywords)
         pinned = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
@@ -1452,7 +1603,7 @@ def handle_recalls():
 
         if not summary:
             summary = _generate_recall_summary(title, content, category, type_name, source_url)
-        blob = _build_recall_blob(title, content, category, type_name, tags, source_url, summary)
+        blob = _build_recall_blob(title, content, description, category, type_name, tags, source_url, summary)
         embedding = _generate_recall_embedding(blob)
 
         recall = RecallItem(
@@ -1461,6 +1612,7 @@ def handle_recalls():
             category=category,
             type=type_name,
             content=content,
+            description=description,
             tags=_tags_to_string(tags),
             priority='medium',
             pinned=pinned,
@@ -1499,6 +1651,7 @@ def handle_recalls():
         query = query.filter(db.or_(
             RecallItem.title.ilike(like_expr),
             RecallItem.content.ilike(like_expr),
+            RecallItem.description.ilike(like_expr),
             RecallItem.category.ilike(like_expr),
             RecallItem.tags.ilike(like_expr),
             RecallItem.summary.ilike(like_expr),
@@ -1553,6 +1706,8 @@ def recall_detail(recall_id):
             recall.type = type_val
     if 'content' in data:
         recall.content = (data.get('content') or '').strip()
+    if 'description' in data:
+        recall.description = (data.get('description') or '').strip()
     if 'tags' in data or 'keywords' in data:
         recall.tags = _tags_to_string(data.get('keywords') or data.get('tags'))
     if 'pinned' in data:
@@ -1572,6 +1727,7 @@ def recall_detail(recall_id):
     recall.search_blob = _build_recall_blob(
         recall.title,
         recall.content,
+        recall.description,
         recall.category,
         recall.type,
         _normalize_tags(recall.tags),
@@ -1710,6 +1866,54 @@ def view_shared_note(token):
     return render_template('shared_note.html', note=note)
 
 
+# Quick Access API
+@app.route('/api/quick-access', methods=['GET', 'POST'])
+def handle_quick_access():
+    """Get or create quick access items."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        items = QuickAccessItem.query.filter_by(user_id=user.id).order_by(QuickAccessItem.order_index).all()
+        return jsonify([item.to_dict() for item in items])
+
+    if request.method == 'POST':
+        data = request.json
+        title = data.get('title', '').strip()
+        if not title:
+            return jsonify({'error': 'Title is required'}), 400
+
+        # Get max order_index to append new item at the end
+        max_order = db.session.query(db.func.max(QuickAccessItem.order_index)).filter_by(user_id=user.id).scalar() or 0
+
+        new_item = QuickAccessItem(
+            user_id=user.id,
+            title=title,
+            icon=data.get('icon', 'fa-solid fa-bookmark'),
+            url=data.get('url', ''),
+            item_type=data.get('item_type', 'custom'),
+            reference_id=data.get('reference_id'),
+            order_index=max_order + 1
+        )
+        db.session.add(new_item)
+        db.session.commit()
+        return jsonify(new_item.to_dict()), 201
+
+
+@app.route('/api/quick-access/<int:item_id>', methods=['DELETE'])
+def delete_quick_access(item_id):
+    """Delete a quick access item."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    item = QuickAccessItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({'message': 'Deleted'})
+
+
 # Calendar API
 ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
 ALLOWED_STATUSES = {'not_started', 'in_progress', 'done'}
@@ -1782,7 +1986,11 @@ def calendar_events():
             CalendarEvent.order_index.asc()
         ).all()
         payload = []
+        linked_event_map = {}
         for ev in events:
+            if ev.todo_item_id:
+                linked_event_map[ev.todo_item_id] = ev
+                continue
             data = ev.to_dict()
             if ev.phase_id:
                 parent = next((e for e in events if e.id == ev.phase_id), None)
@@ -1796,6 +2004,7 @@ def calendar_events():
             TodoItem.is_phase == False
         ).all()
         for idx, item in enumerate(due_items):
+            linked_event = linked_event_map.get(item.id)
             payload.append({
                 'id': -100000 - idx,  # synthetic id to avoid collisions
                 'title': item.content,
@@ -1804,12 +2013,34 @@ def calendar_events():
                 'task_id': item.id,
                 'task_list_id': item.list_id,
                 'task_list_title': item.list.title if item.list else '',
+                'calendar_event_id': linked_event.id if linked_event else None,
+                'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
+                'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
+                'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
+                'priority': linked_event.priority if linked_event else 'medium',
+                'day': day_obj.isoformat(),
                 'order_index': 100000 + idx
             })
         return jsonify(payload)
 
     data = request.json or {}
+    todo_item_id = data.get('todo_item_id')
+    linked_item = None
+    if todo_item_id is not None:
+        try:
+            todo_item_id_int = int(todo_item_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid todo_item_id'}), 400
+        linked_item = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+            TodoItem.id == todo_item_id_int,
+            TodoList.user_id == user.id
+        ).first()
+        if not linked_item:
+            return jsonify({'error': 'Task not found'}), 404
+
     title = (data.get('title') or '').strip()
+    if not title and linked_item:
+        title = linked_item.content
     if not title:
         return jsonify({'error': 'Title is required'}), 400
 
@@ -1820,12 +2051,18 @@ def calendar_events():
     is_phase = bool(data.get('is_phase'))
     is_event = bool(data.get('is_event'))
     is_group = bool(data.get('is_group'))
+    if linked_item:
+        is_phase = False
+        is_event = False
+        is_group = False
     priority = (data.get('priority') or 'medium').lower()
     if priority not in ALLOWED_PRIORITIES:
         priority = 'medium'
     status = (data.get('status') or 'not_started')
     if status not in ALLOWED_STATUSES:
         status = 'not_started'
+    if linked_item:
+        status = linked_item.status
 
     reminder_minutes = data.get('reminder_minutes_before')
     try:
@@ -1860,6 +2097,15 @@ def calendar_events():
     start_time = _parse_time_str(data.get('start_time'))
     end_time = _parse_time_str(data.get('end_time'))
 
+    if linked_item:
+        existing = CalendarEvent.query.filter_by(
+            user_id=user.id,
+            todo_item_id=linked_item.id,
+            day=day_obj
+        ).first()
+        if existing:
+            return jsonify(existing.to_dict()), 200
+
     new_event = CalendarEvent(
         user_id=user.id,
         title=title,
@@ -1876,6 +2122,7 @@ def calendar_events():
         group_id=resolved_group_id if not is_group else None,
         reminder_minutes_before=reminder_minutes if not is_phase and not is_group else None,
         rollover_enabled=bool(data.get('rollover_enabled', False) if not is_group else False),
+        todo_item_id=linked_item.id if linked_item else None,
         order_index=_next_calendar_order(day_obj, user.id)
     )
     db.session.add(new_event)
@@ -2450,6 +2697,7 @@ def create_item(list_id):
     content = data['content']
     description = data.get('description', '')
     notes = data.get('notes', '')
+    tags_raw = data.get('tags')
     is_project = data.get('is_project', False)
     project_type = data.get('project_type', 'list') # Default to 'list'
     phase_id = data.get('phase_id')
@@ -2463,11 +2711,13 @@ def create_item(list_id):
     if is_phase_item or is_project:
         status = 'not_started'
     next_order = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=list_id).scalar() + 1
+    tags = _tags_to_string(tags_raw)
     new_item = TodoItem(
         list_id=list_id,
         content=content,
         description=description,
         notes=notes,
+        tags=tags if tags else None,
         status=status,
         order_index=next_order,
         phase_id=int(phase_id) if (phase_id and not is_phase_item) else None,
@@ -2529,6 +2779,7 @@ def handle_item(item_id):
         
     if request.method == 'PUT':
         data = request.json
+        old_due_date = item.due_date
         old_status = item.status
         new_status = data.get('status', item.status)
         allowed_statuses = {'not_started', 'in_progress', 'done'}
@@ -2542,9 +2793,23 @@ def handle_item(item_id):
         item.content = data.get('content', item.content)
         item.description = data.get('description', item.description)
         item.notes = data.get('notes', item.notes)
+        if 'tags' in data:
+            tags_value = _tags_to_string(data.get('tags'))
+            item.tags = tags_value if tags_value else None
         if 'due_date' in data:
             due_date_raw = data.get('due_date')
             item.due_date = _parse_day_value(due_date_raw) if due_date_raw else None
+            if old_due_date != item.due_date:
+                linked_event = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).first()
+                if linked_event:
+                    if item.due_date:
+                        linked_event.day = item.due_date
+                        linked_event.order_index = _next_calendar_order(item.due_date, user.id)
+                        if linked_event.reminder_minutes_before is not None and linked_event.start_time:
+                            _schedule_reminder_job(linked_event)
+                    else:
+                        _cancel_reminder_job(linked_event)
+                        db.session.delete(linked_event)
 
         # If this task's status changed and it belongs to a phase, update phase status
         if old_status != new_status and item.phase_id:

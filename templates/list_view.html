@@ -3,6 +3,15 @@
 {% block content %}
 {# Phase headers: anything marked is_phase or legacy status == 'phase' #}
 {% set phases = items|selectattr('is_phase', 'equalto', True)|list + items|selectattr('status', 'equalto', 'phase')|list %}
+{% set tag_ns = namespace(all=[]) %}
+{% for item in items %}
+    {% for tag in item.tag_list() %}
+        {% if tag not in tag_ns.all %}
+            {% set tag_ns.all = tag_ns.all + [tag] %}
+        {% endif %}
+    {% endfor %}
+{% endfor %}
+{% set all_tags = tag_ns.all|sort %}
 
 {# Compute counts for hub progress #}
 {% if todo_list.type == 'hub' %}
@@ -84,16 +93,35 @@
     <div class="task-filter-dropdown" id="task-filter-dropdown">
         <button class="btn btn-secondary btn-filter-trigger" type="button" onclick="toggleTaskFilterMenu(event)">
             <i class="fa-solid fa-filter"></i>
-            <span id="task-filter-label">All Tasks</span>
+            <span id="task-filter-label">Filter</span>
             <i class="fa-solid fa-caret-down"></i>
         </button>
         <div class="task-filter-menu" id="task-filter-menu">
-            <button class="task-filter-item active" data-filter="all">All Tasks</button>
-            <button class="task-filter-item" data-filter="not_started">Not Started</button>
-            <button class="task-filter-item" data-filter="in_progress">Started</button>
-            <button class="task-filter-item" data-filter="done">Done</button>
+            <button class="task-filter-item task-filter-parent" type="button" onclick="toggleTaskFilterSubmenu('status', event)">
+                <span>Status</span>
+                <i class="fa-solid fa-caret-right"></i>
+            </button>
+            <div class="task-filter-submenu" id="task-filter-submenu-status">
+                <button class="task-filter-item active" data-filter="all">All Tasks</button>
+                <button class="task-filter-item" data-filter="not_started">Not Started</button>
+                <button class="task-filter-item" data-filter="in_progress">Started</button>
+                <button class="task-filter-item" data-filter="done">Done</button>
+            </div>
+            {% if todo_list.type == 'list' and all_tags|length %}
+            <button class="task-filter-item task-filter-parent" type="button" onclick="toggleTaskFilterSubmenu('tags', event)">
+                <span>Tags</span>
+                <i class="fa-solid fa-caret-right"></i>
+            </button>
+            <div class="task-filter-submenu" id="task-filter-submenu-tags">
+                <button class="task-filter-item tag-filter-chip active" data-tag="__all" type="button">All Tags</button>
+                {% for tag in all_tags %}
+                <button class="task-filter-item tag-filter-chip" data-tag="{{ tag }}" type="button">{{ tag }}</button>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
     </div>
+    <div class="task-filter-pills" id="task-filter-pills"></div>
 </div>
 
 <div class="bulk-actions" id="bulk-actions" style="display: none;">
@@ -128,7 +156,8 @@
 <div class="task-list" id="items-container">
 {% for item in items %}
     {% set parent_phase_id = item.phase_id if item.phase_id else '' %}
-    <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if item.is_phase else '' }}" data-phase-parent="{{ parent_phase_id }}">
+    {% set tag_list = item.tag_list() %}
+    <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if item.is_phase else '' }}" data-phase-parent="{{ parent_phase_id }}" data-tags="{{ tag_list|join(',') }}">
         <div class="task-content">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
@@ -157,6 +186,13 @@
                 <div class="task-notes"
                     style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; font-style: italic;">{{
                     item.notes }}</div>
+                {% endif %}
+                {% if tag_list %}
+                <div class="task-tags">
+                    {% for tag in tag_list %}
+                    <span class="tag-chip" data-tag="{{ tag }}">{{ tag }}</span>
+                    {% endfor %}
+                </div>
                 {% endif %}
                 {% if item.due_date or (item.linked_notes|length) %}
                 <div class="task-meta-lite" style="margin-top: 6px; display: flex; gap: 0.5rem; flex-wrap: wrap;">
@@ -216,7 +252,7 @@
                         <i class="fa-solid fa-ellipsis-vertical"></i>
                     </button>
                     <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                        <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-pen"></i> Edit
                         </button>
                         <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
@@ -246,7 +282,7 @@
                             <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
                             </button>
-                            <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
                         </button>
                         <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
@@ -297,6 +333,10 @@
             <label>Notes</label>
             <textarea id="item-notes" class="form-control" placeholder="Additional notes..." rows="3"></textarea>
         </div>
+        <div class="form-group">
+            <label>Tags (comma separated)</label>
+            <input type="text" id="item-tags" class="form-control" placeholder="e.g. home, errands">
+        </div>
         {% endif %}
         <input type="hidden" id="item-phase-id">
         <input type="hidden" id="item-mode" value="task">
@@ -325,6 +365,10 @@
         <div class="form-group">
             <label>Notes</label>
             <textarea id="edit-item-notes" class="form-control" rows="3"></textarea>
+        </div>
+        <div class="form-group">
+            <label>Tags (comma separated)</label>
+            <input type="text" id="edit-item-tags" class="form-control">
         </div>
         <div class="modal-actions">
             <button class="btn" onclick="closeEditItemModal()">Cancel</button>

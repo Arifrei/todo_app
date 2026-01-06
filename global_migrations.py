@@ -42,6 +42,8 @@ def ensure_todo_list(cur):
         print("[warn] todo_list missing; run baseline migrate.py first")
         return
     add_column(cur, "todo_list", "user_id", "INTEGER", default_sql="1")
+    add_column(cur, "todo_list", "order_index", "INTEGER DEFAULT 0")
+    cur.execute("UPDATE todo_list SET order_index = id WHERE order_index IS NULL")
 
 
 def ensure_user(cur):
@@ -49,6 +51,8 @@ def ensure_user(cur):
         print("[warn] user table missing; run baseline migrate.py first")
         return
     add_column(cur, "user", "pin_hash", "VARCHAR(200)")
+    add_column(cur, "user", "sidebar_order", "TEXT")
+    add_column(cur, "user", "homepage_order", "TEXT")
 
 
 def ensure_todo_item(cur):
@@ -57,6 +61,7 @@ def ensure_todo_item(cur):
         return
     add_column(cur, "todo_item", "description", "TEXT")
     add_column(cur, "todo_item", "notes", "TEXT")
+    add_column(cur, "todo_item", "tags", "TEXT")
     add_column(cur, "todo_item", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "todo_item", "is_phase", "BOOLEAN DEFAULT 0")
     add_column(cur, "todo_item", "phase_id", "INTEGER")
@@ -103,6 +108,7 @@ def ensure_calendar_event(cur):
                 reminder_minutes_before INTEGER,
                 rollover_enabled BOOLEAN DEFAULT 1,
                 rolled_from_id INTEGER,
+                todo_item_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -124,6 +130,7 @@ def ensure_calendar_event(cur):
     add_column(cur, "calendar_event", "reminder_snoozed_until", "TIMESTAMP")
     add_column(cur, "calendar_event", "rollover_enabled", "BOOLEAN DEFAULT 1")
     add_column(cur, "calendar_event", "rolled_from_id", "INTEGER")
+    add_column(cur, "calendar_event", "todo_item_id", "INTEGER")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
     add_column(cur, "calendar_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
@@ -141,6 +148,7 @@ def ensure_recalls(cur):
                 category VARCHAR(80) NOT NULL DEFAULT 'General',
                 type VARCHAR(30) NOT NULL DEFAULT 'note',
                 content TEXT,
+                description TEXT,
                 tags TEXT,
                 priority VARCHAR(10) NOT NULL DEFAULT 'medium',
                 pinned BOOLEAN DEFAULT 0,
@@ -161,6 +169,7 @@ def ensure_recalls(cur):
     add_column(cur, "recall_item", "category", "VARCHAR(80) NOT NULL DEFAULT 'General'")
     add_column(cur, "recall_item", "type", "VARCHAR(30) NOT NULL DEFAULT 'note'")
     add_column(cur, "recall_item", "content", "TEXT")
+    add_column(cur, "recall_item", "description", "TEXT")
     add_column(cur, "recall_item", "tags", "TEXT")
     add_column(cur, "recall_item", "priority", "VARCHAR(10) NOT NULL DEFAULT 'medium'")
     add_column(cur, "recall_item", "pinned", "BOOLEAN DEFAULT 0")
@@ -252,6 +261,36 @@ def ensure_notifications(cur):
         add_column(cur, "push_subscription", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_quick_access(cur):
+    if not table_exists(cur, "quick_access_item"):
+        cur.execute(
+            """
+            CREATE TABLE quick_access_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                icon VARCHAR(50) NOT NULL DEFAULT 'fa-solid fa-bookmark',
+                url VARCHAR(500) NOT NULL,
+                item_type VARCHAR(30) NOT NULL DEFAULT 'custom',
+                reference_id INTEGER,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] quick_access_item table created")
+        return
+
+    add_column(cur, "quick_access_item", "user_id", "INTEGER")
+    add_column(cur, "quick_access_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "quick_access_item", "icon", "VARCHAR(50) NOT NULL DEFAULT 'fa-solid fa-bookmark'")
+    add_column(cur, "quick_access_item", "url", "VARCHAR(500)")
+    add_column(cur, "quick_access_item", "item_type", "VARCHAR(30) NOT NULL DEFAULT 'custom'")
+    add_column(cur, "quick_access_item", "reference_id", "INTEGER")
+    add_column(cur, "quick_access_item", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "quick_access_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
 def main():
     if not DB_PATH.exists():
         print("Database not found. Run baseline migrate.py first.")
@@ -266,6 +305,7 @@ def main():
         ensure_calendar_event(cur)
         ensure_recalls(cur)
         ensure_notifications(cur)
+        ensure_quick_access(cur)
         conn.commit()
         print("Global migrations complete.")
     finally:

@@ -1,0 +1,537 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="quick-access-page">
+    <header class="header-row">
+        <div>
+            <h1>Quick Access</h1>
+            <p style="color: var(--text-muted);">Your frequently accessed items and shortcuts <kbd>Ctrl+Shift+K</kbd></p>
+        </div>
+        <button class="btn btn-primary" onclick="openAddQuickAccessModal()">
+            <i class="fa-solid fa-plus"></i> Add Item
+        </button>
+    </header>
+
+    <div class="quick-access-grid" id="quick-access-grid">
+        <!-- Today button (system item, always first) -->
+        <a class="quick-access-card system-item" href="#" onclick="goToToday(event)" data-type="system">
+            <div class="quick-access-icon"><i class="fa-solid fa-calendar-day"></i></div>
+            <div class="quick-access-title">Today</div>
+            <div class="quick-access-subtitle">Jump to today's calendar</div>
+        </a>
+
+        <!-- User's custom items will be loaded here -->
+    </div>
+</div>
+
+<!-- Add Quick Access Item Modal -->
+<div class="modal" id="add-quick-access-modal">
+    <div class="modal-content">
+        <h2>Add Quick Access Item</h2>
+        <br>
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="qa-title" class="form-control" placeholder="Enter title...">
+        </div>
+        <div class="form-group">
+            <label>Icon (FontAwesome class)</label>
+            <input type="text" id="qa-icon" class="form-control" placeholder="fa-solid fa-bookmark" value="fa-solid fa-bookmark">
+            <small style="color: var(--text-muted);">Browse icons at <a href="https://fontawesome.com/icons" target="_blank">fontawesome.com/icons</a></small>
+        </div>
+        <div class="form-group">
+            <label>Type</label>
+            <select id="qa-type" class="form-control" onchange="handleQuickAccessTypeChange()">
+                <option value="custom">Custom URL</option>
+                <option value="list">Project/List</option>
+                <option value="note">Note</option>
+                <option value="calendar">Calendar Date</option>
+            </select>
+        </div>
+        <div class="form-group" id="qa-url-group">
+            <label>URL</label>
+            <input type="text" id="qa-url" class="form-control" placeholder="/tasks or https://example.com">
+        </div>
+        <div class="form-group" id="qa-list-group" style="display: none;">
+            <label>Select Project/List</label>
+            <div class="qa-nav-header">
+                <button class="btn btn-secondary btn-small" id="qa-back-button" style="display:none;" onclick="qaNavBack()">
+                    <i class="fa-solid fa-arrow-left"></i> Back
+                </button>
+            </div>
+            <div id="qa-list-nav-container" class="qa-nav-container">
+                <!-- Navigation options populated by JS -->
+            </div>
+        </div>
+        <div class="form-group" id="qa-note-group" style="display: none;">
+            <label>Select Note</label>
+            <select id="qa-note-select" class="form-control">
+                <option value="">Loading...</option>
+            </select>
+        </div>
+        <div class="form-group" id="qa-date-group" style="display: none;">
+            <label>Select Date</label>
+            <input type="date" id="qa-date" class="form-control">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeAddQuickAccessModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveQuickAccessItem()">Add</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// Load user's quick access items
+async function loadQuickAccessItems() {
+    try {
+        const response = await fetch('/api/quick-access');
+        const items = await response.json();
+        const grid = document.getElementById('quick-access-grid');
+
+        // Keep the system "Today" button and append custom items
+        const systemCards = grid.querySelectorAll('.system-item');
+
+        items.forEach(item => {
+            const card = document.createElement('a');
+            card.className = 'quick-access-card';
+            card.href = item.url;
+            card.dataset.id = item.id;
+
+            card.innerHTML = `
+                <div class="quick-access-icon"><i class="${item.icon}"></i></div>
+                <div class="quick-access-title">${escapeHtml(item.title)}</div>
+                <button class="quick-access-delete" onclick="deleteQuickAccessItem(${item.id}, event)" title="Delete">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            `;
+
+            grid.appendChild(card);
+        });
+    } catch (error) {
+        console.error('Failed to load quick access items:', error);
+    }
+}
+
+function openAddQuickAccessModal() {
+    document.getElementById('add-quick-access-modal').classList.add('active');
+    // Load lists and notes for dropdowns
+    loadListsForQuickAccess();
+    loadNotesForQuickAccess();
+}
+
+function closeAddQuickAccessModal() {
+    document.getElementById('add-quick-access-modal').classList.remove('active');
+    // Reset form
+    document.getElementById('qa-title').value = '';
+    document.getElementById('qa-icon').value = 'fa-solid fa-bookmark';
+    document.getElementById('qa-type').value = 'custom';
+    document.getElementById('qa-url').value = '';
+
+    // Reset navigation state
+    qaNavState = {
+        currentParent: null,
+        stack: [],
+        allLists: [],
+        selectedListId: null,
+        selectedListTitle: ''
+    };
+
+    handleQuickAccessTypeChange();
+}
+
+// Close modal when clicking outside
+document.addEventListener('click', function(e) {
+    const modal = document.getElementById('add-quick-access-modal');
+    if (modal && e.target === modal) {
+        closeAddQuickAccessModal();
+    }
+});
+
+function handleQuickAccessTypeChange() {
+    const type = document.getElementById('qa-type').value;
+    document.getElementById('qa-url-group').style.display = type === 'custom' ? 'block' : 'none';
+    document.getElementById('qa-list-group').style.display = type === 'list' ? 'block' : 'none';
+    document.getElementById('qa-note-group').style.display = type === 'note' ? 'block' : 'none';
+    document.getElementById('qa-date-group').style.display = type === 'calendar' ? 'block' : 'none';
+}
+
+// Quick Access navigation state
+let qaNavState = {
+    currentParent: null,
+    stack: [],
+    allLists: [],
+    selectedListId: null,
+    selectedListTitle: ''
+};
+
+async function loadListsForQuickAccess() {
+    try {
+        const response = await fetch('/api/lists?include_children=true');
+        qaNavState.allLists = await response.json();
+        qaNavState.currentParent = null;
+        qaNavState.stack = [];
+        renderQANavigation();
+    } catch (error) {
+        console.error('Failed to load lists:', error);
+    }
+}
+
+function renderQANavigation() {
+    const container = document.getElementById('qa-list-nav-container');
+    const backButton = document.getElementById('qa-back-button');
+
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    // Hide back button at root level
+    backButton.style.display = 'none';
+
+    // At root level, show only root-level lists (not nested children)
+    // Build a set of all linked_list_ids to identify which lists are children
+    const childListIds = new Set();
+    qaNavState.allLists.forEach(list => {
+        if (list.items) {
+            list.items.forEach(item => {
+                if (item.linked_list_id) {
+                    childListIds.add(item.linked_list_id);
+                }
+            });
+        }
+    });
+
+    // Filter to show only lists that are NOT children of any hub
+    const itemsToShow = qaNavState.allLists.filter(list => !childListIds.has(list.id));
+
+    if (itemsToShow.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'qa-nav-empty';
+        empty.textContent = 'No projects available.';
+        container.appendChild(empty);
+        return;
+    }
+
+    itemsToShow.forEach(list => {
+        const item = document.createElement('button');
+        item.className = 'qa-nav-item';
+
+        const icon = list.type === 'hub'
+            ? '<i class="fa-solid fa-folder-tree"></i>'
+            : '<i class="fa-solid fa-list-check"></i>';
+
+        const arrow = list.type === 'hub'
+            ? '<i class="fa-solid fa-chevron-right"></i>'
+            : '';
+
+        item.innerHTML = `
+            ${icon}
+            <span>${escapeHtml(list.title)}</span>
+            ${arrow}
+        `;
+
+        if (list.type === 'hub') {
+            // Navigate into hub
+            item.onclick = () => navigateIntoHub(list.id);
+        } else {
+            // Select this list
+            item.onclick = () => selectQAList(list.id, list.title);
+        }
+
+        container.appendChild(item);
+    });
+}
+
+function navigateIntoHub(hubId) {
+    qaNavState.stack.push(qaNavState.currentParent);
+    qaNavState.currentParent = hubId;
+
+    // Fetch hub's children
+    fetch(`/api/lists/${hubId}`)
+        .then(r => r.json())
+        .then(hub => {
+            // Update allLists to include children information
+            renderQANavigationWithChildren(hub);
+        })
+        .catch(err => {
+            console.error('Failed to load hub details:', err);
+        });
+}
+
+function renderQANavigationWithChildren(hub) {
+    const container = document.getElementById('qa-list-nav-container');
+    const backButton = document.getElementById('qa-back-button');
+
+    if (!container) return;
+
+    container.innerHTML = '';
+    backButton.style.display = 'inline-block';
+
+    // Add option to select the hub itself
+    const addHubBtn = document.createElement('button');
+    addHubBtn.className = 'qa-nav-item qa-nav-current';
+    addHubBtn.innerHTML = `
+        <i class="fa-solid fa-folder-tree"></i>
+        <span>Add "${escapeHtml(hub.title)}" (This Hub)</span>
+    `;
+    addHubBtn.onclick = () => selectQAList(hub.id, hub.title);
+    container.appendChild(addHubBtn);
+
+    const divider = document.createElement('div');
+    divider.className = 'qa-nav-divider';
+    divider.textContent = 'Or select a child project:';
+    container.appendChild(divider);
+
+    // Show child projects
+    const children = hub.items.filter(item => item.linked_list_id);
+
+    if (children.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'qa-nav-empty';
+        empty.textContent = 'This hub has no child projects.';
+        container.appendChild(empty);
+        return;
+    }
+
+    children.forEach(item => {
+        const childList = qaNavState.allLists.find(l => l.id === item.linked_list_id);
+        if (!childList) return;
+
+        const navItem = document.createElement('button');
+        navItem.className = 'qa-nav-item';
+
+        const icon = childList.type === 'hub'
+            ? '<i class="fa-solid fa-folder-tree"></i>'
+            : '<i class="fa-solid fa-list-check"></i>';
+
+        const arrow = childList.type === 'hub'
+            ? '<i class="fa-solid fa-chevron-right"></i>'
+            : '';
+
+        navItem.innerHTML = `
+            ${icon}
+            <span>${escapeHtml(childList.title)}</span>
+            ${arrow}
+        `;
+
+        if (childList.type === 'hub') {
+            navItem.onclick = () => navigateIntoHub(childList.id);
+        } else {
+            navItem.onclick = () => selectQAList(childList.id, childList.title);
+        }
+
+        container.appendChild(navItem);
+    });
+}
+
+function qaNavBack() {
+    if (qaNavState.stack.length === 0) return;
+
+    const previousParent = qaNavState.stack.pop();
+    qaNavState.currentParent = previousParent;
+
+    if (previousParent === null) {
+        renderQANavigation();
+    } else {
+        // Fetch the previous hub's details
+        fetch(`/api/lists/${previousParent}`)
+            .then(r => r.json())
+            .then(hub => {
+                renderQANavigationWithChildren(hub);
+            })
+            .catch(err => {
+                console.error('Failed to load hub details:', err);
+                renderQANavigation();
+            });
+    }
+}
+
+function selectQAList(listId, listTitle) {
+    qaNavState.selectedListId = listId;
+    qaNavState.selectedListTitle = listTitle;
+
+    // Update the title field if it's empty
+    const titleInput = document.getElementById('qa-title');
+    if (titleInput && !titleInput.value.trim()) {
+        titleInput.value = listTitle;
+    }
+
+    // Visual feedback
+    const container = document.getElementById('qa-list-nav-container');
+    if (container) {
+        const items = container.querySelectorAll('.qa-nav-item');
+        items.forEach(item => item.classList.remove('selected'));
+
+        const selectedItem = Array.from(items).find(item =>
+            item.textContent.includes(listTitle)
+        );
+        if (selectedItem) {
+            selectedItem.classList.add('selected');
+        }
+    }
+}
+
+async function loadNotesForQuickAccess() {
+    try {
+        const response = await fetch('/api/notes');
+        const notes = await response.json();
+        const select = document.getElementById('qa-note-select');
+        select.innerHTML = '<option value="">-- Select a note --</option>';
+        notes.forEach(note => {
+            const option = document.createElement('option');
+            option.value = note.id;
+            option.textContent = note.title;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Failed to load notes:', error);
+    }
+}
+
+async function saveQuickAccessItem() {
+    const type = document.getElementById('qa-type').value;
+    const title = document.getElementById('qa-title').value.trim();
+    const icon = document.getElementById('qa-icon').value.trim();
+
+    if (!title) {
+        alert('Please enter a title');
+        return;
+    }
+
+    let url = '';
+    let referenceId = null;
+
+    if (type === 'custom') {
+        url = document.getElementById('qa-url').value.trim();
+        if (!url) {
+            alert('Please enter a URL');
+            return;
+        }
+    } else if (type === 'list') {
+        if (!qaNavState.selectedListId) {
+            alert('Please select a list');
+            return;
+        }
+        url = `/list/${qaNavState.selectedListId}`;
+        referenceId = qaNavState.selectedListId;
+    } else if (type === 'note') {
+        const noteId = document.getElementById('qa-note-select').value;
+        if (!noteId) {
+            alert('Please select a note');
+            return;
+        }
+        url = `/notes?note=${noteId}`;
+        referenceId = parseInt(noteId);
+    } else if (type === 'calendar') {
+        const dateValue = document.getElementById('qa-date').value;
+        if (!dateValue) {
+            alert('Please select a date');
+            return;
+        }
+        url = `/calendar?day=${dateValue}&mode=day`;
+    }
+
+    try {
+        const response = await fetch('/api/quick-access', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: title,
+                icon: icon,
+                url: url,
+                item_type: type,
+                reference_id: referenceId
+            })
+        });
+
+        if (response.ok) {
+            closeAddQuickAccessModal();
+            // Reload items
+            const grid = document.getElementById('quick-access-grid');
+            // Keep only system items
+            const systemCards = Array.from(grid.querySelectorAll('.system-item'));
+            grid.innerHTML = '';
+            systemCards.forEach(card => grid.appendChild(card));
+            loadQuickAccessItems();
+        } else {
+            alert('Failed to add item');
+        }
+    } catch (error) {
+        console.error('Failed to save quick access item:', error);
+        alert('Failed to add item');
+    }
+}
+
+async function deleteQuickAccessItem(id, event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Use global confirm modal
+    const modal = document.getElementById('confirm-modal');
+    const message = document.getElementById('confirm-message');
+    const confirmBtn = document.getElementById('confirm-yes-button');
+
+    if (!modal || !message || !confirmBtn) {
+        console.error('Confirm modal not found');
+        return;
+    }
+
+    message.textContent = 'Remove this item from quick access?';
+    modal.classList.add('active');
+
+    // Remove any existing listeners and add new one
+    const newConfirmBtn = confirmBtn.cloneNode(true);
+    confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+
+    newConfirmBtn.onclick = async () => {
+        modal.classList.remove('active');
+
+        try {
+            const response = await fetch(`/api/quick-access/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                const card = document.querySelector(`[data-id="${id}"]`);
+                if (card) {
+                    card.remove();
+                }
+            } else {
+                alert('Failed to delete item');
+            }
+        } catch (error) {
+            console.error('Failed to delete quick access item:', error);
+            alert('Failed to delete item');
+        }
+    };
+}
+
+function closeConfirmModal() {
+    const modal = document.getElementById('confirm-modal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Go to today's calendar in day view
+function goToToday(event) {
+    event.preventDefault();
+    const today = new Date();
+
+    // Get local date components (respects user's timezone)
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
+
+    window.location.href = `/calendar?day=${todayStr}&mode=day`;
+}
+
+// Load items on page load
+document.addEventListener('DOMContentLoaded', loadQuickAccessItems);
+</script>
+{% endblock %}

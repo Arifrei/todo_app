@@ -78,6 +78,7 @@ let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
 let recallState = { items: [], selectedId: null, editingId: null, filters: { q: '', category: 'all', type: 'all', status: 'active', sort: 'smart', pinnedOnly: false, tag: null }, aiResults: [] };
 let currentTaskFilter = 'all';
+let selectedTagFilters = new Set();
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time' };
 const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
 let calendarReminderTimers = {};
@@ -122,8 +123,91 @@ async function loadDashboard() {
             listsContainer.style.display = 'none';
         }
 
+        initDashboardReorder();
     } catch (e) {
         console.error('Error loading lists:', e);
+    }
+}
+
+function initDashboardReorder() {
+    const grids = [
+        { el: document.getElementById('hubs-grid'), type: 'hub' },
+        { el: document.getElementById('lists-grid'), type: 'list' }
+    ];
+    grids.forEach(({ el, type }) => {
+        if (!el) return;
+        let draggingEl = null;
+        let dragMoved = false;
+
+        const cards = Array.from(el.querySelectorAll('.card[data-list-id]'));
+        cards.forEach(card => {
+            card.setAttribute('draggable', 'true');
+
+            card.addEventListener('dragstart', (e) => {
+                draggingEl = card;
+                dragMoved = false;
+                card.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+            });
+
+            card.addEventListener('dragend', async () => {
+                if (draggingEl) draggingEl.classList.remove('dragging');
+                draggingEl = null;
+                if (dragMoved) {
+                    await persistDashboardOrder(el, type);
+                }
+            });
+
+            card.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (!draggingEl || draggingEl === card) return;
+                const afterElement = getDashboardDragAfterElement(el, e.clientY);
+                if (afterElement == null) {
+                    el.appendChild(draggingEl);
+                } else {
+                    el.insertBefore(draggingEl, afterElement);
+                }
+                dragMoved = true;
+            });
+
+            card.addEventListener('click', (e) => {
+                if (dragMoved) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            });
+        });
+    });
+}
+
+function getDashboardDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('.card[data-list-id]:not(.dragging)')];
+    return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset, element: child };
+        }
+        return closest;
+    }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+async function persistDashboardOrder(container, type) {
+    const ids = Array.from(container.querySelectorAll('.card[data-list-id]'))
+        .map(card => parseInt(card.getAttribute('data-list-id'), 10))
+        .filter(id => Number.isInteger(id));
+    if (!ids.length) return;
+    try {
+        const res = await fetch('/api/lists/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids, type })
+        });
+        if (!res.ok) {
+            console.error('Failed to save list order');
+        }
+    } catch (e) {
+        console.error('Error saving list order:', e);
     }
 }
 
@@ -135,7 +219,7 @@ function renderListCard(list) {
     const doneCount = items.filter(i => i.status === 'done').length;
 
     return `
-        <a href="/list/${list.id}" class="card" style="border-top-color: ${cardColorVar};">
+        <a href="/list/${list.id}" class="card" data-list-id="${list.id}" data-list-type="${list.type}" style="border-top-color: ${cardColorVar};">
             <div class="card-header">
                 <div style="display:flex; align-items:center; gap:0.5rem;">
                     <span class="card-title">${list.title}</span>
@@ -228,6 +312,7 @@ async function createItem(listId, listType) {
     const input = document.getElementById('item-content');
     const descriptionInput = document.getElementById('item-description');
     const notesInput = document.getElementById('item-notes');
+    const tagsInput = document.getElementById('item-tags');
     const phaseSelect = document.getElementById('item-phase-select');
     const projectTypeSelect = document.getElementById('project-type-select');
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -243,14 +328,15 @@ async function createItem(listId, listType) {
         const res = await fetch(`/api/lists/${listId}/items`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                content,
-                description: descriptionInput ? descriptionInput.value.trim() : '',
-                notes: notesInput ? notesInput.value.trim() : '',
-                is_project: listType === 'hub',
-                project_type: projectType, // Pass the selected type
-                phase_id: phaseId,
-                status: isPhase ? 'phase' : 'not_started'
+                body: JSON.stringify({
+                    content,
+                    description: descriptionInput ? descriptionInput.value.trim() : '',
+                    notes: notesInput ? notesInput.value.trim() : '',
+                    tags: tagsInput ? tagsInput.value.trim() : '',
+                    is_project: listType === 'hub',
+                    project_type: projectType, // Pass the selected type
+                    phase_id: phaseId,
+                    status: isPhase ? 'phase' : 'not_started'
             })
         });
 
@@ -539,6 +625,23 @@ async function updateLinkedTaskDueDate(taskId, dayStr) {
     }
 }
 
+async function ensureLinkedTaskEvent(ev) {
+    if (!ev || !ev.is_task_link || !ev.task_id) return null;
+    if (ev.calendar_event_id) return ev;
+    const created = await createCalendarEvent({
+        title: ev.title,
+        todo_item_id: ev.task_id
+    });
+    if (!created || !created.id) return null;
+    ev.calendar_event_id = created.id;
+    ev.start_time = created.start_time;
+    ev.end_time = created.end_time;
+    ev.reminder_minutes_before = created.reminder_minutes_before;
+    ev.priority = created.priority || ev.priority;
+    ev.day = created.day || calendarState.selectedDay;
+    return ev;
+}
+
 async function unpinTaskDate(taskId) {
     if (!confirm('Remove this task from this date?')) return;
     try {
@@ -616,7 +719,7 @@ function toggleStatusDropdown(itemId) {
 function initTaskFilters() {
     const menu = document.getElementById('task-filter-menu');
     if (!menu) return;
-    menu.querySelectorAll('.task-filter-item').forEach(btn => {
+    menu.querySelectorAll('.task-filter-item[data-filter]').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.preventDefault();
             setTaskFilter(btn.dataset.filter);
@@ -626,6 +729,28 @@ function initTaskFilters() {
     setTaskFilter(currentTaskFilter);
 }
 
+function hashTagToHue(tag) {
+    let hash = 0;
+    for (let i = 0; i < tag.length; i++) {
+        hash = (hash << 5) - hash + tag.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash) % 360;
+}
+
+function applyTagColors() {
+    const chips = document.querySelectorAll('.task-tags .tag-chip[data-tag]');
+    if (!chips.length) return;
+    chips.forEach(chip => {
+        const tag = chip.dataset.tag || '';
+        if (!tag) return;
+        const hue = hashTagToHue(tag.toLowerCase());
+        chip.style.backgroundColor = `hsl(${hue}, 70%, 92%)`;
+        chip.style.borderColor = `hsl(${hue}, 55%, 55%)`;
+        chip.style.color = `hsl(${hue}, 45%, 30%)`;
+    });
+}
+
 function setTaskFilter(filter) {
     const menu = document.getElementById('task-filter-menu');
     if (!menu) return;
@@ -633,12 +758,117 @@ function setTaskFilter(filter) {
     menu.querySelectorAll('.task-filter-item').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === currentTaskFilter);
     });
-    const label = document.getElementById('task-filter-label');
-    if (label) {
-        const active = menu.querySelector(`.task-filter-item[data-filter="${currentTaskFilter}"]`);
-        label.textContent = active ? active.textContent.trim() : 'All Tasks';
-    }
+    updateTaskFilterLabel(menu);
+    renderActiveFilterPills();
     applyTaskFilter();
+}
+
+function updateTaskFilterLabel(menu) {
+    const label = document.getElementById('task-filter-label');
+    if (!label) return;
+    label.textContent = 'Filter';
+}
+
+function renderActiveFilterPills() {
+    const container = document.getElementById('task-filter-pills');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (currentTaskFilter && currentTaskFilter !== 'all') {
+        const statusLabel = currentTaskFilter === 'in_progress' ? 'Started' :
+            currentTaskFilter === 'not_started' ? 'Not Started' :
+                currentTaskFilter === 'done' ? 'Done' : currentTaskFilter;
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'filter-pill';
+        pill.innerHTML = `Status: ${statusLabel} <i class="fa-solid fa-xmark"></i>`;
+        pill.addEventListener('click', (e) => {
+            e.preventDefault();
+            setTaskFilter('all');
+        });
+        container.appendChild(pill);
+    }
+
+    if (selectedTagFilters.size > 0) {
+        Array.from(selectedTagFilters).sort().forEach(tag => {
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'filter-pill';
+            pill.innerHTML = `Tag: ${tag} <i class="fa-solid fa-xmark"></i>`;
+            pill.addEventListener('click', (e) => {
+                e.preventDefault();
+                selectedTagFilters.delete(tag);
+                syncTagFilterUI();
+                applyTaskFilter();
+            });
+            container.appendChild(pill);
+        });
+    }
+
+    container.style.display = container.children.length ? 'flex' : 'none';
+}
+
+function normalizeTag(value) {
+    return (value || '').toString().trim().toLowerCase();
+}
+
+function initTagFilters() {
+    const chips = document.getElementById('task-filter-submenu-tags');
+    if (!chips) {
+        if (selectedTagFilters.size > 0) {
+            selectedTagFilters.clear();
+            const menu = document.getElementById('task-filter-menu');
+            updateTaskFilterLabel(menu);
+            renderActiveFilterPills();
+            applyTaskFilter();
+        }
+        return;
+    }
+    chips.querySelectorAll('.tag-filter-chip').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const tag = btn.dataset.tag;
+            if (!tag) return;
+            if (tag === '__all') {
+                selectedTagFilters.clear();
+            } else {
+                const normalized = normalizeTag(tag);
+                if (selectedTagFilters.has(normalized)) {
+                    selectedTagFilters.delete(normalized);
+                } else {
+                    selectedTagFilters.add(normalized);
+                }
+            }
+            syncTagFilterUI();
+            applyTaskFilter();
+        });
+    });
+    syncTagFilterUI();
+}
+
+function syncTagFilterUI() {
+    const chips = document.getElementById('task-filter-submenu-tags');
+    if (!chips) return;
+    const allBtn = chips.querySelector('.tag-filter-chip[data-tag="__all"]');
+    const hasSelection = selectedTagFilters.size > 0;
+    if (allBtn) allBtn.classList.toggle('active', !hasSelection);
+    chips.querySelectorAll('.tag-filter-chip').forEach(btn => {
+        const tag = btn.dataset.tag;
+        if (!tag || tag === '__all') return;
+        btn.classList.toggle('active', selectedTagFilters.has(normalizeTag(tag)));
+    });
+    const menu = document.getElementById('task-filter-menu');
+    updateTaskFilterLabel(menu);
+    renderActiveFilterPills();
+}
+
+function itemMatchesTagFilter(item) {
+    if (selectedTagFilters.size === 0) return true;
+    const rawTags = item.dataset.tags || '';
+    if (!rawTags.trim()) return false;
+    const tags = rawTags.split(',').map(normalizeTag).filter(Boolean);
+    if (!tags.length) return false;
+    return Array.from(selectedTagFilters).every(tag => tags.includes(tag));
 }
 
 function applyTaskFilter() {
@@ -649,7 +879,9 @@ function applyTaskFilter() {
     items.forEach(item => {
         if (item.classList.contains('phase')) return;
         const status = item.dataset.status;
-        const matches = currentTaskFilter === 'all' || status === currentTaskFilter;
+        const matchesStatus = currentTaskFilter === 'all' || status === currentTaskFilter;
+        const matchesTags = itemMatchesTagFilter(item);
+        const matches = matchesStatus && matchesTags;
         item.classList.toggle('hidden-by-filter', !matches);
         if (matches) {
             const phaseParent = item.dataset.phaseParent;
@@ -660,20 +892,66 @@ function applyTaskFilter() {
     items.forEach(item => {
         if (!item.classList.contains('phase')) return;
         const phaseId = item.dataset.phaseId;
-        const showPhase = currentTaskFilter === 'all' || phaseVisibility.get(phaseId);
+        const showPhase = (currentTaskFilter === 'all' && selectedTagFilters.size === 0) || phaseVisibility.get(phaseId);
         item.classList.toggle('hidden-by-filter', !showPhase);
     });
+}
+
+function toggleTaskFilterSubmenu(kind, event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('task-filter-menu');
+    if (!menu) return;
+    const statusMenu = document.getElementById('task-filter-submenu-status');
+    const tagsMenu = document.getElementById('task-filter-submenu-tags');
+    if (!statusMenu || !tagsMenu) return;
+    const openStatus = statusMenu.classList.contains('show');
+    const openTags = tagsMenu.classList.contains('show');
+
+    if (kind === 'status') {
+        statusMenu.classList.toggle('show', !openStatus);
+        tagsMenu.classList.remove('show');
+    } else if (kind === 'tags') {
+        tagsMenu.classList.toggle('show', !openTags);
+        statusMenu.classList.remove('show');
+    }
+}
+
+function clearTaskFilters(event) {
+    if (event) event.stopPropagation();
+    currentTaskFilter = 'all';
+    selectedTagFilters.clear();
+    const menu = document.getElementById('task-filter-menu');
+    if (menu) {
+        menu.querySelectorAll('.task-filter-item[data-filter]').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.filter === currentTaskFilter);
+        });
+    }
+    syncTagFilterUI();
+    renderActiveFilterPills();
+    applyTaskFilter();
 }
 
 function toggleTaskFilterMenu(event) {
     if (event) event.stopPropagation();
     const menu = document.getElementById('task-filter-menu');
-    if (menu) menu.classList.toggle('show');
+    if (!menu) return;
+    const shouldShow = !menu.classList.contains('show');
+    menu.classList.toggle('show', shouldShow);
+    if (!shouldShow) {
+        const statusMenu = document.getElementById('task-filter-submenu-status');
+        if (statusMenu) statusMenu.classList.remove('show');
+        const tagsMenu = document.getElementById('task-filter-submenu-tags');
+        if (tagsMenu) tagsMenu.classList.remove('show');
+    }
 }
 
 function closeTaskFilterMenu() {
     const menu = document.getElementById('task-filter-menu');
     if (menu) menu.classList.remove('show');
+    const statusMenu = document.getElementById('task-filter-submenu-status');
+    if (statusMenu) statusMenu.classList.remove('show');
+    const tagsMenu = document.getElementById('task-filter-submenu-tags');
+    if (tagsMenu) tagsMenu.classList.remove('show');
 }
 
 // Toggle task actions dropdown
@@ -780,6 +1058,8 @@ function closeAddItemModal() {
     if (descriptionInput) descriptionInput.value = '';
     const notesInput = document.getElementById('item-notes');
     if (notesInput) notesInput.value = '';
+    const tagsInput = document.getElementById('item-tags');
+    if (tagsInput) tagsInput.value = '';
     const phaseSelect = document.getElementById('item-phase-select');
     if (phaseSelect) phaseSelect.value = '';
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -944,18 +1224,22 @@ async function moveItem() {
     }
 }
 
-function openEditItemModal(itemId, content, description, notes) {
+function openEditItemModal(itemId, content, description, notes, tags) {
     const modal = document.getElementById('edit-item-modal');
     document.getElementById('edit-item-id').value = itemId;
     document.getElementById('edit-item-content').value = content;
     document.getElementById('edit-item-description').value = description || '';
     document.getElementById('edit-item-notes').value = notes || '';
+    const tagsInput = document.getElementById('edit-item-tags');
+    if (tagsInput) tagsInput.value = tags || '';
     modal.classList.add('active');
 }
 
 function closeEditItemModal() {
     const modal = document.getElementById('edit-item-modal');
     modal.classList.remove('active');
+    const tagsInput = document.getElementById('edit-item-tags');
+    if (tagsInput) tagsInput.value = '';
 }
 
 // --- Move Navigation (step-by-step) ---
@@ -1135,6 +1419,7 @@ async function saveItemChanges() {
     const content = document.getElementById('edit-item-content').value.trim();
     const description = document.getElementById('edit-item-description').value.trim();
     const notes = document.getElementById('edit-item-notes').value.trim();
+    const tags = document.getElementById('edit-item-tags')?.value.trim() || '';
 
     if (!content) return;
 
@@ -1142,7 +1427,7 @@ async function saveItemChanges() {
         const res = await fetch(`/api/items/${itemId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content, description, notes })
+            body: JSON.stringify({ content, description, notes, tags })
         });
 
         if (res.ok) {
@@ -1459,7 +1744,8 @@ async function bulkUnpinNotes() {
 
 // --- Drag & Drop Reorder ---
 
-function getDragAfterElement(container, y) {
+// Task list and pinned notes need different drag logic; keep these helpers distinct.
+function getTaskDragAfterElement(container, y) {
     const elements = [...container.querySelectorAll('.task-item:not(.dragging):not(.drag-placeholder)')];
 
     if (elements.length === 0) {
@@ -1555,7 +1841,7 @@ function handleDragOver(e) {
     e.preventDefault();
     const container = document.getElementById('items-container');
     if (!container) return;
-    const afterElement = getDragAfterElement(container, e.clientY);
+    const afterElement = getTaskDragAfterElement(container, e.clientY);
     if (!currentDragBlock.length) return;
 
     // Remove current block to reinsert
@@ -1841,7 +2127,7 @@ function touchHandleDragMove(e) {
     }
 
     // Find where to insert placeholder based on touch position
-    const afterElement = getDragAfterElement(container, touchDragCurrentY);
+    const afterElement = getTaskDragAfterElement(container, touchDragCurrentY);
 
     console.log('🟢 Placeholder should be inserted', afterElement ? 'before item ' + afterElement.dataset.itemId : 'at end');
 
@@ -2660,7 +2946,7 @@ function renderNotesList() {
                     e.preventDefault();
                     const dragging = listPinned.querySelector('.dragging');
                     if (!dragging || dragging === btn) return;
-                    const afterElement = getDragAfterElement(listPinned, e.clientY);
+                    const afterElement = getPinnedNoteDragAfterElement(listPinned, e.clientY);
                     if (afterElement == null) {
                         listPinned.appendChild(dragging);
                     } else {
@@ -2806,7 +3092,7 @@ async function movePinnedNote(noteId, direction) {
     return;
 }
 
-function getDragAfterElement(container, y) {
+function getPinnedNoteDragAfterElement(container, y) {
     const draggableElements = [...container.querySelectorAll('.draggable:not(.dragging)')];
     return draggableElements.reduce((closest, child) => {
         const box = child.getBoundingClientRect();
@@ -2918,16 +3204,18 @@ async function createNote() {
 async function deleteCurrentNote() {
     const noteId = notesState.activeNoteId;
     if (!noteId) return;
-    try {
-        const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error('Delete failed');
-        notesState.notes = notesState.notes.filter(n => n.id !== noteId);
-        notesState.activeNoteId = null;
-        renderNotesList();
-        clearNoteEditor();
-    } catch (err) {
-        console.error('Error deleting note:', err);
-    }
+    openConfirmModal('Delete this note?', async () => {
+        try {
+            const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            notesState.notes = notesState.notes.filter(n => n.id !== noteId);
+            notesState.activeNoteId = null;
+            renderNotesList();
+            clearNoteEditor();
+        } catch (err) {
+            console.error('Error deleting note:', err);
+        }
+    });
 }
 
 function clearNoteEditor() {
@@ -3817,13 +4105,42 @@ function renderCalendarEvents() {
             checkbox.onchange = () => updateLinkedTaskStatus(ev.task_id, checkbox.checked ? 'done' : 'not_started');
             left.appendChild(checkbox);
 
+            row.classList.add('task-link-row');
             const titleWrap = document.createElement('div');
-            titleWrap.className = 'calendar-title';
+            titleWrap.className = 'calendar-title task-link-title';
             const titleInput = document.createElement('input');
             titleInput.type = 'text';
             titleInput.value = ev.title;
             titleInput.readOnly = true;
+            titleInput.setAttribute('aria-label', 'Open task');
             titleWrap.appendChild(titleInput);
+            titleWrap.addEventListener('click', () => {
+                window.location.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
+            });
+            titleInput.addEventListener('click', (e) => {
+                e.preventDefault();
+                window.location.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
+            });
+
+            const timeBtn = document.createElement('button');
+            timeBtn.type = 'button';
+            timeBtn.className = 'calendar-time-inline';
+            const timeLabel = formatTimeRange(ev);
+            timeBtn.innerHTML = timeLabel
+                ? `<i class="fa-regular fa-clock"></i><span>${timeLabel}</span>`
+                : `<i class="fa-regular fa-clock"></i>`;
+            if (!timeLabel) {
+                timeBtn.classList.add('no-time');
+                timeBtn.setAttribute('data-label', 'Add time');
+            }
+            timeBtn.title = timeLabel || 'Add time';
+            timeBtn.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedTaskEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+            };
+            titleWrap.appendChild(timeBtn);
 
             const meta = document.createElement('div');
             meta.className = 'calendar-meta-lite';
@@ -3832,10 +4149,7 @@ function renderCalendarEvents() {
             listChip.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
             listChip.textContent = ev.task_list_title || 'Task list';
             listChip.title = 'Open task';
-            const statusChip = document.createElement('span');
-            statusChip.className = `meta-chip status-chip status-${ev.status || 'not_started'}`;
-            statusChip.textContent = ev.status || 'not_started';
-            meta.append(listChip, statusChip);
+            meta.append(listChip);
             titleWrap.appendChild(meta);
 
         const actions = document.createElement('div');
@@ -3865,6 +4179,18 @@ function renderCalendarEvents() {
         const overflowDropdown = document.createElement('div');
         overflowDropdown.className = 'calendar-item-dropdown';
 
+        const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
+        const reminderMenuItem = document.createElement('button');
+        reminderMenuItem.className = 'calendar-item-menu-option';
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const linked = await ensureLinkedTaskEvent(ev);
+            if (!linked || !linked.calendar_event_id) return;
+            openReminderEditor({ ...linked, id: linked.calendar_event_id });
+        };
+
         const openBtn = document.createElement('a');
         openBtn.className = 'calendar-item-menu-option';
         openBtn.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
@@ -3879,7 +4205,7 @@ function renderCalendarEvents() {
             unpinTaskDate(ev.task_id);
         };
 
-        overflowDropdown.append(openBtn, unpinBtn);
+        overflowDropdown.append(reminderMenuItem, openBtn, unpinBtn);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -4025,11 +4351,12 @@ function renderCalendarEvents() {
             const link = document.createElement('a');
             link.className = 'meta-chip note';
             link.href = `/notes?note=${note.id}`;
-            link.textContent = note.title || `Note #${note.id}`;
+            link.title = note.title || `Note #${note.id}`;
+            link.setAttribute('aria-label', note.title || `Note #${note.id}`);
+            link.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
             noteChips.appendChild(link);
         });
         if (meta.childNodes.length) titleWrap.appendChild(meta);
-        if (noteChips.childNodes.length) titleWrap.appendChild(noteChips);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
@@ -4184,6 +4511,7 @@ function renderCalendarEvents() {
             }
         };
 
+        if (noteChips.childNodes.length) actions.append(noteChips);
         actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
         attachCalendarRowSelection(row, ev);
@@ -4241,10 +4569,11 @@ function renderCalendarEvents() {
             const link = document.createElement('a');
             link.className = 'meta-chip note';
             link.href = `/notes?note=${note.id}`;
-            link.textContent = note.title || `Note #${note.id}`;
+            link.title = note.title || `Note #${note.id}`;
+            link.setAttribute('aria-label', note.title || `Note #${note.id}`);
+            link.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
             noteChips.appendChild(link);
         });
-        if (noteChips.childNodes.length) titleWrap.appendChild(noteChips);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
@@ -4384,6 +4713,7 @@ function renderCalendarEvents() {
             }
         };
 
+        if (noteChips.childNodes.length) actions.append(noteChips);
         actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
         attachCalendarRowSelection(row, ev);
@@ -5806,12 +6136,13 @@ async function scheduleLocalReminders() {
 
             const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
             const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
+            const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
 
             if (reminderAt.getTime() > now.getTime()) {
                 const body = ev.start_time ? `${formatTimeRange(ev)} - ${ev.title}` : ev.title;
 
                 await window.NotificationService?.schedule({
-                    id: ev.id,
+                    id: reminderId,
                     title: 'Upcoming Event',
                     body: body,
                     at: reminderAt,
@@ -5828,7 +6159,8 @@ async function scheduleLocalReminders() {
             const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
             const delay = reminderAt.getTime() - now.getTime();
             if (delay > 0) {
-                calendarReminderTimers[ev.id] = setTimeout(() => {
+                const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
+                calendarReminderTimers[reminderId] = setTimeout(() => {
                     triggerLocalNotification(ev);
                 }, delay);
             }
@@ -6081,14 +6413,31 @@ function selectDayForQuickAdd(dayStr) {
 
     panel.classList.remove('is-hidden');
 
-    // Scroll to the panel smoothly after animation
-    setTimeout(() => {
-        panel.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-        if (input) input.focus();
-    }, 350);
+    // Scroll to the bottom smoothly after animation
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    smoothScrollTo(maxScroll, 220);
 
     // Update month grid to highlight selected day
     renderCalendarMonth();
+}
+
+function smoothScrollTo(targetY, durationMs = 250) {
+    const startY = window.scrollY || window.pageYOffset || 0;
+    const delta = targetY - startY;
+    if (Math.abs(delta) < 1) return;
+    const start = performance.now();
+
+    const step = (now) => {
+        const elapsed = now - start;
+        const t = Math.min(1, elapsed / durationMs);
+        const eased = t * (2 - t); // easeOutQuad
+        window.scrollTo(0, startY + delta * eased);
+        if (t < 1) {
+            window.requestAnimationFrame(step);
+        }
+    };
+
+    window.requestAnimationFrame(step);
 }
 
 function openDayDetails(dayStr) {
@@ -6433,9 +6782,6 @@ function initCalendarPage() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
-    initNotificationsUI();
-    loadNotifications();
-    window.addEventListener('notifications:refresh', loadNotifications);
     ensureServiceWorkerRegistered();
     const modal = document.getElementById('calendar-prompt-modal');
     if (modal) modal.classList.add('is-hidden');
@@ -6481,6 +6827,8 @@ document.addEventListener('DOMContentLoaded', () => {
     restorePhaseVisibility();
     initStickyListHeader();
     initTaskFilters();
+    initTagFilters();
+    applyTagColors();
     initMobileTopbar();
     initSidebarReorder();
     initNotesPage();
@@ -6492,6 +6840,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTaskSelectionUI();
 
     initAIPanel();
+    initAIDragLauncher();
 });
 
 function initStickyListHeader() {
@@ -6746,7 +7095,7 @@ function scheduleRecallReload() {
 function parseRecallQuickInput(text) {
     let raw = (text || '').trim();
     if (!raw) return null;
-    const entry = { title: '', content: '', category: 'General', type: 'note', keywords: [], reminder_at: null };
+    const entry = { title: '', content: '', description: '', category: 'General', type: 'note', keywords: [], reminder_at: null };
 
     // Reminder: *YYYY-MM-DD or *YYYY-MM-DD HH:MM
     const reminderMatch = raw.match(/\*(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?)/);
@@ -6774,6 +7123,13 @@ function parseRecallQuickInput(text) {
     if (keywordMatches.length) {
         entry.keywords = keywordMatches.map(k => k.substring(1));
         keywordMatches.forEach(k => { raw = raw.replace(k, '').trim(); });
+    }
+
+    // Description: :: Description text
+    if (raw.includes('::')) {
+        const parts = raw.split('::');
+        entry.description = parts.slice(1).join('::').trim();
+        raw = parts[0].trim();
     }
 
     // Split title ; content
@@ -6804,6 +7160,7 @@ async function handleRecallQuickAdd() {
     const payload = {
         title: parsed.title,
         content: parsed.content,
+        description: parsed.description,
         category: parsed.category,
         type: parsed.type,
         reminder_at: parsed.reminder_at,
@@ -6882,7 +7239,7 @@ function renderRecallList() {
         const row = document.createElement('div');
         row.className = `recall-row ${item.pinned ? 'pinned' : ''} ${recallState.selectedId === item.id ? 'active' : ''} ${item.status === 'archived' ? 'archived' : ''}`;
         row.dataset.id = item.id;
-        const snippet = (item.summary || item.content || '').slice(0, 100);
+        const snippet = (item.summary || item.description || item.content || '').slice(0, 100);
         const typeIcon = {
             'link': 'fa-link',
             'idea': 'fa-lightbulb',
@@ -6993,6 +7350,12 @@ function renderRecallDetail(item) {
             ${item.status && item.status !== 'active' ? `<span class=\"pill\">${recallEscape(item.status).toUpperCase()}</span>` : ''}
         </div>
 
+        ${item.description ? `
+        <div class=\"recall-detail-section\">
+            <h3 class=\"recall-section-title\">Description</h3>
+            <div class=\"recall-detail-content\">${recallEscape(item.description)}</div>
+        </div>` : ''}
+
         ${item.content ? `
         <div class=\"recall-detail-section\">
             <h3 class=\"recall-section-title\">Content</h3>
@@ -7049,6 +7412,7 @@ function openRecallModal(item = null) {
     const statusInput = document.getElementById('recall-status-input');
     const pinnedInput = document.getElementById('recall-pinned-input');
     const contentInput = document.getElementById('recall-content-input');
+    const descriptionInput = document.getElementById('recall-description-input');
     const summaryInput = document.getElementById('recall-summary-input');
     const tagsInput = document.getElementById('recall-tags-input');
     const sourceInput = document.getElementById('recall-source-input');
@@ -7062,6 +7426,7 @@ function openRecallModal(item = null) {
     if (statusInput) statusInput.value = item ? item.status : 'active';
     if (pinnedInput) pinnedInput.checked = item ? !!item.pinned : false;
     if (contentInput) contentInput.value = item ? (item.content || '') : '';
+    if (descriptionInput) descriptionInput.value = item ? (item.description || '') : '';
     if (summaryInput) summaryInput.value = item ? (item.summary || '') : '';
     if (tagsInput) tagsInput.value = item ? (item.tags || []).join(', ') : '';
     if (sourceInput) sourceInput.value = item ? (item.source_url || '') : '';
@@ -7086,6 +7451,7 @@ async function saveRecall() {
         type: document.getElementById('recall-type-input')?.value || 'note',
         pinned: document.getElementById('recall-pinned-input')?.checked || false,
         content: document.getElementById('recall-content-input')?.value || '',
+        description: document.getElementById('recall-description-input')?.value || '',
         keywords: document.getElementById('recall-tags-input')?.value || '',
         source_url: document.getElementById('recall-source-input')?.value || '',
         reminder_at: document.getElementById('recall-reminder-input')?.value || '',
@@ -7658,6 +8024,87 @@ function initAIPanel() {
         aiMessages = loadAIMessagesFromStorage();
     }
     renderAIMessages('panel');
+}
+
+function initAIDragLauncher() {
+    const launcher = document.querySelector('.ai-launcher');
+    if (!launcher) return;
+
+    let pointerId = null;
+    let startX = 0;
+    let startY = 0;
+    let baseX = 0;
+    let baseY = 0;
+    let dragMoved = false;
+
+    const parseTranslate = (el) => {
+        const value = window.getComputedStyle(el).transform;
+        if (!value || value === 'none') return { x: 0, y: 0 };
+        if (typeof DOMMatrixReadOnly !== 'undefined') {
+            const matrix = new DOMMatrixReadOnly(value);
+            return { x: matrix.m41, y: matrix.m42 };
+        }
+        const match = value.match(/matrix\(([^)]+)\)/);
+        if (!match) return { x: 0, y: 0 };
+        const parts = match[1].split(',').map(Number);
+        return { x: parts[4] || 0, y: parts[5] || 0 };
+    };
+
+    launcher.addEventListener('pointerdown', (e) => {
+        pointerId = e.pointerId;
+        launcher.setPointerCapture(pointerId);
+        const pos = parseTranslate(launcher);
+        baseX = pos.x;
+        baseY = pos.y;
+        startX = e.clientX;
+        startY = e.clientY;
+        dragMoved = false;
+        launcher.classList.add('dragging');
+    });
+
+    launcher.addEventListener('pointermove', (e) => {
+        if (pointerId === null || e.pointerId !== pointerId) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (!dragMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+            dragMoved = true;
+        }
+
+        const rect = launcher.getBoundingClientRect();
+        const padding = 8;
+        const minDx = padding - rect.left;
+        const maxDx = window.innerWidth - padding - rect.right;
+        const minDy = padding - rect.top;
+        const maxDy = window.innerHeight - padding - rect.bottom;
+
+        const clampedDx = Math.max(minDx, Math.min(maxDx, dx));
+        const clampedDy = Math.max(minDy, Math.min(maxDy, dy));
+
+        launcher.style.transform = `translate(${baseX + clampedDx}px, ${baseY + clampedDy}px)`;
+    });
+
+    const endDrag = (e) => {
+        if (pointerId === null || e.pointerId !== pointerId) return;
+        launcher.releasePointerCapture(pointerId);
+        pointerId = null;
+        launcher.classList.remove('dragging');
+        if (dragMoved) {
+            launcher.dataset.justDragged = 'true';
+            window.setTimeout(() => {
+                delete launcher.dataset.justDragged;
+            }, 0);
+        }
+    };
+
+    launcher.addEventListener('pointerup', endDrag);
+    launcher.addEventListener('pointercancel', endDrag);
+
+    launcher.addEventListener('click', (e) => {
+        if (launcher.dataset.justDragged) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+        }
+    }, true);
 }
 
 function initAIPage() {

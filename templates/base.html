@@ -32,17 +32,24 @@
 
     <div class="app-container">
         <div class="mobile-topbar">
-            <button class="hamburger-btn" id="mobile-menu-btn" aria-label="Open navigation">
-                <span></span><span></span><span></span>
-            </button>
+            <div class="mobile-topbar-left">
+                <button class="hamburger-btn" id="mobile-menu-btn" aria-label="Open navigation">
+                    <span></span><span></span><span></span>
+                </button>
+                <button class="btn-icon-mobile" onclick="window.location.href='/quick-access'" aria-label="Quick Access" title="Quick Access">
+                    <i class="fa-solid fa-star"></i>
+                </button>
+            </div>
             <div class="mobile-brand">
                 <i class="fa-solid fa-layer-group"></i>
                 <span>TaskFlow</span>
             </div>
-            <div class="mobile-user" onclick="toggleUserMenu(event)">
-                <i class="fa-solid fa-user"></i>
-                <span id="mobile-username">User</span>
+            <div class="mobile-topbar-actions">
+                <div class="mobile-user" onclick="toggleUserMenu(event)">
+                    <i class="fa-solid fa-user"></i>
+                    <span id="mobile-username">User</span>
             </div>
+        </div>
         </div>
         <nav class="sidebar">
             <div class="logo">
@@ -79,6 +86,12 @@
                         <a href="/recalls" class="{{ 'active' if request.path.startswith('/recalls') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-inbox"></i></span>
                             <span class="nav-label">Recalls</span>
+                        </a>
+                    </li>
+                    <li data-nav-id="quick-access">
+                        <a href="/quick-access" class="{{ 'active' if request.path.startswith('/quick-access') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-star"></i></span>
+                            <span class="nav-label">Quick Access</span>
                         </a>
                     </li>
                     <li data-nav-id="ai">
@@ -180,28 +193,6 @@
         <i class="fa-solid fa-robot"></i>
         <span>Ask AI</span>
     </div>
-    <div class="notif-launcher" id="notif-launcher">
-        <i class="fa-solid fa-bell"></i>
-        <span class="notif-badge" id="notif-badge" style="display:none;">0</span>
-    </div>
-    <div class="notif-panel" id="notif-panel">
-        <div class="notif-header">
-            <div>
-                <strong>Notifications</strong>
-                <div class="notif-sub">Latest alerts</div>
-            </div>
-            <div class="notif-actions">
-                <button class="btn btn-secondary btn-small" id="notif-mark-read">Mark all read</button>
-                <button class="btn-icon" id="notif-close-btn" aria-label="Close notifications"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-        </div>
-        <div class="notif-list" id="notif-list">
-            <div class="empty-state">
-                <i class="fa-solid fa-bell-slash" style="font-size: 1.5rem; color: var(--text-muted);"></i>
-                <p style="margin: 0.5rem 0 0 0; color: var(--text-muted);">No notifications yet.</p>
-            </div>
-        </div>
-    </div>
     <div class="ai-panel" id="ai-panel">
         <div class="ai-panel-header">
             <div>
@@ -242,6 +233,14 @@
         if ('serviceWorker' in navigator && !window.isNativeApp?.()) {
             navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(reg => reg.unregister()));
         }
+
+        // Quick Access keyboard shortcut (Ctrl+Shift+K or Cmd+Shift+K)
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'K') {
+                e.preventDefault();
+                window.location.href = '/quick-access';
+            }
+        });
     </script>
 </body>
 </html>
