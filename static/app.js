@@ -3946,19 +3946,43 @@ function openCalendarPrompt({ title = 'Input', message = '', defaultValue = '', 
 function openReminderEditor(ev) {
     openCalendarPrompt({
         title: 'Reminder',
-        message: 'Minutes before start (leave blank to remove)',
-        type: 'number',
-        defaultValue: ev.reminder_minutes_before ?? '',
+        message: 'Enter 30m, 2h, or 1d before start (leave blank to remove)',
+        type: 'text',
+        defaultValue: formatReminderMinutes(ev.reminder_minutes_before),
         onSubmit: async (val) => {
             if (val === '' || val === null || val === undefined) {
                 await updateCalendarEvent(ev.id, { reminder_minutes_before: null });
                 return;
             }
-            const minutes = parseInt(val, 10);
-            if (Number.isNaN(minutes) || minutes < 0) return;
+            const minutes = parseReminderMinutesInput(val);
+            if (minutes === null || minutes < 0) {
+                showToast('Use 30m, 2h, or 1d for reminders.', 'error');
+                return;
+            }
             await updateCalendarEvent(ev.id, { reminder_minutes_before: minutes });
         }
     });
+}
+
+function parseReminderMinutesInput(value) {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (!raw) return null;
+    const match = raw.match(/^(\d+)\s*([mhd])?$/);
+    if (!match) return null;
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount)) return null;
+    const unit = match[2] || 'm';
+    const multipliers = { m: 1, h: 60, d: 1440 };
+    return amount * multipliers[unit];
+}
+
+function formatReminderMinutes(minutes) {
+    if (minutes === null || minutes === undefined) return '';
+    const total = Number(minutes);
+    if (!Number.isFinite(total)) return '';
+    if (total % 1440 === 0) return `${total / 1440}d`;
+    if (total % 60 === 0) return `${total / 60}h`;
+    return `${total}m`;
 }
 
 function openCalendarMovePrompt(ev) {
@@ -4277,12 +4301,18 @@ async function saveRecurringModal() {
     }
     const freq = freqEl ? freqEl.value : 'daily';
     const startDay = (startDayInput && startDayInput.value) ? startDayInput.value : calendarState.selectedDay;
+    const reminderRaw = reminderInput ? reminderInput.value.trim() : '';
+    const reminderMinutes = reminderRaw ? parseReminderMinutesInput(reminderRaw) : null;
+    if (reminderRaw && reminderMinutes === null) {
+        alert('Use 30m, 2h, or 1d for reminders.');
+        return;
+    }
     const payload = {
         title,
         day: startDay,
         start_time: startTimeInput ? startTimeInput.value.trim() || null : null,
         end_time: endTimeInput ? endTimeInput.value.trim() || null : null,
-        reminder_minutes_before: reminderInput ? (reminderInput.value ? Number(reminderInput.value) : null) : null,
+        reminder_minutes_before: reminderMinutes,
         rollover_enabled: rolloverInput ? rolloverInput.checked : false,
         priority: priorityInput ? priorityInput.value : 'medium',
         frequency: freq,
@@ -4540,7 +4570,7 @@ function renderCalendarEvents() {
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
         const reminderMenuItem = document.createElement('button');
         reminderMenuItem.className = 'calendar-item-menu-option';
-        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${formatReminderMinutes(ev.reminder_minutes_before)})` : 'Set Reminder'}`;
         reminderMenuItem.onclick = async (e) => {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
@@ -4769,7 +4799,7 @@ function renderCalendarEvents() {
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
         const reminderMenuItem = document.createElement('button');
         reminderMenuItem.className = 'calendar-item-menu-option';
-        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${formatReminderMinutes(ev.reminder_minutes_before)})` : 'Set Reminder'}`;
         reminderMenuItem.onclick = (e) => {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
@@ -4986,7 +5016,7 @@ function renderCalendarEvents() {
         const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
         const reminderMenuItem = document.createElement('button');
         reminderMenuItem.className = 'calendar-item-menu-option';
-        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${ev.reminder_minutes_before}m)` : 'Set Reminder'}`;
+        reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${formatReminderMinutes(ev.reminder_minutes_before)})` : 'Set Reminder'}`;
         reminderMenuItem.onclick = (e) => {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
@@ -5641,10 +5671,10 @@ function parseCalendarQuickInput(text) {
         working = working.replace(priorityMatch[0], '').trim();
     }
 
-    // Reminder: *minutes
-    const reminderMatch = working.match(/\*(\d{1,3})/);
+    // Reminder: *30, *2h, *1d
+    const reminderMatch = working.match(/\*(\d+)\s*([mhd])?/i);
     if (reminderMatch) {
-        reminder = parseInt(reminderMatch[1], 10);
+        reminder = parseReminderMinutesInput(`${reminderMatch[1]}${reminderMatch[2] || ''}`);
         working = working.replace(reminderMatch[0], '').trim();
     }
 
@@ -5803,9 +5833,9 @@ function getSyntaxSuggestions(text, cursorPosition) {
 
     // Reminder
     suggestions.push({
-        syntax: '*[minutes]',
+        syntax: '*[minutes|h|d]',
         description: 'Reminder before start',
-        example: '*15 or *30'
+        example: '*30m or *2h'
     });
 
     // Disable rollover
@@ -8603,14 +8633,19 @@ function getUniqueCategories() {
 
 function positionAutocompleteDropdown(input, dropdown) {
     const rect = input.getBoundingClientRect();
-    dropdown.style.left = `${rect.left}px`;
-    dropdown.style.top = `${rect.bottom + 2}px`;
-    dropdown.style.width = `${rect.width}px`;
 
-    // Move dropdown to body if not already there (escapes all container constraints)
+    // Move dropdown to body FIRST if not already there (escapes all container constraints)
     if (dropdown.parentElement !== document.body) {
         document.body.appendChild(dropdown);
     }
+
+    // Apply positioning with inline styles to ensure they take precedence
+    dropdown.style.position = 'fixed';
+    dropdown.style.left = `${rect.left}px`;
+    dropdown.style.top = `${rect.bottom + 2}px`;
+    dropdown.style.width = `${rect.width}px`;
+    dropdown.style.zIndex = '2147483647';
+    dropdown.style.pointerEvents = 'auto';
 }
 
 function showCategoryAutocomplete(filter = '') {

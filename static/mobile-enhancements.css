@@ -127,6 +127,48 @@ textarea,
         width: 100vw;
         max-width: 100vw;
     }
+
+    /* Tighten add-task modal spacing so the full form fits on screen */
+    #add-item-modal .modal-content {
+        padding: 1rem;
+        max-height: 92dvh;
+    }
+
+    #add-item-modal h2 {
+        font-size: 1.25rem;
+        margin-bottom: 0.5rem;
+    }
+
+    #add-item-modal br {
+        display: none;
+    }
+
+    #add-item-modal .form-group {
+        margin-bottom: 0.8rem;
+    }
+
+    #add-item-modal .form-group label {
+        margin-bottom: 0.45rem;
+        font-size: 0.85rem;
+    }
+
+    #add-item-modal .form-control {
+        padding: 0.6rem;
+    }
+
+    #add-item-modal textarea.form-control {
+        min-height: 64px;
+    }
+
+    #add-item-modal .modal-actions {
+        margin-top: 0.9rem;
+        gap: 0.5rem;
+    }
+
+    #add-item-modal .modal-actions .btn {
+        padding: 0.6rem 1rem;
+        font-size: 0.9rem;
+    }
 }
 
 /* Smooth scrolling for native app feel */
