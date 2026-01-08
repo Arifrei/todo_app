@@ -1624,13 +1624,24 @@ def download_app():
     if not get_current_user():
         return redirect(url_for('select_user'))
     downloads_dir = os.path.join(app.root_path, 'downloads')
-    apk_filename = 'mind-your-own.apk'
+    apk_candidates = [
+        filename for filename in os.listdir(downloads_dir)
+        if filename.lower().endswith('.apk')
+        and os.path.isfile(os.path.join(downloads_dir, filename))
+    ]
+    if not apk_candidates:
+        return "APK not found. Please build and upload the app first.", 404
+    # Pick the newest APK by modification time.
+    apk_filename = max(
+        apk_candidates,
+        key=lambda filename: os.path.getmtime(os.path.join(downloads_dir, filename))
+    )
     apk_path = os.path.join(downloads_dir, apk_filename)
 
     if os.path.exists(apk_path):
         return send_from_directory(downloads_dir, apk_filename,
                                    as_attachment=True,
-                                   download_name='Mind-Your-Own.apk',
+                                   download_name=apk_filename,
                                    mimetype='application/vnd.android.package-archive')
     else:
         return "APK not found. Please build and upload the app first.", 404
