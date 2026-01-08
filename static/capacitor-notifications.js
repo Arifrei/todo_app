@@ -399,7 +399,9 @@ async function syncPendingReminders() {
 
         for (const reminder of reminders) {
             try {
-                const remindAt = new Date(reminder.remind_at);
+                const remindAt = reminder.remind_at_ts
+                    ? new Date(reminder.remind_at_ts)
+                    : new Date(reminder.remind_at);
 
                 // Only schedule if in the future
                 if (remindAt > new Date()) {

@@ -77,6 +77,9 @@ let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: 
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
 let recallState = { items: [], selectedId: null, editingId: null, filters: { q: '', category: 'all', type: 'all', status: 'active', sort: 'smart', pinnedOnly: false, tag: null }, aiResults: [] };
+let recallSummaryPollers = {}; // Track active pollers by recall ID
+let selectedRecallCategories = new Set();
+let selectedRecallTags = new Set();
 let currentTaskFilter = 'all';
 let selectedTagFilters = new Set();
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time' };
@@ -89,6 +92,8 @@ let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', 
 const USER_TIMEZONE = window.USER_TIMEZONE || 'America/New_York'; // EST/EDT
 let notificationsState = { items: [], unread: 0, open: false };
 let timeModalState = { eventId: null };
+let recurringModalState = { open: false };
+const TOUCH_SCROLL_THRESHOLD = 12;
 
 // --- Dashboard Functions ---
 
@@ -638,6 +643,7 @@ async function ensureLinkedTaskEvent(ev) {
     ev.end_time = created.end_time;
     ev.reminder_minutes_before = created.reminder_minutes_before;
     ev.priority = created.priority || ev.priority;
+    ev.rollover_enabled = created.rollover_enabled || false;
     ev.day = created.day || calendarState.selectedDay;
     return ev;
 }
@@ -1108,6 +1114,17 @@ function toggleHeaderMenu(event) {
     const dropdown = document.getElementById('header-menu-dropdown');
     if (!dropdown) return;
     if (event) event.stopPropagation();
+    const addDropdown = document.getElementById('header-add-dropdown');
+    if (addDropdown) addDropdown.classList.remove('show');
+    dropdown.classList.toggle('show');
+}
+
+function toggleHeaderAddMenu(event) {
+    const dropdown = document.getElementById('header-add-dropdown');
+    if (!dropdown) return;
+    if (event) event.stopPropagation();
+    const mainDropdown = document.getElementById('header-menu-dropdown');
+    if (mainDropdown) mainDropdown.classList.remove('show');
     dropdown.classList.toggle('show');
 }
 
@@ -1117,6 +1134,12 @@ document.addEventListener('click', (e) => {
     if (dropdown && dropdown.classList.contains('show')) {
         if (!e.target.closest('.header-main-menu')) {
             dropdown.classList.remove('show');
+        }
+    }
+    const addDropdown = document.getElementById('header-add-dropdown');
+    if (addDropdown && addDropdown.classList.contains('show')) {
+        if (!e.target.closest('.header-add-menu')) {
+            addDropdown.classList.remove('show');
         }
     }
 });
@@ -1475,6 +1498,15 @@ function toggleBulkMenu(event, forceClose = false) {
     if (!menu) return;
     if (forceClose) {
         menu.classList.remove('show');
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.dataset.anchorId = '';
+        const statusMenu = document.getElementById('bulk-status-submenu');
+        const tagForm = document.getElementById('bulk-tag-form');
+        if (statusMenu) statusMenu.classList.remove('show');
+        if (tagForm) tagForm.classList.remove('show');
         return;
     }
 
@@ -1489,7 +1521,66 @@ function toggleBulkMenu(event, forceClose = false) {
         menu.style.left = `${rect.left}px`;
     }
 
-    menu.classList.toggle('show');
+    const shouldShow = !menu.classList.contains('show');
+    menu.classList.toggle('show', shouldShow);
+    if (!shouldShow) {
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.dataset.anchorId = '';
+        const statusMenu = document.getElementById('bulk-status-submenu');
+        const tagForm = document.getElementById('bulk-tag-form');
+        if (statusMenu) statusMenu.classList.remove('show');
+        if (tagForm) tagForm.classList.remove('show');
+        return;
+    }
+
+    if (window.innerWidth <= 768 && event && event.currentTarget) {
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.right = '';
+        const padding = 8;
+        const menuWidth = menu.offsetWidth || 220;
+        let left = rect.right - menuWidth;
+        left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+        let top = rect.bottom + 8;
+        if (top + menu.offsetHeight > window.innerHeight - padding) {
+            top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+        }
+        const maxTop = window.innerHeight - menu.offsetHeight - padding;
+        top = Math.max(padding, Math.min(top, maxTop));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.dataset.anchorId = event.currentTarget.id || '';
+    } else {
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.dataset.anchorId = '';
+    }
+}
+
+function toggleBulkSubmenu(kind, event) {
+    if (event) event.stopPropagation();
+    const statusMenu = document.getElementById('bulk-status-submenu');
+    const tagForm = document.getElementById('bulk-tag-form');
+    if (kind === 'status') {
+        if (tagForm) tagForm.classList.remove('show');
+        if (statusMenu) statusMenu.classList.toggle('show');
+    }
+    if (kind === 'tag') {
+        if (statusMenu) statusMenu.classList.remove('show');
+        if (tagForm) {
+            const willShow = !tagForm.classList.contains('show');
+            tagForm.classList.toggle('show', willShow);
+            if (willShow) {
+                const input = document.getElementById('bulk-tag-input');
+                if (input) input.focus();
+            }
+        }
+    }
 }
 
 // Close bulk menu when clicking outside
@@ -1498,8 +1589,105 @@ document.addEventListener('click', (e) => {
     if (!menu) return;
     if (!e.target.closest('.bulk-menu')) {
         menu.classList.remove('show');
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.dataset.anchorId = '';
+        const statusMenu = document.getElementById('bulk-status-submenu');
+        const tagForm = document.getElementById('bulk-tag-form');
+        if (statusMenu) statusMenu.classList.remove('show');
+        if (tagForm) tagForm.classList.remove('show');
     }
 });
+
+window.addEventListener('scroll', () => {
+    const menu = document.getElementById('bulk-menu-dropdown');
+    if (!menu || !menu.classList.contains('show')) return;
+    const anchorId = menu.dataset.anchorId || '';
+    const anchor = anchorId ? document.getElementById(anchorId) : null;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const padding = 8;
+    const menuWidth = menu.offsetWidth || 220;
+    let left = rect.right - menuWidth;
+    left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+    let top = rect.bottom + 8;
+    if (top + menu.offsetHeight > window.innerHeight - padding) {
+        top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+    }
+    const maxTop = window.innerHeight - menu.offsetHeight - padding;
+    top = Math.max(padding, Math.min(top, maxTop));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+}, { passive: true });
+
+function toggleCalendarBulkMenu(event, forceClose = false) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('calendar-bulk-more-dropdown');
+    if (!menu) return;
+    if (forceClose) {
+        menu.classList.remove('show');
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        return;
+    }
+    const shouldShow = !menu.classList.contains('show');
+    menu.classList.toggle('show', shouldShow);
+    if (!shouldShow) return;
+
+    if (window.innerWidth <= 768 && event && event.currentTarget) {
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.right = '';
+        const padding = 8;
+        const menuWidth = menu.offsetWidth || 200;
+        let left = rect.right - menuWidth;
+        left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+        let top = rect.bottom + 8;
+        if (top + menu.offsetHeight > window.innerHeight - padding) {
+            top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+        }
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.dataset.anchorId = event.currentTarget.id || '';
+    } else {
+        menu.style.position = '';
+        menu.style.top = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.dataset.anchorId = '';
+    }
+}
+
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('calendar-bulk-more-dropdown');
+    if (!menu) return;
+    if (!e.target.closest('.calendar-bulk-menu')) {
+        menu.classList.remove('show');
+    }
+});
+
+window.addEventListener('scroll', () => {
+    const menu = document.getElementById('calendar-bulk-more-dropdown');
+    if (!menu || !menu.classList.contains('show')) return;
+    const anchorId = menu.dataset.anchorId || '';
+    const anchor = anchorId ? document.getElementById(anchorId) : null;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const padding = 8;
+    const menuWidth = menu.offsetWidth || 200;
+    let left = rect.right - menuWidth;
+    left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+    let top = rect.bottom + 8;
+    if (top + menu.offsetHeight > window.innerHeight - padding) {
+        top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+    }
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+}, { passive: true });
 
 
 function setTaskSelected(itemId, isSelected, skipPhaseCascade = false) {
@@ -1597,6 +1785,32 @@ async function bulkUpdateStatus(status) {
         }
     } catch (e) {
         console.error('Error bulk updating status:', e);
+    }
+}
+
+async function bulkAddTag() {
+    if (selectedItems.size === 0) return;
+    const input = document.getElementById('bulk-tag-input');
+    const tagValue = input ? input.value.trim() : '';
+    if (!tagValue) return;
+    try {
+        const res = await fetch('/api/items/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'add_tag',
+                tag: tagValue,
+                ids: Array.from(selectedItems),
+                list_id: typeof CURRENT_LIST_ID !== 'undefined' ? CURRENT_LIST_ID : null
+            })
+        });
+        if (res.ok) {
+            if (input) input.value = '';
+            selectedItems.clear();
+            await refreshListView();
+        }
+    } catch (e) {
+        console.error('Error bulk adding tag:', e);
     }
 }
 
@@ -1916,6 +2130,9 @@ function handleTouchStart(e) {
     if (shouldIgnoreTaskSelection(e.target)) return;
     // Don't trigger long press if dragging
     if (e.target.closest('.drag-handle')) return;
+    if (document.body.classList.contains('selection-mode-active')) {
+        return;
+    }
 
     longPressTimer = setTimeout(() => {
         longPressTimer = null; // Prevent multiple triggers
@@ -1931,7 +2148,7 @@ function handleTouchMove(e) {
     if (e.touches && e.touches.length) {
         const dx = Math.abs(e.touches[0].clientX - touchStartX);
         const dy = Math.abs(e.touches[0].clientY - touchStartY);
-        if (dx > 8 || dy > 8) {
+        if (dx > TOUCH_SCROLL_THRESHOLD || dy > TOUCH_SCROLL_THRESHOLD) {
             isTouchScrolling = true;
             clearTimeout(longPressTimer);
             longPressTimer = null;
@@ -3971,6 +4188,147 @@ async function saveCalendarTimeModal() {
     closeCalendarTimeModal();
 }
 
+function updateRecurringFieldVisibility() {
+    const freqEl = document.getElementById('calendar-recurring-frequency');
+    const unitEl = document.getElementById('calendar-recurring-interval-unit');
+    const daysRow = document.getElementById('calendar-recurring-days-row');
+    const monthRow = document.getElementById('calendar-recurring-month-row');
+    const yearRow = document.getElementById('calendar-recurring-year-row');
+    const customRow = document.getElementById('calendar-recurring-custom-row');
+    if (!freqEl) return;
+    const freq = freqEl.value;
+    const unit = unitEl ? unitEl.value : 'days';
+    const showCustom = freq === 'custom';
+    const showDays = freq === 'weekly' || freq === 'biweekly' || (showCustom && unit === 'weeks');
+    const showMonth = freq === 'monthly' || freq === 'yearly' || (showCustom && (unit === 'months' || unit === 'years'));
+    const showYear = freq === 'yearly' || (showCustom && unit === 'years');
+    if (customRow) customRow.classList.toggle('is-hidden', !showCustom);
+    if (daysRow) daysRow.classList.toggle('is-hidden', !showDays);
+    if (monthRow) monthRow.classList.toggle('is-hidden', !showMonth);
+    if (yearRow) yearRow.classList.toggle('is-hidden', !showYear);
+}
+
+function openRecurringModal() {
+    const modal = document.getElementById('calendar-recurring-modal');
+    if (!modal) return;
+    const titleInput = document.getElementById('calendar-recurring-title');
+    const startDayInput = document.getElementById('calendar-recurring-start-day');
+    const startTimeInput = document.getElementById('calendar-recurring-start-time');
+    const endTimeInput = document.getElementById('calendar-recurring-end-time');
+    const reminderInput = document.getElementById('calendar-recurring-reminder');
+    const rolloverInput = document.getElementById('calendar-recurring-rollover');
+    const typeInput = document.getElementById('calendar-recurring-type');
+    const freqEl = document.getElementById('calendar-recurring-frequency');
+    const intervalEl = document.getElementById('calendar-recurring-interval');
+    const unitEl = document.getElementById('calendar-recurring-interval-unit');
+    const dayOfMonthEl = document.getElementById('calendar-recurring-day-of-month');
+    const monthEl = document.getElementById('calendar-recurring-month');
+    if (titleInput) titleInput.value = '';
+    if (startTimeInput) startTimeInput.value = '';
+    if (endTimeInput) endTimeInput.value = '';
+    if (reminderInput) reminderInput.value = '';
+    if (rolloverInput) rolloverInput.checked = true;
+    if (typeInput && rolloverInput) {
+        rolloverInput.checked = typeInput.value !== 'event';
+    }
+    if (freqEl) freqEl.value = 'daily';
+    if (intervalEl) intervalEl.value = '1';
+    if (unitEl) unitEl.value = 'days';
+    const todayStr = calendarState.selectedDay || new Date().toISOString().slice(0, 10);
+    if (startDayInput) startDayInput.value = todayStr;
+    const dateObj = new Date(`${todayStr}T00:00:00`);
+    if (dayOfMonthEl) dayOfMonthEl.value = dateObj.getDate();
+    if (monthEl) monthEl.value = String(dateObj.getMonth() + 1);
+    const dow = (dateObj.getDay() + 6) % 7; // JS Sunday=0 -> Monday=0
+    const dayCheckboxes = modal.querySelectorAll('#calendar-recurring-days-row input[type="checkbox"]');
+    dayCheckboxes.forEach(cb => {
+        cb.checked = Number(cb.value) === dow;
+    });
+    updateRecurringFieldVisibility();
+    modal.classList.add('active');
+    recurringModalState.open = true;
+}
+
+function closeRecurringModal() {
+    const modal = document.getElementById('calendar-recurring-modal');
+    if (modal) modal.classList.remove('active');
+    recurringModalState.open = false;
+}
+
+async function saveRecurringModal() {
+    const titleInput = document.getElementById('calendar-recurring-title');
+    const typeInput = document.getElementById('calendar-recurring-type');
+    const startDayInput = document.getElementById('calendar-recurring-start-day');
+    const startTimeInput = document.getElementById('calendar-recurring-start-time');
+    const endTimeInput = document.getElementById('calendar-recurring-end-time');
+    const reminderInput = document.getElementById('calendar-recurring-reminder');
+    const rolloverInput = document.getElementById('calendar-recurring-rollover');
+    const priorityInput = document.getElementById('calendar-recurring-priority');
+    const freqEl = document.getElementById('calendar-recurring-frequency');
+    const intervalEl = document.getElementById('calendar-recurring-interval');
+    const unitEl = document.getElementById('calendar-recurring-interval-unit');
+    const dayOfMonthEl = document.getElementById('calendar-recurring-day-of-month');
+    const monthEl = document.getElementById('calendar-recurring-month');
+
+    const title = titleInput ? titleInput.value.trim() : '';
+    if (!title) {
+        alert('Title is required.');
+        return;
+    }
+    const freq = freqEl ? freqEl.value : 'daily';
+    const startDay = (startDayInput && startDayInput.value) ? startDayInput.value : calendarState.selectedDay;
+    const payload = {
+        title,
+        day: startDay,
+        start_time: startTimeInput ? startTimeInput.value.trim() || null : null,
+        end_time: endTimeInput ? endTimeInput.value.trim() || null : null,
+        reminder_minutes_before: reminderInput ? (reminderInput.value ? Number(reminderInput.value) : null) : null,
+        rollover_enabled: rolloverInput ? rolloverInput.checked : false,
+        priority: priorityInput ? priorityInput.value : 'medium',
+        frequency: freq,
+        is_event: typeInput ? typeInput.value === 'event' : false
+    };
+
+    if (freq === 'weekly' || freq === 'biweekly' || (freq === 'custom' && unitEl && unitEl.value === 'weeks')) {
+        const days = [];
+        document.querySelectorAll('#calendar-recurring-days-row input[type="checkbox"]:checked').forEach(cb => {
+            days.push(Number(cb.value));
+        });
+        payload.days_of_week = days;
+    }
+    if (freq === 'monthly' || freq === 'yearly' || (freq === 'custom' && unitEl && (unitEl.value === 'months' || unitEl.value === 'years'))) {
+        payload.day_of_month = (dayOfMonthEl && dayOfMonthEl.value) ? Number(dayOfMonthEl.value) : null;
+    }
+    if (freq === 'yearly' || (freq === 'custom' && unitEl && unitEl.value === 'years')) {
+        payload.month_of_year = (monthEl && monthEl.value) ? Number(monthEl.value) : null;
+    }
+    if (freq === 'custom') {
+        payload.interval = intervalEl ? Number(intervalEl.value || '1') : 1;
+        payload.interval_unit = unitEl ? unitEl.value : 'days';
+    }
+
+    try {
+        const res = await fetch('/api/calendar/recurring', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            alert(data.error || 'Could not create recurring item.');
+            return;
+        }
+        closeRecurringModal();
+        if (calendarState.selectedDay) {
+            await loadCalendarDay(calendarState.selectedDay);
+        }
+        await loadCalendarMonth();
+    } catch (e) {
+        console.error('Error creating recurring item:', e);
+        alert('Could not create recurring item.');
+    }
+}
+
 function formatTimeRange(ev) {
     if (!ev.start_time) return '';
     const start = formatTimeDisplay(ev.start_time);
@@ -4191,6 +4549,23 @@ function renderCalendarEvents() {
             openReminderEditor({ ...linked, id: linked.calendar_event_id });
         };
 
+        const rolloverMenuItem = document.createElement('button');
+        rolloverMenuItem.className = 'calendar-item-menu-option';
+        rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+        rolloverMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const linked = await ensureLinkedTaskEvent(ev);
+            if (!linked || !linked.calendar_event_id) return;
+            const next = !linked.rollover_enabled;
+            try {
+                await updateCalendarEvent(linked.calendar_event_id, { rollover_enabled: next });
+                linked.rollover_enabled = next;
+            } catch (err) {
+                console.error('Failed to toggle rollover', err);
+            }
+        };
+
         const openBtn = document.createElement('a');
         openBtn.className = 'calendar-item-menu-option';
         openBtn.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
@@ -4205,13 +4580,13 @@ function renderCalendarEvents() {
             unpinTaskDate(ev.task_id);
         };
 
-        overflowDropdown.append(reminderMenuItem, openBtn, unpinBtn);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, openBtn, unpinBtn);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
         const positionDropdown = () => {
             const rect = overflowBtn.getBoundingClientRect();
-            const dropdownWidth = 200;
+            const dropdownWidth = overflowDropdown.offsetWidth || 200;
             const dropdownHeight = overflowDropdown.offsetHeight || 120;
             const screenWidth = window.innerWidth;
             const screenHeight = window.innerHeight;
@@ -4221,6 +4596,9 @@ function renderCalendarEvents() {
             if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
                 topPos = rect.top - dropdownHeight - 8;
             }
+            const maxTop = screenHeight - dropdownHeight - padding;
+            const minTop = padding;
+            topPos = Math.max(minTop, Math.min(topPos, maxTop));
             let leftPos = rect.right - dropdownWidth;
             if (leftPos < padding) leftPos = padding;
             if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
@@ -5232,7 +5610,7 @@ function parseCalendarQuickInput(text) {
     let priority = 'medium';
     let reminder = null;
     let phaseName = null;
-    let rollover = false;
+    let rollover = true;
     let isEvent = false;
     let groupName = null;
 
@@ -5242,6 +5620,7 @@ function parseCalendarQuickInput(text) {
     if (working.includes('$')) {
         isEvent = true;
         working = working.replace(/\$/g, '').trim();
+        rollover = false;
     }
 
     // Time: @time or @time-time
@@ -5283,7 +5662,12 @@ function parseCalendarQuickInput(text) {
         working = working.replace(groupMatch[0], '').trim();
     }
 
-    // Enable rollover: + (dash previously disabled; now explicit opt-in)
+    // Disable rollover: -
+    if (working.includes('-')) {
+        rollover = false;
+        working = working.replace(/-/g, '').trim();
+    }
+    // Enable rollover: +
     if (working.includes('+')) {
         rollover = true;
         working = working.replace(/\+/g, '').trim();
@@ -6126,8 +6510,17 @@ async function scheduleLocalReminders() {
 
     // In native app mode, use Capacitor Local Notifications
     if (window.isNativeApp && window.isNativeApp()) {
-        // Cancel all existing scheduled notifications
-        await window.NotificationService?.cancelAll();
+        // Only cancel reminders for items we are about to reschedule (avoid wiping background-synced reminders)
+        const cancelIds = new Set();
+        calendarState.events.forEach((ev) => {
+            if (ev.status === 'done') return;
+            if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
+            const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
+            cancelIds.add(reminderId);
+        });
+        for (const id of cancelIds) {
+            await window.NotificationService?.cancel(id);
+        }
 
         // Schedule new notifications
         calendarState.events.forEach(async (ev) => {
@@ -6495,9 +6888,17 @@ function initCalendarPage() {
     const bulkMoveBtn = document.getElementById('calendar-bulk-move');
     const bulkNoteBtn = document.getElementById('calendar-bulk-note');
     const bulkDeleteBtn = document.getElementById('calendar-bulk-delete');
+    const bulkMoreBtn = document.getElementById('calendar-bulk-more-btn');
     const selectAllCheckbox = document.getElementById('calendar-select-all');
     const dayQuickAdd = document.getElementById('calendar-day-quick-add');
     const quickToggleBtn = document.getElementById('calendar-quick-toggle');
+    const recurringBtn = document.getElementById('calendar-recurring-btn');
+    const recurringModal = document.getElementById('calendar-recurring-modal');
+    const recurringSaveBtn = document.getElementById('calendar-recurring-save');
+    const recurringCancelBtn = document.getElementById('calendar-recurring-cancel');
+    const recurringFreq = document.getElementById('calendar-recurring-frequency');
+    const recurringUnit = document.getElementById('calendar-recurring-interval-unit');
+    const recurringType = document.getElementById('calendar-recurring-type');
 
     const sortLabelMap = {
         time: 'Time',
@@ -6672,14 +7073,44 @@ function initCalendarPage() {
             if (e.target === timeModal) closeCalendarTimeModal();
         });
     }
+    if (recurringBtn) recurringBtn.onclick = openRecurringModal;
+    if (recurringSaveBtn) recurringSaveBtn.onclick = saveRecurringModal;
+    if (recurringCancelBtn) recurringCancelBtn.onclick = closeRecurringModal;
+    if (recurringFreq) recurringFreq.onchange = updateRecurringFieldVisibility;
+    if (recurringUnit) recurringUnit.onchange = updateRecurringFieldVisibility;
+    if (recurringType) recurringType.onchange = () => {
+        const rolloverInput = document.getElementById('calendar-recurring-rollover');
+        if (rolloverInput) rolloverInput.checked = recurringType.value !== 'event';
+    };
+    if (recurringModal) {
+        recurringModal.addEventListener('click', (e) => {
+            if (e.target === recurringModal) closeRecurringModal();
+        });
+    }
     if (bulkClearBtn) bulkClearBtn.onclick = resetCalendarSelection;
-    if (bulkDoneBtn) bulkDoneBtn.onclick = () => bulkCalendarUpdateStatus('done');
-    if (bulkUndoneBtn) bulkUndoneBtn.onclick = () => bulkCalendarUpdateStatus('not_started');
+    if (bulkDoneBtn) bulkDoneBtn.onclick = () => {
+        bulkCalendarUpdateStatus('done');
+        toggleCalendarBulkMenu(null, true);
+    };
+    if (bulkUndoneBtn) bulkUndoneBtn.onclick = () => {
+        bulkCalendarUpdateStatus('not_started');
+        toggleCalendarBulkMenu(null, true);
+    };
     if (bulkRolloverBtn) bulkRolloverBtn.onclick = bulkCalendarToggleRollover;
-    if (bulkPriorityBtn) bulkPriorityBtn.onclick = (e) => startBulkCalendarPriorityPicker(e.currentTarget);
-    if (bulkMoveBtn) bulkMoveBtn.onclick = startBulkCalendarMovePrompt;
-    if (bulkNoteBtn) bulkNoteBtn.onclick = startBulkCalendarNoteLink;
+    if (bulkPriorityBtn) bulkPriorityBtn.onclick = (e) => {
+        toggleCalendarBulkMenu(null, true);
+        startBulkCalendarPriorityPicker(e.currentTarget);
+    };
+    if (bulkMoveBtn) bulkMoveBtn.onclick = () => {
+        toggleCalendarBulkMenu(null, true);
+        startBulkCalendarMovePrompt();
+    };
+    if (bulkNoteBtn) bulkNoteBtn.onclick = () => {
+        toggleCalendarBulkMenu(null, true);
+        startBulkCalendarNoteLink();
+    };
     if (bulkDeleteBtn) bulkDeleteBtn.onclick = bulkCalendarDelete;
+    if (bulkMoreBtn) bulkMoreBtn.onclick = toggleCalendarBulkMenu;
     if (selectAllCheckbox) selectAllCheckbox.onchange = (e) => calendarSelectAll(e.target.checked);
 
     const savedSort = localStorage.getItem('calendarDaySort');
@@ -6778,6 +7209,365 @@ function initCalendarPage() {
     setCalendarMonth(new Date(initialDayStr + 'T00:00:00'));
 }
 
+// --- Homepage Reordering ---
+
+let homepageEditMode = {
+    active: false,
+    longPressTimer: null,
+    longPressTriggered: false,
+    touchStart: { x: 0, y: 0 },
+    currentDragCard: null
+};
+
+let homepageTouchDragState = {
+    active: false,
+    card: null,
+    clone: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0
+};
+
+function initHomepageReorder() {
+    const grid = document.getElementById('homepage-grid');
+    if (!grid) return; // Not on homepage
+
+    const cards = grid.querySelectorAll('.module-card');
+    cards.forEach(card => {
+        // Desktop: Long press detection
+        let mouseDownTimer = null;
+
+        card.addEventListener('mousedown', (e) => {
+            if (homepageEditMode.active) return; // Already in edit mode
+            mouseDownTimer = setTimeout(() => {
+                enterHomepageEditMode();
+            }, 1000); // 1 second for desktop
+        });
+
+        card.addEventListener('mouseup', () => {
+            clearTimeout(mouseDownTimer);
+        });
+
+        card.addEventListener('mouseleave', () => {
+            clearTimeout(mouseDownTimer);
+        });
+
+        // Mobile: Touch long press
+        card.addEventListener('touchstart', handleHomepageTouchStart, { passive: true });
+        card.addEventListener('touchmove', handleHomepageTouchMove, { passive: true });
+        card.addEventListener('touchend', handleHomepageTouchEnd);
+    });
+
+    // Done button
+    const doneBtn = document.getElementById('homepage-done-btn');
+    if (doneBtn) {
+        doneBtn.addEventListener('click', exitHomepageEditMode);
+    }
+
+    // Click outside to exit
+    document.addEventListener('click', (e) => {
+        if (!homepageEditMode.active) return;
+        if (!e.target.closest('#homepage-grid') && !e.target.closest('#homepage-done-btn')) {
+            exitHomepageEditMode();
+        }
+    });
+}
+
+function handleHomepageTouchStart(e) {
+    if (homepageEditMode.active) return; // Already in edit mode, drag will handle
+
+    homepageEditMode.longPressTriggered = false;
+    if (e.touches && e.touches.length) {
+        homepageEditMode.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+
+    homepageEditMode.longPressTimer = setTimeout(() => {
+        homepageEditMode.longPressTimer = null;
+        homepageEditMode.longPressTriggered = true;
+        enterHomepageEditMode();
+    }, 1000); // 1 second for mobile
+}
+
+function handleHomepageTouchMove(e) {
+    if (!homepageEditMode.longPressTimer || !e.touches || !e.touches.length) return;
+
+    const dx = Math.abs(e.touches[0].clientX - homepageEditMode.touchStart.x);
+    const dy = Math.abs(e.touches[0].clientY - homepageEditMode.touchStart.y);
+
+    if (dx > 10 || dy > 10) { // User is scrolling
+        clearTimeout(homepageEditMode.longPressTimer);
+        homepageEditMode.longPressTimer = null;
+    }
+}
+
+function handleHomepageTouchEnd(e) {
+    if (homepageEditMode.longPressTimer) {
+        clearTimeout(homepageEditMode.longPressTimer);
+        homepageEditMode.longPressTimer = null;
+    }
+
+    if (homepageEditMode.longPressTriggered) {
+        e.preventDefault(); // Prevent click navigation
+        homepageEditMode.longPressTriggered = false;
+    }
+}
+
+function enterHomepageEditMode() {
+    homepageEditMode.active = true;
+    const grid = document.getElementById('homepage-grid');
+    const doneBtn = document.getElementById('homepage-done-btn');
+
+    if (grid) {
+        grid.classList.add('edit-mode');
+        const cards = grid.querySelectorAll('.module-card');
+        cards.forEach(card => {
+            card.classList.add('wiggle');
+            // Prevent navigation while in edit mode
+            card.addEventListener('click', preventNavigation);
+        });
+    }
+
+    if (doneBtn) {
+        doneBtn.style.display = 'block';
+    }
+
+    // Initialize drag after entering edit mode
+    initHomepageDrag();
+}
+
+function exitHomepageEditMode() {
+    homepageEditMode.active = false;
+    const grid = document.getElementById('homepage-grid');
+    const doneBtn = document.getElementById('homepage-done-btn');
+
+    if (grid) {
+        grid.classList.remove('edit-mode');
+        const cards = grid.querySelectorAll('.module-card');
+        cards.forEach(card => {
+            card.classList.remove('wiggle');
+            card.removeEventListener('click', preventNavigation);
+            // Clean up drag listeners
+            card.removeAttribute('draggable');
+        });
+    }
+
+    if (doneBtn) {
+        doneBtn.style.display = 'none';
+    }
+
+    // Save order
+    saveHomepageOrder();
+}
+
+function preventNavigation(e) {
+    if (homepageEditMode.active) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+}
+
+function initHomepageDrag() {
+    const grid = document.getElementById('homepage-grid');
+    if (!grid) return;
+
+    const cards = grid.querySelectorAll('.module-card');
+    cards.forEach(card => {
+        card.setAttribute('draggable', 'true');
+
+        // Desktop drag events
+        card.addEventListener('dragstart', handleHomepageDragStart);
+        card.addEventListener('dragend', handleHomepageDragEnd);
+        card.addEventListener('dragover', handleHomepageDragOver);
+        card.addEventListener('drop', handleHomepageDrop);
+
+        // Mobile touch drag events
+        card.addEventListener('touchstart', handleHomepageTouchDragStart, { passive: false });
+        card.addEventListener('touchmove', handleHomepageTouchDragMove, { passive: false });
+        card.addEventListener('touchend', handleHomepageTouchDragEnd);
+    });
+}
+
+function handleHomepageDragStart(e) {
+    if (!homepageEditMode.active) return;
+
+    homepageEditMode.currentDragCard = e.currentTarget;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', e.currentTarget.innerHTML);
+}
+
+function handleHomepageDragEnd(e) {
+    if (homepageEditMode.currentDragCard) {
+        homepageEditMode.currentDragCard.classList.remove('dragging');
+        homepageEditMode.currentDragCard = null;
+    }
+}
+
+function handleHomepageDragOver(e) {
+    if (!homepageEditMode.active || !homepageEditMode.currentDragCard) return;
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    const grid = document.getElementById('homepage-grid');
+    const afterElement = getHomepageDragAfterElement(grid, e.clientX, e.clientY);
+    const draggingCard = homepageEditMode.currentDragCard;
+
+    if (afterElement == null) {
+        grid.appendChild(draggingCard);
+    } else if (afterElement !== draggingCard) {
+        grid.insertBefore(draggingCard, afterElement);
+    }
+}
+
+function handleHomepageDrop(e) {
+    e.preventDefault();
+}
+
+function getHomepageDragAfterElement(container, x, y) {
+    const draggableElements = [...container.querySelectorAll('.module-card:not(.dragging)')];
+
+    if (draggableElements.length === 0) {
+        return null;
+    }
+
+    // Grid flows top-to-bottom, left-to-right
+    // Find the first element that the cursor is "before" in reading order
+    for (const element of draggableElements) {
+        const box = element.getBoundingClientRect();
+        const centerX = box.left + box.width / 2;
+        const centerY = box.top + box.height / 2;
+
+        // If cursor is above this element (in a previous row), insert before it
+        if (y < box.top) {
+            return element;
+        }
+
+        // If cursor is roughly in this element's row
+        if (y >= box.top && y <= box.bottom) {
+            // Check if cursor is to the left of this element's center
+            if (x < centerX) {
+                return element;
+            }
+        }
+    }
+
+    // Cursor is after all elements - insert at end
+    return null;
+}
+
+function handleHomepageTouchDragStart(e) {
+    if (!homepageEditMode.active) return;
+
+    const card = e.currentTarget;
+    const touch = e.touches[0];
+
+    homepageTouchDragState = {
+        active: true,
+        card: card,
+        clone: null,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        currentX: touch.clientX,
+        currentY: touch.clientY
+    };
+
+    // Create visual clone
+    const clone = card.cloneNode(true);
+    clone.style.position = 'fixed';
+    clone.style.top = card.getBoundingClientRect().top + 'px';
+    clone.style.left = card.getBoundingClientRect().left + 'px';
+    clone.style.width = card.offsetWidth + 'px';
+    clone.style.height = card.offsetHeight + 'px';
+    clone.style.pointerEvents = 'none';
+    clone.style.zIndex = '1000';
+    clone.style.opacity = '0.9';
+    clone.style.transition = 'none';
+    clone.classList.add('dragging');
+    clone.classList.remove('wiggle'); // Stop wiggle on the clone
+    document.body.appendChild(clone);
+
+    homepageTouchDragState.clone = clone;
+    card.style.opacity = '0.3';
+}
+
+function handleHomepageTouchDragMove(e) {
+    if (!homepageTouchDragState.active || !homepageTouchDragState.clone) return;
+
+    e.preventDefault(); // Prevent scrolling while dragging
+
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - homepageTouchDragState.startX;
+    const deltaY = touch.clientY - homepageTouchDragState.startY;
+
+    homepageTouchDragState.currentX = touch.clientX;
+    homepageTouchDragState.currentY = touch.clientY;
+
+    // Move clone
+    homepageTouchDragState.clone.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+
+    // Determine where to insert
+    const grid = document.getElementById('homepage-grid');
+    const afterElement = getHomepageDragAfterElement(grid, touch.clientX, touch.clientY);
+    const draggingCard = homepageTouchDragState.card;
+
+    if (afterElement == null) {
+        grid.appendChild(draggingCard);
+    } else if (afterElement !== draggingCard) {
+        grid.insertBefore(draggingCard, afterElement);
+    }
+}
+
+function handleHomepageTouchDragEnd(e) {
+    if (!homepageTouchDragState.active) return;
+
+    // Clean up
+    if (homepageTouchDragState.clone) {
+        homepageTouchDragState.clone.remove();
+    }
+
+    if (homepageTouchDragState.card) {
+        homepageTouchDragState.card.style.opacity = '';
+    }
+
+    homepageTouchDragState = {
+        active: false,
+        card: null,
+        clone: null,
+        startX: 0,
+        startY: 0,
+        currentX: 0,
+        currentY: 0
+    };
+}
+
+async function saveHomepageOrder() {
+    const grid = document.getElementById('homepage-grid');
+    if (!grid) return;
+
+    const cards = grid.querySelectorAll('.module-card');
+    const order = Array.from(cards).map(card => card.dataset.moduleId);
+
+    try {
+        const res = await fetch('/api/homepage-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(order)
+        });
+
+        if (!res.ok) {
+            console.error('Failed to save homepage order');
+            showToast('Failed to save order', 'error');
+        } else {
+            showToast('Homepage layout saved', 'success', 2000);
+        }
+    } catch (e) {
+        console.error('Error saving homepage order:', e);
+        showToast('Error saving order', 'error');
+    }
+}
+
 // --- Initialization ---
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -6841,6 +7631,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initAIPanel();
     initAIDragLauncher();
+    initHomepageReorder();
 });
 
 function initStickyListHeader() {
@@ -6907,10 +7698,15 @@ function initMobileTopbar() {
 function initSidebarReorder() {
     const navList = document.querySelector('.nav-links');
     if (!navList) return;
-    const media = window.matchMedia('(max-width: 1024px)');
-    if (media.matches) return;
 
     let draggingEl = null;
+    let touchDragItem = null;
+    let touchDragActive = false;
+    let touchDragMoved = false;
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchHoldTimer = null;
+    let ignoreNextNavClick = false;
 
     function applyOrder(order) {
         if (!Array.isArray(order) || !order.length) return;
@@ -6938,6 +7734,13 @@ function initSidebarReorder() {
         .then(data => applyOrder(data.order || []))
         .catch(err => console.error('Failed to load sidebar order:', err));
 
+    navList.addEventListener('click', (e) => {
+        if (!ignoreNextNavClick) return;
+        e.preventDefault();
+        e.stopPropagation();
+        ignoreNextNavClick = false;
+    }, true);
+
     navList.querySelectorAll('li[data-nav-id]').forEach(item => {
         item.setAttribute('draggable', 'true');
 
@@ -6960,6 +7763,51 @@ function initSidebarReorder() {
             const rect = target.getBoundingClientRect();
             const shouldInsertAfter = e.clientY > rect.top + rect.height / 2;
             navList.insertBefore(draggingEl, shouldInsertAfter ? target.nextSibling : target);
+        });
+
+        item.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            const touch = e.touches[0];
+            touchStartX = touch.clientX;
+            touchStartY = touch.clientY;
+            touchDragMoved = false;
+            touchDragActive = false;
+            touchDragItem = item;
+            touchHoldTimer = setTimeout(() => {
+                touchDragActive = true;
+                item.classList.add('dragging');
+            }, 200);
+        }, { passive: true });
+
+        item.addEventListener('touchmove', (e) => {
+            if (!touchDragItem) return;
+            const touch = e.touches[0];
+            const dx = Math.abs(touch.clientX - touchStartX);
+            const dy = Math.abs(touch.clientY - touchStartY);
+            if (!touchDragActive && (dx > 6 || dy > 6)) {
+                clearTimeout(touchHoldTimer);
+            }
+            if (!touchDragActive) return;
+            e.preventDefault();
+            const target = document.elementFromPoint(touch.clientX, touch.clientY);
+            const targetItem = target ? target.closest('li[data-nav-id]') : null;
+            if (!targetItem || targetItem === touchDragItem) return;
+            const rect = targetItem.getBoundingClientRect();
+            const shouldInsertAfter = touch.clientY > rect.top + rect.height / 2;
+            navList.insertBefore(touchDragItem, shouldInsertAfter ? targetItem.nextSibling : targetItem);
+            touchDragMoved = true;
+        }, { passive: false });
+
+        item.addEventListener('touchend', () => {
+            clearTimeout(touchHoldTimer);
+            if (touchDragItem) touchDragItem.classList.remove('dragging');
+            if (touchDragActive && touchDragMoved) {
+                ignoreNextNavClick = true;
+                persistOrder();
+            }
+            touchDragItem = null;
+            touchDragActive = false;
+            touchDragMoved = false;
         });
     });
 }
@@ -7042,6 +7890,16 @@ function initRecallsPage() {
     const menuEdit = document.getElementById('recall-menu-edit');
     if (menuEdit) menuEdit.addEventListener('click', () => { editSelectedRecall(); menu?.classList.remove('open'); });
 
+    // Close filter menu when clicking outside
+    document.addEventListener('click', (e) => {
+        const filterMenu = document.getElementById('recall-filter-menu');
+        const filterDropdown = document.getElementById('recall-filter-dropdown');
+        if (filterMenu && filterDropdown && !filterDropdown.contains(e.target)) {
+            filterMenu.classList.remove('show');
+            document.querySelectorAll('.recall-filter-submenu').forEach(sm => sm.classList.remove('show'));
+        }
+    });
+
     // Toggle quick add panel
     const toggleAddBtn = document.getElementById('recall-toggle-add-btn');
     const quickAddPanel = document.getElementById('recall-quick-add-panel');
@@ -7067,6 +7925,11 @@ function initRecallsPage() {
     if (quickInput) {
         quickInput.addEventListener('keydown', async (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
+                // Don't submit if autocomplete is open (let autocomplete handle it)
+                const dropdown = document.getElementById('recall-quick-category-autocomplete');
+                if (dropdown && dropdown.classList.contains('show')) {
+                    return; // Autocomplete handler will take care of this
+                }
                 e.preventDefault();
                 await handleRecallQuickAdd();
             }
@@ -7083,6 +7946,10 @@ function initRecallsPage() {
     if (editBtn) editBtn.addEventListener('click', editSelectedRecall);
     const deleteBtn = document.getElementById('recall-delete-btn');
     if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
+
+    // Initialize category autocomplete
+    initCategoryAutocomplete();
+    initQuickCategoryAutocomplete();
 
     loadRecalls();
 }
@@ -7174,11 +8041,17 @@ async function handleRecallQuickAdd() {
             body: JSON.stringify(payload)
         });
         if (!res.ok) throw new Error('Create failed');
+        const saved = await res.json();
         input.value = '';
         await loadRecalls();
         // Close the quick add panel after successful add
         const quickAddPanel = document.getElementById('recall-quick-add-panel');
         if (quickAddPanel) quickAddPanel.classList.add('is-hidden');
+
+        // Start polling for AI-generated summary
+        if (saved.summary) {
+            startRecallSummaryPoller(saved.id, saved.summary);
+        }
     } catch (err) {
         console.error(err);
         showToast('Could not create recall.', 'error');
@@ -7216,6 +8089,7 @@ async function loadRecalls() {
         }
 
         renderRecallList();
+        initRecallFilters();
     } catch (err) {
         console.error(err);
         if (listEl) listEl.innerHTML = '<div class=\"recall-empty\">Could not load recalls.</div>';
@@ -7239,6 +8113,12 @@ function renderRecallList() {
         const row = document.createElement('div');
         row.className = `recall-row ${item.pinned ? 'pinned' : ''} ${recallState.selectedId === item.id ? 'active' : ''} ${item.status === 'archived' ? 'archived' : ''}`;
         row.dataset.id = item.id;
+
+        // Store category and tags in data attributes for filtering
+        row.dataset.category = item.category || '';
+        const tags = normalizeRecallTags(item.tags);
+        row.dataset.tags = tags.join(',');
+
         const snippet = (item.summary || item.description || item.content || '').slice(0, 100);
         const typeIcon = {
             'link': 'fa-link',
@@ -7247,6 +8127,11 @@ function renderRecallList() {
             'note': 'fa-note-sticky',
             'other': 'fa-circle'
         }[item.type || 'note'] || 'fa-note-sticky';
+
+        // Build tags HTML
+        const tagsHTML = tags.length > 0
+            ? `<div class=\"recall-tags\">${tags.map(tag => `<span class=\"tag-chip\" data-tag=\"${recallEscape(tag)}\">${recallEscape(tag)}</span>`).join('')}</div>`
+            : '';
 
         row.innerHTML = `
             <div class=\"recall-row-top\">
@@ -7257,6 +8142,7 @@ function renderRecallList() {
                 <div class=\"recall-pill\">${recallEscape(item.category || 'General')}</div>
             </div>
             ${snippet ? `<div class=\"recall-row-snippet\">${recallEscape(snippet)}${snippet.length >= 100 ? '...' : ''}</div>` : ''}
+            ${tagsHTML}
         `;
         row.addEventListener('click', () => selectRecall(item.id));
         row.addEventListener('dblclick', (e) => {
@@ -7274,11 +8160,261 @@ function renderRecallList() {
     }
     // Don't auto-select first recall - keep detail box empty until user clicks
     renderRecallDetail(getSelectedRecall());
+    applyRecallFilters();
+}
+
+function normalizeRecallTags(tags) {
+    // Handle both string and array formats from backend
+    if (!tags) return [];
+    if (Array.isArray(tags)) return tags.filter(Boolean);
+    if (typeof tags === 'string') {
+        return tags.split(',').map(t => t.trim()).filter(Boolean);
+    }
+    return [];
+}
+
+function getAllRecallCategories() {
+    const categorySet = new Set();
+    recallState.items.forEach(item => {
+        if (item.category) categorySet.add(item.category);
+    });
+    return Array.from(categorySet).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+function getAllRecallTags() {
+    const tagSet = new Set();
+    recallState.items.forEach(item => {
+        const tags = normalizeRecallTags(item.tags);
+        tags.forEach(tag => tagSet.add(tag));
+    });
+    return Array.from(tagSet).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+function initRecallFilters() {
+    // Populate category submenu
+    const categorySubmenu = document.getElementById('recall-filter-submenu-category');
+    if (categorySubmenu) {
+        const categories = getAllRecallCategories();
+        categorySubmenu.innerHTML = categories.map(cat =>
+            `<button class="recall-filter-item recall-category-filter ${selectedRecallCategories.has(cat) ? 'active' : ''}" data-category="${recallEscape(cat)}" type="button">${recallEscape(cat)}</button>`
+        ).join('');
+
+        categorySubmenu.querySelectorAll('.recall-category-filter').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const category = btn.dataset.category;
+                if (selectedRecallCategories.has(category)) {
+                    selectedRecallCategories.delete(category);
+                } else {
+                    selectedRecallCategories.add(category);
+                }
+                syncRecallFilterUI();
+                applyRecallFilters();
+            });
+        });
+    }
+
+    // Populate tags submenu
+    const tagsSubmenu = document.getElementById('recall-filter-submenu-tags');
+    if (tagsSubmenu) {
+        const tags = getAllRecallTags();
+        tagsSubmenu.innerHTML = tags.map(tag =>
+            `<button class="recall-filter-item recall-tag-filter ${selectedRecallTags.has(tag) ? 'active' : ''}" data-tag="${recallEscape(tag)}" type="button">${recallEscape(tag)}</button>`
+        ).join('');
+
+        tagsSubmenu.querySelectorAll('.recall-tag-filter').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tag = btn.dataset.tag;
+                if (selectedRecallTags.has(tag)) {
+                    selectedRecallTags.delete(tag);
+                } else {
+                    selectedRecallTags.add(tag);
+                }
+                syncRecallFilterUI();
+                applyRecallFilters();
+            });
+        });
+    }
+}
+
+function syncRecallFilterUI() {
+    // Update active state on category buttons
+    const categorySubmenu = document.getElementById('recall-filter-submenu-category');
+    if (categorySubmenu) {
+        categorySubmenu.querySelectorAll('.recall-category-filter').forEach(btn => {
+            btn.classList.toggle('active', selectedRecallCategories.has(btn.dataset.category));
+        });
+    }
+
+    // Update active state on tag buttons
+    const tagsSubmenu = document.getElementById('recall-filter-submenu-tags');
+    if (tagsSubmenu) {
+        tagsSubmenu.querySelectorAll('.recall-tag-filter').forEach(btn => {
+            btn.classList.toggle('active', selectedRecallTags.has(btn.dataset.tag));
+        });
+    }
+
+    updateRecallFilterLabel();
+    renderRecallFilterPills();
+}
+
+function updateRecallFilterLabel() {
+    const label = document.getElementById('recall-filter-label');
+    if (!label) return;
+
+    const totalFilters = selectedRecallCategories.size + selectedRecallTags.size;
+    if (totalFilters === 0) {
+        label.textContent = 'Filter';
+    } else {
+        label.textContent = `Filter (${totalFilters})`;
+    }
+}
+
+function renderRecallFilterPills() {
+    const container = document.getElementById('recall-filter-pills');
+    if (!container) return;
+
+    const pills = [];
+
+    // Category pills
+    selectedRecallCategories.forEach(category => {
+        pills.push(`
+            <div class="filter-pill">
+                <i class="fa-solid fa-folder"></i>
+                <span>${recallEscape(category)}</span>
+                <button class="filter-pill-remove" onclick="removeRecallCategoryFilter('${recallEscape(category).replace(/'/g, "\\'")}', event)" aria-label="Remove filter">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        `);
+    });
+
+    // Tag pills
+    selectedRecallTags.forEach(tag => {
+        pills.push(`
+            <div class="filter-pill">
+                <i class="fa-solid fa-tag"></i>
+                <span>${recallEscape(tag)}</span>
+                <button class="filter-pill-remove" onclick="removeRecallTagFilter('${recallEscape(tag).replace(/'/g, "\\'")}', event)" aria-label="Remove filter">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        `);
+    });
+
+    // Clear all button
+    if (pills.length > 0) {
+        pills.push(`
+            <button class="filter-pill-clear" onclick="clearRecallFilters(event)" type="button">
+                <i class="fa-solid fa-xmark"></i> Clear all
+            </button>
+        `);
+    }
+
+    container.innerHTML = pills.join('');
+}
+
+function removeRecallCategoryFilter(category, event) {
+    if (event) event.stopPropagation();
+    selectedRecallCategories.delete(category);
+    syncRecallFilterUI();
+    applyRecallFilters();
+}
+
+function removeRecallTagFilter(tag, event) {
+    if (event) event.stopPropagation();
+    selectedRecallTags.delete(tag);
+    syncRecallFilterUI();
+    applyRecallFilters();
+}
+
+function clearRecallFilters(event) {
+    if (event) event.stopPropagation();
+    selectedRecallCategories.clear();
+    selectedRecallTags.clear();
+    syncRecallFilterUI();
+    applyRecallFilters();
+}
+
+function toggleRecallFilterMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('recall-filter-menu');
+    if (!menu) return;
+    const shouldShow = !menu.classList.contains('show');
+
+    // Close all submenus
+    document.querySelectorAll('.recall-filter-submenu').forEach(sm => sm.classList.remove('show'));
+
+    if (shouldShow) {
+        menu.classList.add('show');
+    } else {
+        menu.classList.remove('show');
+    }
+}
+
+function toggleRecallFilterSubmenu(kind, event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('recall-filter-menu');
+    if (!menu) return;
+
+    const categoryMenu = document.getElementById('recall-filter-submenu-category');
+    const tagsMenu = document.getElementById('recall-filter-submenu-tags');
+    if (!categoryMenu || !tagsMenu) return;
+
+    const openCategory = categoryMenu.classList.contains('show');
+    const openTags = tagsMenu.classList.contains('show');
+
+    if (kind === 'category') {
+        categoryMenu.classList.toggle('show', !openCategory);
+        tagsMenu.classList.remove('show');
+    } else if (kind === 'tags') {
+        tagsMenu.classList.toggle('show', !openTags);
+        categoryMenu.classList.remove('show');
+    }
+}
+
+function applyRecallFilters() {
+    const rows = document.querySelectorAll('.recall-row');
+    rows.forEach(row => {
+        let matches = true;
+
+        // Check category filters (AND logic)
+        if (selectedRecallCategories.size > 0) {
+            const rowCategory = row.dataset.category || '';
+            matches = matches && selectedRecallCategories.has(rowCategory);
+        }
+
+        // Check tag filters (AND logic - must have ALL selected tags)
+        if (selectedRecallTags.size > 0) {
+            const rowTags = (row.dataset.tags || '').split(',').filter(Boolean);
+            const hasAllTags = Array.from(selectedRecallTags).every(selectedTag =>
+                rowTags.includes(selectedTag)
+            );
+            matches = matches && hasAllTags;
+        }
+
+        row.classList.toggle('hidden-by-filter', !matches);
+    });
 }
 
 function selectRecall(id) {
     recallState.selectedId = id;
     renderRecallList();
+
+    // On mobile, smooth scroll to the detail section
+    if (window.innerWidth <= 1100) {
+        // Small delay to ensure DOM is updated after renderRecallList()
+        setTimeout(() => {
+            const detailCard = document.getElementById('recall-detail-card');
+            if (detailCard) {
+                detailCard.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        }, 50);
+    }
 }
 
 function getSelectedRecall() {
@@ -7344,22 +8480,25 @@ function renderRecallDetail(item) {
         </div>
 
         <div class=\"recall-detail-meta\">
-            <span class=\"pill recall-type-pill\"><i class=\"fa-solid ${typeIcon}\"></i> ${typeLabel}</span>
-            <span class=\"pill recall-category-pill\">${recallEscape(item.category || 'General')}</span>
+            <span class=\"pill recall-category-pill\"><i class=\"fa-solid fa-folder\"></i> ${recallEscape(item.category || 'General')}</span>
+            ${(() => {
+                const tags = normalizeRecallTags(item.tags);
+                return tags.map(tag => `<span class=\"tag-chip\" data-tag=\"${recallEscape(tag)}\"><i class=\"fa-solid fa-tag\"></i> ${recallEscape(tag)}</span>`).join('');
+            })()}
             ${item.priority && item.priority !== 'medium' ? `<span class=\"pill priority-${item.priority}\">${recallEscape(item.priority).toUpperCase()}</span>` : ''}
             ${item.status && item.status !== 'active' ? `<span class=\"pill\">${recallEscape(item.status).toUpperCase()}</span>` : ''}
         </div>
-
-        ${item.description ? `
-        <div class=\"recall-detail-section\">
-            <h3 class=\"recall-section-title\">Description</h3>
-            <div class=\"recall-detail-content\">${recallEscape(item.description)}</div>
-        </div>` : ''}
 
         ${item.content ? `
         <div class=\"recall-detail-section\">
             <h3 class=\"recall-section-title\">Content</h3>
             <div class=\"recall-detail-content\">${linkifyRecallContent(item.content)}</div>
+        </div>` : ''}
+
+        ${item.description ? `
+        <div class=\"recall-detail-section\">
+            <h3 class=\"recall-section-title\">Description</h3>
+            <div class=\"recall-detail-content\">${recallEscape(item.description)}</div>
         </div>` : ''}
 
         ${item.source_url ? `
@@ -7372,6 +8511,7 @@ function renderRecallDetail(item) {
 
         ${item.summary ? `
         <div class=\"recall-summary-section\">
+            <h3 class=\"recall-section-title\"><i class=\"fa-solid fa-lightbulb\"></i> Summary</h3>
             <div class=\"recall-summary\">${recallEscape(item.summary)}</div>
         </div>` : ''}
 
@@ -7428,7 +8568,7 @@ function openRecallModal(item = null) {
     if (contentInput) contentInput.value = item ? (item.content || '') : '';
     if (descriptionInput) descriptionInput.value = item ? (item.description || '') : '';
     if (summaryInput) summaryInput.value = item ? (item.summary || '') : '';
-    if (tagsInput) tagsInput.value = item ? (item.tags || []).join(', ') : '';
+    if (tagsInput) tagsInput.value = item ? normalizeRecallTags(item.tags).join(', ') : '';
     if (sourceInput) sourceInput.value = item ? (item.source_url || '') : '';
     if (reminderInput) reminderInput.value = item && item.reminder_at ? item.reminder_at.slice(0, 16) : '';
 
@@ -7440,20 +8580,451 @@ function closeRecallModal() {
     const modal = document.getElementById('recall-modal');
     if (modal) modal.classList.remove('active');
     recallState.editingId = null;
+    // Hide category autocomplete when modal closes
+    hideCategoryAutocomplete();
+}
+
+// Category autocomplete functionality
+let categoryAutocompleteIndex = -1;
+
+function getUniqueCategories() {
+    const categories = new Set();
+    recallState.items.forEach(item => {
+        if (item.category && item.category.trim()) {
+            categories.add(item.category.trim());
+        }
+    });
+    // Add some default suggestions if no categories exist
+    if (categories.size === 0) {
+        ['General', 'Work', 'Personal', 'Research', 'Ideas'].forEach(c => categories.add(c));
+    }
+    return Array.from(categories).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+function positionAutocompleteDropdown(input, dropdown) {
+    const rect = input.getBoundingClientRect();
+    dropdown.style.left = `${rect.left}px`;
+    dropdown.style.top = `${rect.bottom + 2}px`;
+    dropdown.style.width = `${rect.width}px`;
+
+    // Move dropdown to body if not already there (escapes all container constraints)
+    if (dropdown.parentElement !== document.body) {
+        document.body.appendChild(dropdown);
+    }
+}
+
+function showCategoryAutocomplete(filter = '') {
+    const dropdown = document.getElementById('recall-category-autocomplete');
+    const input = document.getElementById('recall-category-input');
+    if (!dropdown || !input) return;
+
+    const allCategories = getUniqueCategories();
+    const filterLower = filter.toLowerCase();
+
+    // Filter categories that match the input
+    const matches = filter
+        ? allCategories.filter(cat => cat.toLowerCase().includes(filterLower))
+        : allCategories;
+
+    dropdown.innerHTML = '';
+    categoryAutocompleteIndex = -1;
+
+    if (matches.length === 0) {
+        if (filter) {
+            // Show "Create new" option when typing something not in list
+            const createItem = document.createElement('div');
+            createItem.className = 'autocomplete-item';
+            createItem.innerHTML = `<i class="fa-solid fa-plus"></i> Create "${recallEscape(filter)}"`;
+            createItem.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // Prevent blur before click
+                document.getElementById('recall-category-input').value = filter;
+                hideCategoryAutocomplete();
+            });
+            dropdown.appendChild(createItem);
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'autocomplete-empty';
+            empty.textContent = 'No categories yet';
+            dropdown.appendChild(empty);
+        }
+    } else {
+        matches.forEach((cat, idx) => {
+            const item = document.createElement('div');
+            item.className = 'autocomplete-item';
+            item.dataset.index = idx;
+            item.innerHTML = `<i class="fa-solid fa-folder"></i> ${recallEscape(cat)}`;
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // Prevent blur before click
+                document.getElementById('recall-category-input').value = cat;
+                hideCategoryAutocomplete();
+            });
+            dropdown.appendChild(item);
+        });
+    }
+
+    positionAutocompleteDropdown(input, dropdown);
+    dropdown.classList.add('show');
+}
+
+function hideCategoryAutocomplete() {
+    const dropdown = document.getElementById('recall-category-autocomplete');
+    if (dropdown) {
+        dropdown.classList.remove('show');
+        categoryAutocompleteIndex = -1;
+    }
+}
+
+function navigateCategoryAutocomplete(direction) {
+    const dropdown = document.getElementById('recall-category-autocomplete');
+    if (!dropdown || !dropdown.classList.contains('show')) return;
+
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    if (items.length === 0) return;
+
+    // Remove active class from current
+    if (categoryAutocompleteIndex >= 0 && categoryAutocompleteIndex < items.length) {
+        items[categoryAutocompleteIndex].classList.remove('active');
+    }
+
+    // Update index
+    if (direction === 'down') {
+        categoryAutocompleteIndex = (categoryAutocompleteIndex + 1) % items.length;
+    } else {
+        categoryAutocompleteIndex = categoryAutocompleteIndex <= 0 ? items.length - 1 : categoryAutocompleteIndex - 1;
+    }
+
+    // Add active class to new
+    items[categoryAutocompleteIndex].classList.add('active');
+    items[categoryAutocompleteIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function selectCategoryAutocomplete() {
+    const dropdown = document.getElementById('recall-category-autocomplete');
+    if (!dropdown || !dropdown.classList.contains('show')) return false;
+
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    if (categoryAutocompleteIndex >= 0 && categoryAutocompleteIndex < items.length) {
+        items[categoryAutocompleteIndex].click();
+        return true;
+    }
+    return false;
+}
+
+function initCategoryAutocomplete() {
+    const input = document.getElementById('recall-category-input');
+    if (!input) return;
+
+    // Show dropdown on focus
+    input.addEventListener('focus', () => {
+        showCategoryAutocomplete(input.value);
+    });
+
+    // Filter on input
+    input.addEventListener('input', () => {
+        showCategoryAutocomplete(input.value);
+    });
+
+    // Keyboard navigation
+    input.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('recall-category-autocomplete');
+        if (!dropdown || !dropdown.classList.contains('show')) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateCategoryAutocomplete('down');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateCategoryAutocomplete('up');
+        } else if (e.key === 'Enter') {
+            if (selectCategoryAutocomplete()) {
+                e.preventDefault();
+            }
+        } else if (e.key === 'Escape') {
+            hideCategoryAutocomplete();
+        }
+    });
+
+    // Hide on blur (with delay to allow click)
+    input.addEventListener('blur', () => {
+        setTimeout(hideCategoryAutocomplete, 150);
+    });
+}
+
+// Quick add inline category autocomplete
+let quickCategoryAutocompleteIndex = -1;
+let quickCategoryMatch = null; // Stores { start, end, text } of current #category match
+
+function getQuickCategoryMatch(input) {
+    const value = input.value;
+    const cursorPos = input.selectionStart;
+
+    // Look backwards from cursor to find a # that starts a category
+    let start = -1;
+    for (let i = cursorPos - 1; i >= 0; i--) {
+        const char = value[i];
+        if (char === '#') {
+            start = i;
+            break;
+        }
+        // Stop if we hit a space or other syntax markers before finding #
+        if (char === ' ' || char === '@' || char === '+' || char === '*' || char === ';') {
+            break;
+        }
+    }
+
+    if (start === -1) return null;
+
+    // Find where the category ends (space or end of string or another syntax marker)
+    let end = cursorPos;
+    for (let i = cursorPos; i < value.length; i++) {
+        const char = value[i];
+        if (char === ' ' || char === '@' || char === '+' || char === '*' || char === ';' || char === '#') {
+            break;
+        }
+        end = i + 1;
+    }
+
+    const text = value.substring(start + 1, end); // Text after #
+    return { start, end, text };
+}
+
+function showQuickCategoryAutocomplete(filter = '') {
+    const dropdown = document.getElementById('recall-quick-category-autocomplete');
+    const input = document.getElementById('recall-quick-input');
+    if (!dropdown || !input) return;
+
+    const allCategories = getUniqueCategories();
+    const filterLower = filter.toLowerCase();
+
+    // Filter categories that match the input
+    const matches = filter
+        ? allCategories.filter(cat => cat.toLowerCase().includes(filterLower))
+        : allCategories;
+
+    dropdown.innerHTML = '';
+    quickCategoryAutocompleteIndex = -1;
+
+    if (matches.length === 0 && filter) {
+        // Show "Create new" option when typing something not in list
+        const createItem = document.createElement('div');
+        createItem.className = 'autocomplete-item';
+        createItem.innerHTML = `<i class="fa-solid fa-plus"></i> Create "${recallEscape(filter)}"`;
+        createItem.dataset.value = filter;
+        createItem.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // Prevent blur before selection
+            selectQuickCategory(filter);
+        });
+        dropdown.appendChild(createItem);
+    } else if (matches.length > 0) {
+        matches.slice(0, 8).forEach((cat, idx) => {
+            const item = document.createElement('div');
+            item.className = 'autocomplete-item';
+            item.dataset.index = idx;
+            item.dataset.value = cat;
+            item.innerHTML = `<i class="fa-solid fa-folder"></i> ${recallEscape(cat)}`;
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // Prevent blur before selection
+                selectQuickCategory(cat);
+            });
+            dropdown.appendChild(item);
+        });
+    }
+
+    if (dropdown.children.length > 0) {
+        positionAutocompleteDropdown(input, dropdown);
+        dropdown.classList.add('show');
+    } else {
+        dropdown.classList.remove('show');
+    }
+}
+
+function hideQuickCategoryAutocomplete() {
+    const dropdown = document.getElementById('recall-quick-category-autocomplete');
+    if (dropdown) {
+        dropdown.classList.remove('show');
+        quickCategoryAutocompleteIndex = -1;
+        quickCategoryMatch = null;
+    }
+}
+
+function selectQuickCategory(category) {
+    const input = document.getElementById('recall-quick-input');
+    if (!input || !quickCategoryMatch) return;
+
+    const value = input.value;
+    const before = value.substring(0, quickCategoryMatch.start);
+    const after = value.substring(quickCategoryMatch.end);
+
+    // Replace #partial with #Category (add space after if needed)
+    const newValue = before + '#' + category + (after.startsWith(' ') ? '' : ' ') + after;
+    input.value = newValue;
+
+    // Position cursor after the inserted category
+    const newCursorPos = quickCategoryMatch.start + 1 + category.length + (after.startsWith(' ') ? 0 : 1);
+    input.setSelectionRange(newCursorPos, newCursorPos);
+    input.focus();
+
+    hideQuickCategoryAutocomplete();
+}
+
+function navigateQuickCategoryAutocomplete(direction) {
+    const dropdown = document.getElementById('recall-quick-category-autocomplete');
+    if (!dropdown || !dropdown.classList.contains('show')) return;
+
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    if (items.length === 0) return;
+
+    // Remove active class from current
+    if (quickCategoryAutocompleteIndex >= 0 && quickCategoryAutocompleteIndex < items.length) {
+        items[quickCategoryAutocompleteIndex].classList.remove('active');
+    }
+
+    // Update index
+    if (direction === 'down') {
+        quickCategoryAutocompleteIndex = (quickCategoryAutocompleteIndex + 1) % items.length;
+    } else {
+        quickCategoryAutocompleteIndex = quickCategoryAutocompleteIndex <= 0 ? items.length - 1 : quickCategoryAutocompleteIndex - 1;
+    }
+
+    // Add active class to new
+    items[quickCategoryAutocompleteIndex].classList.add('active');
+    items[quickCategoryAutocompleteIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function selectQuickCategoryAutocomplete() {
+    const dropdown = document.getElementById('recall-quick-category-autocomplete');
+    if (!dropdown || !dropdown.classList.contains('show')) return false;
+
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    if (quickCategoryAutocompleteIndex >= 0 && quickCategoryAutocompleteIndex < items.length) {
+        const value = items[quickCategoryAutocompleteIndex].dataset.value;
+        if (value) {
+            selectQuickCategory(value);
+            return true;
+        }
+    }
+    return false;
+}
+
+function initQuickCategoryAutocomplete() {
+    const input = document.getElementById('recall-quick-input');
+    if (!input) return;
+
+    // Check for # on input
+    input.addEventListener('input', () => {
+        const match = getQuickCategoryMatch(input);
+        if (match) {
+            quickCategoryMatch = match;
+            showQuickCategoryAutocomplete(match.text);
+        } else {
+            hideQuickCategoryAutocomplete();
+        }
+    });
+
+    // Keyboard navigation
+    input.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('recall-quick-category-autocomplete');
+        if (!dropdown || !dropdown.classList.contains('show')) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateQuickCategoryAutocomplete('down');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateQuickCategoryAutocomplete('up');
+        } else if (e.key === 'Tab' || e.key === 'Enter') {
+            if (selectQuickCategoryAutocomplete()) {
+                e.preventDefault();
+            }
+        } else if (e.key === 'Escape') {
+            hideQuickCategoryAutocomplete();
+        }
+    });
+
+    // Hide on blur (with delay to allow click)
+    input.addEventListener('blur', () => {
+        setTimeout(hideQuickCategoryAutocomplete, 150);
+    });
+}
+
+// Poll for updated recall summary (background AI generation)
+function startRecallSummaryPoller(recallId, initialSummary) {
+    // Stop any existing poller for this recall
+    if (recallSummaryPollers[recallId]) {
+        clearInterval(recallSummaryPollers[recallId]);
+    }
+
+    let pollCount = 0;
+    const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
+    const pollInterval = 2000; // 2 seconds
+
+    recallSummaryPollers[recallId] = setInterval(async () => {
+        pollCount++;
+
+        // Stop polling after max attempts
+        if (pollCount >= maxPolls) {
+            clearInterval(recallSummaryPollers[recallId]);
+            delete recallSummaryPollers[recallId];
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/recalls/${recallId}`);
+            if (!res.ok) {
+                clearInterval(recallSummaryPollers[recallId]);
+                delete recallSummaryPollers[recallId];
+                return;
+            }
+
+            const updated = await res.json();
+
+            // Check if summary has changed from initial (fallback) summary
+            if (updated.summary && updated.summary !== initialSummary) {
+                // Update the item in recallState
+                const idx = recallState.items.findIndex(item => item.id === recallId);
+                if (idx !== -1) {
+                    recallState.items[idx] = updated;
+                    // Re-render the list and detail if this recall is selected
+                    renderRecallList();
+                    if (recallState.selectedId === recallId) {
+                        renderRecallDetail(updated);
+                    }
+                }
+
+                // Stop polling - we got the updated summary
+                clearInterval(recallSummaryPollers[recallId]);
+                delete recallSummaryPollers[recallId];
+            }
+        } catch (err) {
+            console.error('Recall summary poll error:', err);
+        }
+    }, pollInterval);
 }
 
 async function saveRecall() {
     const titleInput = document.getElementById('recall-title-input');
     if (!titleInput || !titleInput.value.trim()) return;
+
+    const content = document.getElementById('recall-content-input')?.value || '';
+    let sourceUrl = document.getElementById('recall-source-input')?.value || '';
+
+    // Auto-detect URL from content if source_url is empty
+    if (!sourceUrl && content) {
+        const urlMatch = content.match(/https?:\/\/\S+/);
+        if (urlMatch) {
+            sourceUrl = urlMatch[0];
+        }
+    }
+
     const payload = {
         title: titleInput.value.trim(),
         category: document.getElementById('recall-category-input')?.value || 'General',
         type: document.getElementById('recall-type-input')?.value || 'note',
         pinned: document.getElementById('recall-pinned-input')?.checked || false,
-        content: document.getElementById('recall-content-input')?.value || '',
+        content: content,
         description: document.getElementById('recall-description-input')?.value || '',
         keywords: document.getElementById('recall-tags-input')?.value || '',
-        source_url: document.getElementById('recall-source-input')?.value || '',
+        source_url: sourceUrl,
         reminder_at: document.getElementById('recall-reminder-input')?.value || '',
     };
     const isEdit = !!recallState.editingId;
@@ -7471,6 +9042,11 @@ async function saveRecall() {
         await loadRecalls();
         recallState.selectedId = saved.id;
         renderRecallList();
+
+        // Start polling for AI-generated summary (for new recalls or edits without user summary)
+        if (saved.summary) {
+            startRecallSummaryPoller(saved.id, saved.summary);
+        }
     } catch (err) {
         console.error(err);
         showToast('Could not save recall. Please try again.', 'error');

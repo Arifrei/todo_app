@@ -125,6 +125,7 @@ class TodoItem(db.Model):
     order_index = db.Column(db.Integer, default=0)  # For manual ordering
     is_phase = db.Column(db.Boolean, default=False)  # Track if this is a phase header
     due_date = db.Column(db.Date, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
 
     # If this item represents a child project, this links to that list
     linked_list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=True)
@@ -195,6 +196,7 @@ class TodoItem(db.Model):
             'linked_list_id': self.linked_list_id,
             'order_index': self.order_index,
             'due_date': self.due_date.isoformat() if self.due_date else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
         }
         if self.linked_list:
             data['linked_list_type'] = self.linked_list.type
@@ -311,7 +313,9 @@ class CalendarEvent(db.Model):
     reminder_snoozed_until = db.Column(db.DateTime, nullable=True)
     rollover_enabled = db.Column(db.Boolean, default=False)
     rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=True)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
+    recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -339,10 +343,44 @@ class CalendarEvent(db.Model):
             'reminder_minutes_before': self.reminder_minutes_before,
             'rollover_enabled': self.rollover_enabled,
             'rolled_from_id': self.rolled_from_id,
+            'recurrence_id': self.recurrence_id,
             'todo_item_id': self.todo_item_id,
             'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
         }
 
+
+class RecurringEvent(db.Model):
+    """Template for recurring calendar items."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    start_day = db.Column(db.Date, nullable=False)
+    end_day = db.Column(db.Date, nullable=True)
+    start_time = db.Column(db.Time, nullable=True)
+    end_time = db.Column(db.Time, nullable=True)
+    status = db.Column(db.String(20), default='not_started')
+    priority = db.Column(db.String(10), default='medium')
+    is_event = db.Column(db.Boolean, default=False)
+    reminder_minutes_before = db.Column(db.Integer, nullable=True)
+    rollover_enabled = db.Column(db.Boolean, default=False)
+    frequency = db.Column(db.String(20), nullable=False)  # daily, weekly, biweekly, monthly, yearly, custom
+    interval = db.Column(db.Integer, default=1)
+    interval_unit = db.Column(db.String(10), nullable=True)  # days, weeks, months, years
+    days_of_week = db.Column(db.String(50), nullable=True)  # CSV of 0-6
+    day_of_month = db.Column(db.Integer, nullable=True)
+    month_of_year = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RecurrenceException(db.Model):
+    """Skip a specific recurrence day (e.g., deleted instance)."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=False)
+    day = db.Column(db.Date, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Notification(db.Model):
     """In-app/push/email notification record."""

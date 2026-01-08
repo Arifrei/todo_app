@@ -53,18 +53,28 @@
     </div>
 
     <div class="header-right">
+        {% if todo_list.type == 'list' %}
+        <div class="header-add-menu">
+            <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
+                <i class="fa-solid fa-plus"></i>
+                <span>Add</span>
+                <i class="fa-solid fa-caret-down"></i>
+            </button>
+            <div class="header-menu-dropdown header-add-dropdown" id="header-add-dropdown">
+                <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderAddMenu(event);">
+                    <i class="fa-solid fa-plus"></i> Add Task
+                </button>
+                <button class="header-menu-item" onclick="openAddItemModal(null, 'phase'); toggleHeaderAddMenu(event);">
+                    <i class="fa-solid fa-layer-group"></i> Add Phase
+                </button>
+            </div>
+        </div>
+        {% endif %}
         <button class="btn-icon header-menu-trigger" onclick="toggleHeaderMenu(event)" title="More options">
             <i class="fa-solid fa-ellipsis-vertical"></i>
         </button>
         <div class="header-menu-dropdown" id="header-menu-dropdown">
-            {% if todo_list.type == 'list' %}
-            <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderMenu(event);">
-                <i class="fa-solid fa-plus"></i> Add Task
-            </button>
-            <button class="header-menu-item" onclick="openAddItemModal(null, 'phase'); toggleHeaderMenu(event);">
-                <i class="fa-solid fa-layer-group"></i> Add Phase
-            </button>
-            {% else %}
+            {% if todo_list.type != 'list' %}
             <button class="header-menu-item" onclick="openAddItemModal(null, 'project_list'); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-list-check"></i> Add Project (List)
             </button>
@@ -135,19 +145,33 @@
         <button class="btn btn-secondary" onclick="openBulkMoveModal()">Move selected</button>
         <button class="btn-icon delete" onclick="bulkDelete()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
         <div class="bulk-menu">
-            <button class="btn-icon bulk-more-btn" type="button" aria-label="More bulk actions" onclick="toggleBulkMenu(event)">
+            <button class="btn-icon bulk-more-btn" id="bulk-more-btn" type="button" aria-label="More bulk actions" onclick="toggleBulkMenu(event)">
                 <i class="fa-solid fa-ellipsis-vertical"></i>
             </button>
             <div class="bulk-menu-dropdown" id="bulk-menu-dropdown">
-                <button class="bulk-menu-item" onclick="bulkUpdateStatus('not_started'); toggleBulkMenu(event, true);">
-                    <i class="fa-solid fa-circle-dot"></i> Not Started
+                <button class="bulk-menu-item bulk-menu-parent" onclick="toggleBulkSubmenu('status', event)">
+                    <span><i class="fa-solid fa-list-check"></i> Change status</span>
+                    <i class="fa-solid fa-chevron-right"></i>
                 </button>
-                <button class="bulk-menu-item" onclick="bulkUpdateStatus('in_progress'); toggleBulkMenu(event, true);">
-                    <i class="fa-solid fa-play"></i> Started
+                <div class="bulk-menu-submenu" id="bulk-status-submenu">
+                    <button class="bulk-menu-item" onclick="bulkUpdateStatus('not_started'); toggleBulkMenu(event, true);">
+                        <i class="fa-solid fa-circle-dot"></i> Not Started
+                    </button>
+                    <button class="bulk-menu-item" onclick="bulkUpdateStatus('in_progress'); toggleBulkMenu(event, true);">
+                        <i class="fa-solid fa-play"></i> Started
+                    </button>
+                    <button class="bulk-menu-item" onclick="bulkUpdateStatus('done'); toggleBulkMenu(event, true);">
+                        <i class="fa-solid fa-check"></i> Done
+                    </button>
+                </div>
+                <button class="bulk-menu-item bulk-menu-parent" onclick="toggleBulkSubmenu('tag', event)">
+                    <span><i class="fa-solid fa-tag"></i> Add tag</span>
+                    <i class="fa-solid fa-chevron-right"></i>
                 </button>
-                <button class="bulk-menu-item" onclick="bulkUpdateStatus('done'); toggleBulkMenu(event, true);">
-                    <i class="fa-solid fa-check"></i> Done
-                </button>
+                <div class="bulk-menu-form" id="bulk-tag-form">
+                    <input type="text" id="bulk-tag-input" class="form-control" placeholder="Tag">
+                    <button class="btn btn-secondary btn-small" type="button" onclick="bulkAddTag(); toggleBulkMenu(event, true);">Add</button>
+                </div>
             </div>
         </div>
     </div>
@@ -157,6 +181,14 @@
 {% for item in items %}
     {% set parent_phase_id = item.phase_id if item.phase_id else '' %}
     {% set tag_list = item.tag_list() %}
+    {% if item.is_phase %}
+        {% set phase_tasks = item.phase_tasks
+            |selectattr('is_phase', 'equalto', False)
+            |selectattr('status', 'ne', 'phase')
+            |list %}
+        {% set phase_done = phase_tasks|selectattr('status', 'equalto', 'done')|list|length %}
+        {% set phase_not_done = (phase_tasks|length) - phase_done %}
+    {% endif %}
     <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if item.is_phase else '' }}" data-phase-parent="{{ parent_phase_id }}" data-tags="{{ tag_list|join(',') }}">
         <div class="task-content">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
@@ -171,6 +203,9 @@
                     </button>
                     {% endif %}
                     <div class="task-text">{{ item.content }}</div>
+                    {% if item.is_phase %}
+                    <span class="phase-count">{{ phase_not_done }} not done / {{ phase_done }} done</span>
+                    {% endif %}
                     {% if item.linked_list and item.linked_list.type == 'hub' %}
                     <div class="hub-pill">Hub</div>
                     {% endif %}
@@ -273,17 +308,17 @@
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                            <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
-                                <i class="fa-solid fa-calendar-day"></i> Set Date
-                            </button>
-                            <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
-                                <i class="fa-solid fa-note-sticky"></i> Link Note
-                            </button>
-                            <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
-                                <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
-                            </button>
                             <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
+                        </button>
+                        <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
+                        </button>
+                        <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-calendar-day"></i> Set Date
+                        </button>
+                        <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <i class="fa-solid fa-note-sticky"></i> Link Note
                         </button>
                         <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
                             <i class="fa-solid fa-trash"></i> Delete

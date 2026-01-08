@@ -9,10 +9,11 @@ from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from ai_service import run_ai_chat, get_openai_client
-from models import db, User, TodoList, TodoItem, Note, CalendarEvent, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem
+from models import db, User, TodoList, TodoItem, Note, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
+from sqlalchemy import or_
 from bs4 import BeautifulSoup
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -212,72 +213,139 @@ def _save_homepage_order(user, order):
     user.homepage_order = json.dumps(_sanitize_homepage_order(order))
 
 
-def _generate_recall_summary(title, content, category, type_name, source_url=None):
-    """Generate an intelligent summary. Returns None if not enough context or on failure."""
-    if not app.config.get('OPENAI_API_KEY'):
-        return None
+def _generate_fallback_summary(title, content, category, type_name, source_url=None):
+    """Generate a simple fallback summary when AI is not available."""
+    # Try to create a meaningful summary from available content
 
-    # If it's a link, try to fetch the actual content
-    url_content = None
+    # Check if content is just a URL - don't use it for summary
+    import re
+    content_is_url = False
+    if content:
+        content_clean = content.strip()
+        # Check if content is just a URL (with minimal text around it)
+        url_pattern = re.compile(r'^https?://\S+$')
+        if url_pattern.match(content_clean):
+            content_is_url = True
+
+    # Prefer content over title if available and not just a URL
+    if content and len(content.strip()) > 10 and not content_is_url:
+        content_clean = content.strip()
+        # Use first sentence or first 80 chars
+        first_sentence = content_clean.split('.')[0].strip()
+        if 10 < len(first_sentence) <= 100:
+            return first_sentence if first_sentence.endswith('.') else first_sentence + '.'
+        elif len(content_clean) <= 80:
+            return content_clean
+        else:
+            return content_clean[:77] + "..."
+
+    # If we have a URL, try to extract domain info
     if source_url:
-        url_content = _fetch_url_content(source_url)
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(source_url).netloc.replace('www.', '')
+            # Make it more descriptive with title
+            if len(title) <= 50:
+                return f"{title} - Resource from {domain}"
+            else:
+                return f"Link from {domain}: {title[:40]}..."
+        except:
+            return f"Saved {type_name} with external link"
 
-    # Determine what to summarize
-    if url_content:
-        # URL content available - summarize that
-        main_content = url_content[:2500]
-    elif content and len(content.strip()) >= 30:
-        # We have substantial user content - summarize that
-        main_content = content
+    # Fall back to title with category context
+    if len(title) > 100:
+        return title[:97] + "..."
     else:
-        # Not enough content to warrant a summary
-        return None
+        return f"{title} ({category})"
 
-    # Build the prompt focusing on CONTENT, not title
-    if url_content:
-        prompt = f"""Summarize what this webpage is about in one brief sentence (max 15 words).
-Focus on the actual content, not just the title. Be concise.
 
-Webpage: {main_content}"""
-    else:
-        prompt = f"""Summarize what this is about in one brief sentence (max 15 words).
-Focus on the actual information, not just restating the title. Be concise.
+def _generate_recall_summary(title, content, category, type_name, source_url=None, description=None):
+    """Generate an intelligent summary. Returns fallback if AI unavailable or fails."""
+    # Try AI summary if OpenAI is configured
+    if app.config.get('OPENAI_API_KEY'):
+        # If it's a link, try to fetch the actual content
+        url_content = None
+        if source_url:
+            app.logger.info(f"Attempting to fetch URL content: {source_url}")
+            url_content = _fetch_url_content(source_url)
+            if url_content:
+                app.logger.info(f"Successfully fetched {len(url_content)} chars from URL")
+            else:
+                app.logger.warning(f"Failed to fetch URL content from: {source_url}")
 
-Content: {main_content}"""
+        # Determine what to summarize - combine available text
+        if url_content:
+            # URL content available - summarize that (this is the most important)
+            main_content = url_content[:2500]
+            context_info = f"Title: {title}\n\n{main_content}"
+            app.logger.info(f"Using fetched URL content for summary ({len(main_content)} chars)")
+        else:
+            # Combine title, description, and content for best summary
+            parts = []
+            if title:
+                parts.append(f"Title: {title}")
+            if description and len(description.strip()) > 0:
+                parts.append(f"Description: {description}")
+            if content and len(content.strip()) > 0:
+                parts.append(f"Content: {content}")
 
-    try:
-        client = get_openai_client()
-        model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "You write brief, informative summaries that describe WHAT the content is about in 15 words or less. Focus on substance over titles. If the content lacks substance or is just a title, return an empty response."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=40,
-            temperature=0.3
-        )
-        summary = (resp.choices[0].message.content or '').strip()
+            if parts:
+                main_content = '\n'.join(parts)
+            else:
+                main_content = f"{title} in {category}"
+            context_info = main_content
 
-        # Quality checks
-        if len(summary) < 15:
-            return None
+        # Build the prompt focusing on CONTENT, not title
+        if url_content:
+            prompt = f"""Read this webpage content and write a brief, informative summary (max 20 words) describing what it's about.
 
-        # Check if summary is just rephrasing the title
-        title_lower = title.lower()
-        summary_lower = summary.lower()
-        # If more than 60% of title words are in summary in same order, it's probably just restating
-        title_words = set(title_lower.split())
-        summary_words = set(summary_lower.split())
-        overlap = len(title_words & summary_words) / max(len(title_words), 1)
-        if overlap > 0.7 and len(summary_words) < len(title_words) + 3:
-            # Summary is too similar to title, skip it
-            return None
+{context_info}
 
-        return summary
-    except Exception as exc:
-        app.logger.warning(f"Recall summary failed: {exc}")
-        return None
+Write a concise summary of the main topic or purpose:"""
+        else:
+            prompt = f"""Read this note/item and write a brief, informative summary (max 20 words) describing what it's about.
+
+{context_info}
+
+Write a concise summary of the main topic or purpose:"""
+
+        try:
+            client = get_openai_client()
+            model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You write brief, informative summaries (max 20 words) that capture the essence of what content is about. Focus on substance and key information."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=60,
+                temperature=0.3
+            )
+            summary = (resp.choices[0].message.content or '').strip()
+            app.logger.info(f"AI generated summary ({len(summary)} chars): {summary[:100]}")
+
+            # Quality checks - be more lenient
+            if len(summary) < 5:
+                app.logger.warning(f"Summary too short ({len(summary)} chars), using fallback")
+                return _generate_fallback_summary(title, content, category, type_name, source_url)
+
+            # Check if summary is just rephrasing the title (only if very similar)
+            title_lower = title.lower()
+            summary_lower = summary.lower()
+            # Only reject if summary is essentially identical to title
+            if summary_lower == title_lower or (len(summary_lower) < 30 and title_lower in summary_lower and len(summary_lower) < len(title_lower) + 5):
+                app.logger.warning(f"Summary too similar to title, using fallback")
+                return _generate_fallback_summary(title, content, category, type_name, source_url)
+
+            app.logger.info(f"Using AI-generated summary")
+            return summary
+        except Exception as exc:
+            app.logger.warning(f"Recall summary failed: {exc}")
+            # Return fallback instead of None
+            return _generate_fallback_summary(title, content, category, type_name, source_url)
+
+    # No API key, use fallback
+    return _generate_fallback_summary(title, content, category, type_name, source_url)
 
 
 def _generate_recall_embedding(text):
@@ -653,6 +721,141 @@ def _next_calendar_order(day_value, user_id):
     return (current_max or 0) + 1
 
 
+def _parse_days_of_week(raw):
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        values = raw
+    else:
+        values = str(raw).split(',')
+    days = []
+    for val in values:
+        try:
+            day = int(val)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6:
+            days.append(day)
+    return sorted(set(days))
+
+
+def _recurrence_occurs_on(rule, day_value):
+    if day_value < rule.start_day:
+        return False
+    if rule.end_day and day_value > rule.end_day:
+        return False
+
+    freq = (rule.frequency or '').lower()
+    interval = max(int(rule.interval or 1), 1)
+    unit = (rule.interval_unit or '').lower()
+    days_of_week = _parse_days_of_week(rule.days_of_week)
+
+    if freq == 'daily':
+        unit = 'days'
+        interval = 1
+    elif freq == 'weekly':
+        unit = 'weeks'
+        interval = 1
+    elif freq == 'biweekly':
+        unit = 'weeks'
+        interval = 2
+    elif freq == 'monthly':
+        unit = 'months'
+        interval = 1
+    elif freq == 'yearly':
+        unit = 'years'
+        interval = 1
+    elif freq != 'custom':
+        return False
+
+    start_day = rule.start_day
+    if unit == 'days':
+        days_since = (day_value - start_day).days
+        return days_since >= 0 and days_since % interval == 0
+    if unit == 'weeks':
+        days_since = (day_value - start_day).days
+        if days_since < 0:
+            return False
+        weeks_since = days_since // 7
+        if weeks_since % interval != 0:
+            return False
+        if days_of_week:
+            return day_value.weekday() in days_of_week
+        return day_value.weekday() == start_day.weekday()
+    if unit == 'months':
+        months_since = (day_value.year - start_day.year) * 12 + (day_value.month - start_day.month)
+        if months_since < 0 or months_since % interval != 0:
+            return False
+        target_dom = rule.day_of_month or start_day.day
+        return day_value.day == target_dom
+    if unit == 'years':
+        years_since = day_value.year - start_day.year
+        if years_since < 0 or years_since % interval != 0:
+            return False
+        target_month = rule.month_of_year or start_day.month
+        target_dom = rule.day_of_month or start_day.day
+        return day_value.month == target_month and day_value.day == target_dom
+    return False
+
+
+def _ensure_recurring_instances(user_id, start_day, end_day):
+    if not start_day or not end_day or start_day > end_day:
+        return
+    rules = RecurringEvent.query.filter(
+        RecurringEvent.user_id == user_id,
+        RecurringEvent.start_day <= end_day,
+        or_(RecurringEvent.end_day.is_(None), RecurringEvent.end_day >= start_day)
+    ).all()
+    if not rules:
+        return
+
+    exceptions = RecurrenceException.query.filter(
+        RecurrenceException.user_id == user_id,
+        RecurrenceException.day >= start_day,
+        RecurrenceException.day <= end_day
+    ).all()
+    exception_days = {(ex.recurrence_id, ex.day) for ex in exceptions}
+
+    created_events = []
+    for rule in rules:
+        existing = CalendarEvent.query.filter(
+            CalendarEvent.recurrence_id == rule.id,
+            CalendarEvent.day >= start_day,
+            CalendarEvent.day <= end_day
+        ).all()
+        existing_days = {ev.day for ev in existing}
+        current = start_day
+        while current <= end_day:
+            if (rule.id, current) not in exception_days and current not in existing_days:
+                if _recurrence_occurs_on(rule, current):
+                    new_event = CalendarEvent(
+                        user_id=user_id,
+                        title=rule.title,
+                        description=rule.description,
+                        day=current,
+                        start_time=rule.start_time,
+                        end_time=rule.end_time,
+                        status=rule.status or 'not_started',
+                        priority=rule.priority or 'medium',
+                        is_phase=False,
+                        is_event=bool(rule.is_event),
+                        is_group=False,
+                        order_index=_next_calendar_order(current, user_id),
+                        reminder_minutes_before=rule.reminder_minutes_before,
+                        rollover_enabled=bool(rule.rollover_enabled),
+                        recurrence_id=rule.id
+                    )
+                    db.session.add(new_event)
+                    created_events.append(new_event)
+            current += timedelta(days=1)
+
+    if created_events:
+        db.session.commit()
+        for ev in created_events:
+            if ev.reminder_minutes_before is not None and ev.start_time:
+                _schedule_reminder_job(ev)
+
+
 def _rollover_incomplete_events():
     """Clone yesterday's incomplete events with rollover enabled into today."""
     with app.app_context():
@@ -664,25 +867,43 @@ def _rollover_incomplete_events():
         # Try to acquire lock with a database transaction
         try:
             from models import JobLock
-            # Use SELECT FOR UPDATE to ensure only one worker acquires the lock
-            lock = db.session.query(JobLock).filter_by(job_name=lock_name).with_for_update(nowait=True).first()
-            if lock:
-                # Lock exists and is held - check if it's stale (>5 minutes old)
-                from datetime import datetime, timedelta
-                if datetime.utcnow() - lock.locked_at < timedelta(minutes=5):
-                    app.logger.info(f"Rollover already running (locked by {lock.locked_by}), skipping")
-                    db.session.rollback()
-                    return
-                else:
-                    # Stale lock, update it
-                    lock.locked_at = datetime.utcnow()
-                    lock.locked_by = str(worker_id)
-            else:
-                # Create new lock
-                lock = JobLock(job_name=lock_name, locked_at=datetime.utcnow(), locked_by=str(worker_id))
-                db.session.add(lock)
+            from sqlalchemy.exc import IntegrityError
 
-            db.session.commit()
+            now = datetime.utcnow()
+            if db.engine.dialect.name == 'sqlite':
+                # SQLite doesn't support FOR UPDATE; use insert + fallback update for stale locks.
+                try:
+                    lock = JobLock(job_name=lock_name, locked_at=now, locked_by=str(worker_id))
+                    db.session.add(lock)
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    lock = db.session.query(JobLock).filter_by(job_name=lock_name).first()
+                    if lock and now - lock.locked_at >= timedelta(minutes=5):
+                        lock.locked_at = now
+                        lock.locked_by = str(worker_id)
+                        db.session.commit()
+                    else:
+                        if lock:
+                            app.logger.info(f"Rollover already running (locked by {lock.locked_by}), skipping")
+                        else:
+                            app.logger.info("Rollover lock acquisition failed (missing lock), skipping")
+                        return
+            else:
+                # Use SELECT FOR UPDATE to ensure only one worker acquires the lock
+                lock = db.session.query(JobLock).filter_by(job_name=lock_name).with_for_update(nowait=True).first()
+                if lock:
+                    if now - lock.locked_at < timedelta(minutes=5):
+                        app.logger.info(f"Rollover already running (locked by {lock.locked_by}), skipping")
+                        db.session.rollback()
+                        return
+                    lock.locked_at = now
+                    lock.locked_by = str(worker_id)
+                else:
+                    lock = JobLock(job_name=lock_name, locked_at=now, locked_by=str(worker_id))
+                    db.session.add(lock)
+
+                db.session.commit()
         except Exception as e:
             # Lock acquisition failed (another worker has it)
             db.session.rollback()
@@ -774,6 +995,14 @@ def _rollover_incomplete_events():
                                 created_phases += 1
                         new_phase_id = phase_map.get(ev.phase_id)
 
+                    recurrence_id = ev.recurrence_id
+                    if recurrence_id:
+                        db.session.add(RecurrenceException(
+                            user_id=uid,
+                            recurrence_id=recurrence_id,
+                            day=today
+                        ))
+
                     copy_event = CalendarEvent(
                         user_id=uid,
                         title=ev.title,
@@ -784,14 +1013,22 @@ def _rollover_incomplete_events():
                         status='not_started',
                         priority=ev.priority,
                         is_phase=False,
+                        is_event=ev.is_event,
+                        is_group=ev.is_group,
                         phase_id=new_phase_id,
                         order_index=_next_calendar_order(today, uid),
                         reminder_minutes_before=ev.reminder_minutes_before,
                         rollover_enabled=ev.rollover_enabled,
-                        rolled_from_id=ev.id
+                        rolled_from_id=ev.id,
+                        todo_item_id=ev.todo_item_id,
+                        recurrence_id=None
                     )
                     db.session.add(copy_event)
                     created_events += 1
+                    if ev.todo_item_id:
+                        linked_item = TodoItem.query.filter_by(id=ev.todo_item_id).first()
+                        if linked_item:
+                            linked_item.due_date = today
 
                 for dup in duplicates_to_delete:
                     db.session.delete(dup)
@@ -814,6 +1051,29 @@ def _rollover_incomplete_events():
             except Exception as e:
                 app.logger.error(f"Error releasing rollover lock: {e}")
                 db.session.rollback()
+
+
+def _cleanup_completed_tasks():
+    """Delete done tasks that have been completed for 5+ days."""
+    with app.app_context():
+        try:
+            cutoff = datetime.now(pytz.UTC).replace(tzinfo=None) - timedelta(days=5)
+            items = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                TodoItem.status == 'done',
+                TodoItem.completed_at.isnot(None),
+                TodoItem.completed_at <= cutoff,
+                TodoItem.is_phase.is_(False),
+                TodoItem.linked_list_id.is_(None)
+            ).all()
+            if not items:
+                return
+            for item in items:
+                db.session.delete(item)
+            db.session.commit()
+            app.logger.info(f"Auto-deleted {len(items)} completed tasks older than 5 days")
+        except Exception as e:
+            app.logger.error(f"Error cleaning completed tasks: {e}")
+            db.session.rollback()
 
 
 def _send_email(to_addr, subject, body):
@@ -1132,6 +1392,14 @@ def _start_scheduler():
         return
     scheduler = BackgroundScheduler(timezone=app.config.get('DEFAULT_TIMEZONE', 'UTC'))
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
+    scheduler.add_job(
+        _cleanup_completed_tasks,
+        'cron',
+        hour=0,
+        minute=20,
+        id='cleanup_completed_tasks',
+        replace_existing=True
+    )
     # Daily digest at 7:00 AM in the app's default timezone (EST/EDT by default).
     scheduler.add_job(
         _send_daily_email_digest,
@@ -1150,6 +1418,10 @@ def _start_scheduler():
         _rollover_incomplete_events()
     except Exception as e:
         app.logger.error(f"Error running rollover catch-up: {e}")
+    try:
+        _cleanup_completed_tasks()
+    except Exception as e:
+        app.logger.error(f"Error running completed task cleanup: {e}")
 
     # Schedule existing reminders on startup
     _schedule_existing_reminders()
@@ -1170,6 +1442,12 @@ def select_user():
     """Show user selection page"""
     users = User.query.all()
     return render_template('select_user.html', users=users)
+
+@app.route('/logout')
+def logout_user():
+    """Clear the current user session and return to the user selector."""
+    session.pop('user_id', None)
+    return redirect(url_for('select_user'))
 
 @app.route('/api/set-user/<int:user_id>', methods=['POST'])
 def set_user(user_id):
@@ -1242,6 +1520,44 @@ def current_user_info():
         return jsonify({'user_id': user.id, 'username': user.username})
     return jsonify({'user_id': None, 'username': None})
 
+
+@app.route('/api/user/profile', methods=['GET', 'PUT'])
+def user_profile():
+    """Get or update the current user's profile."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        return jsonify({'user_id': user.id, 'username': user.username})
+
+    data = request.json or {}
+    current_pin = str(data.get('current_pin') or '').strip()
+    if not current_pin:
+        return jsonify({'error': 'Current PIN is required'}), 400
+    if not user.check_pin(current_pin):
+        return jsonify({'error': 'Invalid PIN'}), 403
+
+    new_username = (data.get('username') or '').strip()
+    new_pin = (data.get('new_pin') or '').strip()
+    confirm_pin = (data.get('confirm_pin') or '').strip()
+
+    if new_username and new_username != user.username:
+        if User.query.filter(User.username == new_username, User.id != user.id).first():
+            return jsonify({'error': 'Username already exists'}), 400
+        user.username = new_username
+
+    if new_pin or confirm_pin:
+        if new_pin != confirm_pin:
+            return jsonify({'error': 'PINs do not match'}), 400
+        try:
+            user.set_pin(new_pin)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    db.session.commit()
+    return jsonify({'success': True, 'username': user.username})
+
 @app.route('/api/sidebar-order', methods=['GET', 'POST'])
 def sidebar_order():
     """Get or update the sidebar order stored per user."""
@@ -1262,12 +1578,36 @@ def sidebar_order():
     db.session.commit()
     return jsonify({'success': True, 'order': final_order})
 
+@app.route('/api/homepage-order', methods=['GET', 'POST'])
+def homepage_order():
+    """Get or update the homepage module order stored per user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        order = _load_homepage_order(user)
+        return jsonify({'order': order})
+
+    data = request.get_json(silent=True)
+    order = data if isinstance(data, list) else (data or {}).get('order')
+    if not isinstance(order, list):
+        return jsonify({'error': 'Order must be a list'}), 400
+
+    final_order = _sanitize_homepage_order(order)
+    _save_homepage_order(user, final_order)
+    db.session.commit()
+    return jsonify({'success': True, 'order': final_order})
+
 @app.route('/')
 def index():
     # If no user selected, redirect to user selection
     if not get_current_user():
         return redirect(url_for('select_user'))
-    return render_template('home.html')
+
+    user = get_current_user()
+    module_order = _load_homepage_order(user)
+    return render_template('home.html', module_order=module_order)
 
 
 @app.route('/tasks')
@@ -1284,13 +1624,13 @@ def download_app():
     if not get_current_user():
         return redirect(url_for('select_user'))
     downloads_dir = os.path.join(app.root_path, 'downloads')
-    apk_filename = 'taskflow.apk'
+    apk_filename = 'mind-your-own.apk'
     apk_path = os.path.join(downloads_dir, apk_filename)
 
     if os.path.exists(apk_path):
         return send_from_directory(downloads_dir, apk_filename,
                                    as_attachment=True,
-                                   download_name='TaskFlow.apk',
+                                   download_name='Mind-Your-Own.apk',
                                    mimetype='application/vnd.android.package-archive')
     else:
         return "APK not found. Please build and upload the app first.", 404
@@ -1576,9 +1916,58 @@ def reorder_notes():
     return jsonify({'pinned': order_val - 1})
 
 
+def _generate_recall_summary_background(recall_id):
+    """Background task to generate summary and embedding for a recall item."""
+    import threading
+    with app.app_context():
+        try:
+            recall = RecallItem.query.get(recall_id)
+            if not recall:
+                return
+
+            # Generate summary
+            summary = _generate_recall_summary(
+                recall.title,
+                recall.content,
+                recall.category,
+                recall.type,
+                recall.source_url,
+                recall.description
+            )
+
+            # Update recall with summary
+            if summary:
+                recall.summary = summary
+
+            # Rebuild search blob with summary
+            blob = _build_recall_blob(
+                recall.title,
+                recall.content,
+                recall.description,
+                recall.category,
+                recall.type,
+                _normalize_tags(recall.tags),
+                recall.source_url,
+                summary
+            )
+            recall.search_blob = blob
+
+            # Generate embedding
+            embedding = _generate_recall_embedding(blob)
+            if embedding:
+                recall.embedding = json.dumps(embedding)
+
+            db.session.commit()
+            app.logger.info(f"Background summary generated for recall {recall_id}: {summary[:50] if summary else 'None'}...")
+        except Exception as exc:
+            app.logger.warning(f"Background summary generation failed for recall {recall_id}: {exc}")
+
+
 @app.route('/api/recalls', methods=['GET', 'POST'])
 def handle_recalls():
     """List or create recall items."""
+    import threading
+
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
@@ -1599,12 +1988,24 @@ def handle_recalls():
         reminder_at = _parse_reminder(data.get('reminder_at'))
         status = (data.get('status') or 'active').strip()
         source_url = (data.get('source_url') or '').strip() or None
+
+        # Auto-detect URL from content if source_url is empty
+        if not source_url and content:
+            import re
+            url_match = re.search(r'https?://\S+', content)
+            if url_match:
+                source_url = url_match.group(0)
+
+        # User-provided summary takes priority
         summary = (data.get('summary') or '').strip() or None
 
+        # Create a temporary fallback summary for immediate display
+        temp_summary = None
         if not summary:
-            summary = _generate_recall_summary(title, content, category, type_name, source_url)
-        blob = _build_recall_blob(title, content, description, category, type_name, tags, source_url, summary)
-        embedding = _generate_recall_embedding(blob)
+            temp_summary = _generate_fallback_summary(title, content, category, type_name, source_url)
+
+        # Build initial search blob (without AI summary)
+        blob = _build_recall_blob(title, content, description, category, type_name, tags, source_url, temp_summary)
 
         recall = RecallItem(
             user_id=user.id,
@@ -1619,12 +2020,22 @@ def handle_recalls():
             reminder_at=reminder_at,
             status=status if status in ['active', 'archived'] else 'active',
             source_url=source_url,
-            summary=summary,
+            summary=temp_summary,  # Use fallback initially
             search_blob=blob,
-            embedding=json.dumps(embedding) if embedding else None,
+            embedding=None,  # Will be generated in background
         )
         db.session.add(recall)
         db.session.commit()
+
+        # Start background thread to generate AI summary and embedding
+        if not summary:  # Only if user didn't provide a summary
+            thread = threading.Thread(
+                target=_generate_recall_summary_background,
+                args=(recall.id,),
+                daemon=True
+            )
+            thread.start()
+
         return jsonify(recall.to_dict()), 201
 
     # GET
@@ -1675,6 +2086,8 @@ def handle_recalls():
 @app.route('/api/recalls/<int:recall_id>', methods=['GET', 'PUT', 'DELETE'])
 def recall_detail(recall_id):
     """Get, update, or delete a single recall item."""
+    import threading
+
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
@@ -1692,22 +2105,36 @@ def recall_detail(recall_id):
         return jsonify({'deleted': True})
 
     data = request.json or request.form or {}
+
+    # Track if content changed (need to regenerate summary)
+    content_changed = False
+    user_provided_summary = 'summary' in data and (data.get('summary') or '').strip()
+
     if 'title' in data:
         title_val = (data.get('title') or '').strip()
-        if title_val:
+        if title_val and title_val != recall.title:
             recall.title = title_val
+            content_changed = True
     if 'category' in data:
         category_val = (data.get('category') or '').strip()
-        if category_val:
+        if category_val and category_val != recall.category:
             recall.category = category_val
+            content_changed = True
     if 'type' in data:
         type_val = (data.get('type') or '').strip()
-        if type_val:
+        if type_val and type_val != recall.type:
             recall.type = type_val
+            content_changed = True
     if 'content' in data:
-        recall.content = (data.get('content') or '').strip()
+        new_content = (data.get('content') or '').strip()
+        if new_content != recall.content:
+            recall.content = new_content
+            content_changed = True
     if 'description' in data:
-        recall.description = (data.get('description') or '').strip()
+        new_desc = (data.get('description') or '').strip()
+        if new_desc != recall.description:
+            recall.description = new_desc
+            content_changed = True
     if 'tags' in data or 'keywords' in data:
         recall.tags = _tags_to_string(data.get('keywords') or data.get('tags'))
     if 'pinned' in data:
@@ -1719,11 +2146,37 @@ def recall_detail(recall_id):
         if status_val in ['active', 'archived']:
             recall.status = status_val
     if 'source_url' in data:
-        recall.source_url = (data.get('source_url') or '').strip() or None
-    if 'summary' in data:
-        recall.summary = (data.get('summary') or '').strip() or None
+        new_url = (data.get('source_url') or '').strip() or None
+        if new_url != recall.source_url:
+            recall.source_url = new_url
+            content_changed = True
+    if user_provided_summary:
+        recall.summary = data.get('summary').strip()
 
-    # Refresh search blob + embedding if contentful fields changed
+    # Auto-detect URL from content if source_url is empty
+    if not recall.source_url and recall.content:
+        import re
+        url_match = re.search(r'https?://\S+', recall.content)
+        if url_match:
+            recall.source_url = url_match.group(0)
+            content_changed = True
+
+    # Use fallback summary if missing (don't block for AI summary)
+    needs_background_summary = False
+    if not recall.summary:
+        recall.summary = _generate_fallback_summary(
+            recall.title,
+            recall.content,
+            recall.category,
+            recall.type,
+            recall.source_url
+        )
+        needs_background_summary = True
+    elif content_changed and not user_provided_summary:
+        # Content changed, regenerate summary in background
+        needs_background_summary = True
+
+    # Refresh search blob (without waiting for AI embedding)
     recall.search_blob = _build_recall_blob(
         recall.title,
         recall.content,
@@ -1734,10 +2187,18 @@ def recall_detail(recall_id):
         recall.source_url,
         recall.summary
     )
-    embedding = _generate_recall_embedding(recall.search_blob)
-    recall.embedding = json.dumps(embedding) if embedding else None
     recall.updated_at = datetime.utcnow()
     db.session.commit()
+
+    # Start background thread for AI summary and embedding if needed
+    if needs_background_summary:
+        thread = threading.Thread(
+            target=_generate_recall_summary_background,
+            args=(recall.id,),
+            daemon=True
+        )
+        thread.start()
+
     return jsonify(recall.to_dict())
 
 
@@ -1901,17 +2362,78 @@ def handle_quick_access():
         return jsonify(new_item.to_dict()), 201
 
 
-@app.route('/api/quick-access/<int:item_id>', methods=['DELETE'])
+@app.route('/api/quick-access/<int:item_id>', methods=['DELETE', 'PUT'])
 def delete_quick_access(item_id):
-    """Delete a quick access item."""
+    """Delete or update a quick access item."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
 
     item = QuickAccessItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+    if request.method == 'PUT':
+        data = request.json or {}
+        title = (data.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'Title is required'}), 400
+        item.title = title
+        item.icon = (data.get('icon') or item.icon or 'fa-solid fa-bookmark').strip()
+        item.url = (data.get('url') or '').strip()
+        item.item_type = (data.get('item_type') or item.item_type or 'custom').strip()
+        item.reference_id = data.get('reference_id')
+        db.session.commit()
+        return jsonify(item.to_dict())
     db.session.delete(item)
     db.session.commit()
     return jsonify({'message': 'Deleted'})
+
+
+@app.route('/api/quick-access/order', methods=['PUT'])
+def update_quick_access_order():
+    """Update quick access order for the current user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    order = data.get('order') or []
+    if not isinstance(order, list):
+        return jsonify({'error': 'Order must be a list'}), 400
+
+    ordered_ids = []
+    for raw_id in order:
+        try:
+            ordered_ids.append(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+
+    if not ordered_ids:
+        return jsonify({'error': 'Order is empty'}), 400
+
+    items = QuickAccessItem.query.filter(
+        QuickAccessItem.user_id == user.id,
+        QuickAccessItem.id.in_(ordered_ids)
+    ).all()
+    item_map = {item.id: item for item in items}
+
+    order_index = 1
+    for item_id in ordered_ids:
+        item = item_map.get(item_id)
+        if not item:
+            continue
+        item.order_index = order_index
+        order_index += 1
+
+    remaining_items = QuickAccessItem.query.filter(
+        QuickAccessItem.user_id == user.id,
+        ~QuickAccessItem.id.in_(ordered_ids)
+    ).order_by(QuickAccessItem.order_index.asc()).all()
+
+    for item in remaining_items:
+        item.order_index = order_index
+        order_index += 1
+
+    db.session.commit()
+    return jsonify({'message': 'Order updated'})
 
 
 # Calendar API
@@ -1951,6 +2473,8 @@ def calendar_events():
         if end_day < start_day:
             return jsonify({'error': 'end must be on/after start'}), 400
 
+        _ensure_recurring_instances(user.id, start_day, end_day)
+
         events = CalendarEvent.query.filter(
             CalendarEvent.user_id == user.id,
             CalendarEvent.day >= start_day,
@@ -1982,6 +2506,7 @@ def calendar_events():
         day_obj = _parse_day_value(day_str)
         if not day_obj:
             return jsonify({'error': 'Invalid day'}), 400
+        _ensure_recurring_instances(user.id, day_obj, day_obj)
         events = CalendarEvent.query.filter_by(user_id=user.id, day=day_obj).order_by(
             CalendarEvent.order_index.asc()
         ).all()
@@ -2017,6 +2542,7 @@ def calendar_events():
                 'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
+                'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'priority': linked_event.priority if linked_event else 'medium',
                 'day': day_obj.isoformat(),
                 'order_index': 100000 + idx
@@ -2106,6 +2632,7 @@ def calendar_events():
         if existing:
             return jsonify(existing.to_dict()), 200
 
+    default_rollover = (not is_event) and (not is_group) and (not is_phase)
     new_event = CalendarEvent(
         user_id=user.id,
         title=title,
@@ -2121,7 +2648,7 @@ def calendar_events():
         phase_id=resolved_phase_id if not is_phase and not is_group else None,
         group_id=resolved_group_id if not is_group else None,
         reminder_minutes_before=reminder_minutes if not is_phase and not is_group else None,
-        rollover_enabled=bool(data.get('rollover_enabled', False) if not is_group else False),
+        rollover_enabled=bool(data.get('rollover_enabled', default_rollover) if not is_group else False),
         todo_item_id=linked_item.id if linked_item else None,
         order_index=_next_calendar_order(day_obj, user.id)
     )
@@ -2135,6 +2662,130 @@ def calendar_events():
     return jsonify(new_event.to_dict()), 201
 
 
+@app.route('/api/calendar/recurring', methods=['POST'])
+def create_recurring_calendar_event():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    title = (data.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'Title is required'}), 400
+
+    start_day = _parse_day_value(data.get('day') or data.get('start_day') or date.today().isoformat())
+    if not start_day:
+        return jsonify({'error': 'Invalid start day'}), 400
+
+    frequency = (data.get('frequency') or '').lower()
+    allowed_freq = {'daily', 'weekly', 'biweekly', 'monthly', 'yearly', 'custom'}
+    if frequency not in allowed_freq:
+        return jsonify({'error': 'Invalid frequency'}), 400
+
+    interval = 1
+    interval_unit = None
+    days_of_week = _parse_days_of_week(data.get('days_of_week'))
+    day_of_month = data.get('day_of_month')
+    month_of_year = data.get('month_of_year')
+    try:
+        day_of_month = int(day_of_month) if day_of_month is not None else None
+    except (TypeError, ValueError):
+        day_of_month = None
+    try:
+        month_of_year = int(month_of_year) if month_of_year is not None else None
+    except (TypeError, ValueError):
+        month_of_year = None
+
+    if frequency == 'daily':
+        interval = 1
+        interval_unit = 'days'
+    elif frequency == 'weekly':
+        interval = 1
+        interval_unit = 'weeks'
+        if not days_of_week:
+            days_of_week = [start_day.weekday()]
+    elif frequency == 'biweekly':
+        interval = 2
+        interval_unit = 'weeks'
+        if not days_of_week:
+            days_of_week = [start_day.weekday()]
+    elif frequency == 'monthly':
+        interval = 1
+        interval_unit = 'months'
+        if day_of_month is None:
+            day_of_month = start_day.day
+    elif frequency == 'yearly':
+        interval = 1
+        interval_unit = 'years'
+        if day_of_month is None:
+            day_of_month = start_day.day
+        if month_of_year is None:
+            month_of_year = start_day.month
+    elif frequency == 'custom':
+        try:
+            interval = max(int(data.get('interval') or 1), 1)
+        except (TypeError, ValueError):
+            interval = 1
+        interval_unit = (data.get('interval_unit') or 'days').lower()
+        if interval_unit not in {'days', 'weeks', 'months', 'years'}:
+            return jsonify({'error': 'Invalid interval unit'}), 400
+        if interval_unit == 'weeks' and not days_of_week:
+            days_of_week = [start_day.weekday()]
+        if interval_unit in {'months', 'years'} and day_of_month is None:
+            day_of_month = start_day.day
+        if interval_unit == 'years' and month_of_year is None:
+            month_of_year = start_day.month
+
+    if day_of_month is not None and not (1 <= day_of_month <= 31):
+        return jsonify({'error': 'Invalid day of month'}), 400
+    if month_of_year is not None and not (1 <= month_of_year <= 12):
+        return jsonify({'error': 'Invalid month of year'}), 400
+
+    start_time = _parse_time_str(data.get('start_time'))
+    end_time = _parse_time_str(data.get('end_time'))
+    reminder_minutes = data.get('reminder_minutes_before')
+    try:
+        reminder_minutes = int(reminder_minutes) if reminder_minutes is not None else None
+    except (TypeError, ValueError):
+        reminder_minutes = None
+
+    priority = (data.get('priority') or 'medium').lower()
+    if priority not in ALLOWED_PRIORITIES:
+        priority = 'medium'
+
+    status = (data.get('status') or 'not_started')
+    if status not in ALLOWED_STATUSES:
+        status = 'not_started'
+
+    is_event = bool(data.get('is_event', False))
+    default_rollover = not is_event
+    rule = RecurringEvent(
+        user_id=user.id,
+        title=title,
+        description=(data.get('description') or '').strip() or None,
+        start_day=start_day,
+        end_day=_parse_day_value(data.get('end_day')) if data.get('end_day') else None,
+        start_time=start_time,
+        end_time=end_time,
+        status=status,
+        priority=priority,
+        is_event=is_event,
+        reminder_minutes_before=reminder_minutes,
+        rollover_enabled=bool(data.get('rollover_enabled', default_rollover)),
+        frequency=frequency,
+        interval=interval,
+        interval_unit=interval_unit,
+        days_of_week=(','.join(str(d) for d in days_of_week) if days_of_week else None),
+        day_of_month=day_of_month,
+        month_of_year=month_of_year
+    )
+    db.session.add(rule)
+    db.session.commit()
+
+    _ensure_recurring_instances(user.id, start_day, start_day)
+    return jsonify({'id': rule.id}), 201
+
+
 @app.route('/api/calendar/events/<int:event_id>', methods=['PUT', 'DELETE'])
 def calendar_event_detail(event_id):
     user = get_current_user()
@@ -2146,6 +2797,12 @@ def calendar_event_detail(event_id):
     if request.method == 'DELETE':
         # Cancel reminder job if exists
         _cancel_reminder_job(event)
+        if event.recurrence_id:
+            db.session.add(RecurrenceException(
+                user_id=user.id,
+                recurrence_id=event.recurrence_id,
+                day=event.day
+            ))
         db.session.delete(event)
         db.session.commit()
         return '', 204
@@ -2194,9 +2851,17 @@ def calendar_event_detail(event_id):
         if not new_day:
             return jsonify({'error': 'Invalid day'}), 400
         if new_day != event.day:
+            old_day = event.day
             event.day = new_day
             event.order_index = _next_calendar_order(new_day, user.id)
             day_changed = True
+            if event.recurrence_id:
+                db.session.add(RecurrenceException(
+                    user_id=user.id,
+                    recurrence_id=event.recurrence_id,
+                    day=old_day
+                ))
+                event.recurrence_id = None
     if 'phase_id' in data and not event.is_phase:
         if data.get('phase_id') is None:
             event.phase_id = None
@@ -2592,12 +3257,15 @@ def get_pending_reminders():
 
     # Get user's timezone
     tz = pytz.timezone(app.config['DEFAULT_TIMEZONE'])
-    now = datetime.now(tz).replace(tzinfo=None)
+    now = datetime.now(tz)
 
     # Get events with reminders in the next 7 days that haven't been sent yet
     end_window = now + timedelta(days=7)
 
-    events = CalendarEvent.query.filter_by(user_id=user.id, reminder_sent=False).all()
+    events = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user.id,
+        or_(CalendarEvent.reminder_sent.is_(False), CalendarEvent.reminder_sent.is_(None))
+    ).all()
 
     pending = []
     for event in events:
@@ -2610,19 +3278,23 @@ def get_pending_reminders():
         # Check if snoozed
         if event.reminder_snoozed_until:
             remind_at = event.reminder_snoozed_until
-        elif event.reminder_minutes_before:
-            remind_at = event_datetime - timedelta(minutes=event.reminder_minutes_before)
+            remind_at_local = remind_at if remind_at.tzinfo else tz.localize(remind_at)
+        elif event.reminder_minutes_before is not None:
+            event_local = event_datetime if event_datetime.tzinfo else tz.localize(event_datetime)
+            remind_at_local = event_local - timedelta(minutes=event.reminder_minutes_before)
         else:
             continue  # No reminder set
 
         # Only include if reminder is in the future and within our window
-        if now < remind_at <= end_window:
+        if now < remind_at_local <= end_window:
+            remind_at_utc = remind_at_local.astimezone(pytz.UTC)
             pending.append({
                 'event_id': event.id,
                 'title': event.title,
                 'start_time': event.start_time.strftime('%I:%M %p'),
                 'day': event.day.isoformat(),
-                'remind_at': remind_at.isoformat(),
+                'remind_at': remind_at_local.replace(tzinfo=None).isoformat(),
+                'remind_at_ts': int(remind_at_utc.timestamp() * 1000),
                 'url': f'/calendar?day={event.day.isoformat()}'
             })
 
@@ -2724,6 +3396,8 @@ def create_item(list_id):
         is_phase=is_phase_item,
         due_date=due_date
     )
+    if status == 'done' and not is_phase_item:
+        new_item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
     
     if is_project:
         # Automatically create a child list
@@ -2785,9 +3459,10 @@ def handle_item(item_id):
         allowed_statuses = {'not_started', 'in_progress', 'done'}
         if new_status not in allowed_statuses:
             new_status = item.status
-        if new_status == 'done' and item.status != 'done':
-            item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
-        elif new_status != 'done':
+        if new_status == 'done':
+            if item.status != 'done' or not item.completed_at:
+                item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+        else:
             item.completed_at = None
         item.status = new_status
         item.content = data.get('content', item.content)
@@ -3156,6 +3831,8 @@ def bulk_import(list_id):
                     status=status,
                     is_phase=is_phase
                 )
+                if status == 'done' and not is_phase:
+                    child_item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
                 db.session.add(child_item)
                 created_items.append(child_item)
     else:
@@ -3178,6 +3855,8 @@ def bulk_import(list_id):
                 notes=entry.get('notes'),
                 is_phase=is_phase
             )
+            if status == 'done' and not is_phase:
+                new_item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
             db.session.add(new_item)
             created_items.append(new_item)
 
@@ -3205,8 +3884,8 @@ def bulk_items():
 
     if not raw_ids or not isinstance(raw_ids, list):
         return jsonify({'error': 'ids list is required'}), 400
-    if action not in ['status', 'delete', 'move']:
-        return jsonify({'error': 'action must be status, delete, or move'}), 400
+    if action not in ['status', 'delete', 'move', 'add_tag']:
+        return jsonify({'error': 'action must be status, delete, move, or add_tag'}), 400
 
     # Normalize IDs to integers
     ids = []
@@ -3245,6 +3924,11 @@ def bulk_items():
             # Avoid changing phases to task statuses inadvertently
             if is_phase_header(item):
                 continue
+            if status == 'done':
+                if item.status != 'done' or not item.completed_at:
+                    item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+            else:
+                item.completed_at = None
             item.status = status
             if item.phase_id:
                 affected_phases.add(item.phase_id)
@@ -3257,6 +3941,29 @@ def bulk_items():
 
         db.session.commit()
         return jsonify({'updated': len(items)})
+
+    if action == 'add_tag':
+        tag_value = data.get('tag') or data.get('tags')
+        tags_to_add = _normalize_tags(tag_value)
+        if not tags_to_add:
+            return jsonify({'error': 'tag is required'}), 400
+
+        updated = 0
+        for item in items:
+            if is_phase_header(item):
+                continue
+            current_tags = _normalize_tags(item.tags)
+            changed = False
+            for tag in tags_to_add:
+                if tag not in current_tags:
+                    current_tags.append(tag)
+                    changed = True
+            if changed:
+                item.tags = _tags_to_string(current_tags)
+                updated += 1
+
+        db.session.commit()
+        return jsonify({'updated': updated})
 
     if action == 'delete':
         for item in items:

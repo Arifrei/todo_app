@@ -10,6 +10,15 @@ document.addEventListener('DOMContentLoaded', () => {
         default_snooze_minutes: document.getElementById('pref-snooze-minutes'),
     };
 
+    const accountInputs = {
+        username: document.getElementById('account-username'),
+        currentPin: document.getElementById('account-current-pin'),
+        newPin: document.getElementById('account-new-pin'),
+        confirmPin: document.getElementById('account-confirm-pin'),
+        saveBtn: document.getElementById('account-save-btn'),
+        status: document.getElementById('account-save-status')
+    };
+
     let saveTimer = null;
 
     async function loadPrefs() {
@@ -51,6 +60,73 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.error('Error saving preferences', e);
         }
+    }
+
+    async function loadAccount() {
+        if (!accountInputs.username) return;
+        try {
+            const res = await fetch('/api/user/profile');
+            if (!res.ok) throw new Error('Failed to load profile');
+            const data = await res.json();
+            accountInputs.username.value = data.username || '';
+        } catch (e) {
+            console.error('Error loading profile', e);
+        }
+    }
+
+    async function saveAccount() {
+        if (!accountInputs.saveBtn) return;
+        const username = accountInputs.username?.value.trim() || '';
+        const currentPin = accountInputs.currentPin?.value.trim() || '';
+        const newPin = accountInputs.newPin?.value.trim() || '';
+        const confirmPin = accountInputs.confirmPin?.value.trim() || '';
+
+        if (!currentPin) {
+            setAccountStatus('Enter your current PIN.', true);
+            return;
+        }
+
+        if ((newPin || confirmPin) && newPin !== confirmPin) {
+            setAccountStatus('PINs do not match.', true);
+            return;
+        }
+
+        setAccountStatus('Saving...');
+        try {
+            const res = await fetch('/api/user/profile', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: username,
+                    current_pin: currentPin,
+                    new_pin: newPin,
+                    confirm_pin: confirmPin
+                })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setAccountStatus(data.error || 'Failed to save.', true);
+                return;
+            }
+            setAccountStatus('Saved.');
+            accountInputs.currentPin.value = '';
+            accountInputs.newPin.value = '';
+            accountInputs.confirmPin.value = '';
+            if (data.username && accountInputs.username) {
+                accountInputs.username.value = data.username;
+                const currentName = document.getElementById('current-username');
+                if (currentName) currentName.textContent = data.username;
+            }
+        } catch (e) {
+            console.error('Error saving profile', e);
+            setAccountStatus('Failed to save.', true);
+        }
+    }
+
+    function setAccountStatus(message, isError = false) {
+        if (!accountInputs.status) return;
+        accountInputs.status.textContent = message;
+        accountInputs.status.style.color = isError ? 'var(--danger-color)' : 'var(--text-muted)';
     }
 
     function scheduleSave() {
@@ -164,6 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (saveBtn) saveBtn.addEventListener('click', savePrefs);
     const testBtn = document.getElementById('pref-test-btn');
     if (testBtn) testBtn.addEventListener('click', sendTest);
+    if (accountInputs.saveBtn) accountInputs.saveBtn.addEventListener('click', saveAccount);
 
     // Auto-save on change
     Object.entries(prefsInputs).forEach(([key, input]) => {
@@ -190,4 +267,5 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     loadPrefs();
+    loadAccount();
 });

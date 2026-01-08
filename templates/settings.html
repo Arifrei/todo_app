@@ -71,5 +71,46 @@
         </button>
     </div>
 </div>
+
+<div class="card" style="max-width: 800px; margin-top: 1.5rem;">
+    <h3>Account</h3>
+    <p style="color: var(--text-muted); margin-top: 0;">Update your username or PIN.</p>
+    <div class="settings-grid">
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Username</div>
+                <div class="setting-sub">Visible on the sidebar.</div>
+            </div>
+            <input type="text" id="account-username" class="form-control" style="max-width: 240px;">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Current PIN</div>
+                <div class="setting-sub">Required to save changes.</div>
+            </div>
+            <input type="password" id="account-current-pin" class="form-control" maxlength="4" inputmode="numeric" pattern="[0-9]*" style="max-width: 140px;">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">New PIN</div>
+                <div class="setting-sub">Leave blank to keep your existing PIN.</div>
+            </div>
+            <input type="password" id="account-new-pin" class="form-control" maxlength="4" inputmode="numeric" pattern="[0-9]*" style="max-width: 140px;">
+        </label>
+        <label class="setting-row">
+            <div>
+                <div class="setting-title">Confirm PIN</div>
+                <div class="setting-sub">Repeat the new PIN.</div>
+            </div>
+            <input type="password" id="account-confirm-pin" class="form-control" maxlength="4" inputmode="numeric" pattern="[0-9]*" style="max-width: 140px;">
+        </label>
+    </div>
+    <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center;">
+        <button class="btn btn-secondary btn-small" id="account-save-btn">
+            <i class="fa-solid fa-floppy-disk"></i> Save
+        </button>
+        <span id="account-save-status" style="color: var(--text-muted);"></span>
+    </div>
+</div>
 <script src="{{ url_for('static', filename='settings.js') }}"></script>
 {% endblock %}

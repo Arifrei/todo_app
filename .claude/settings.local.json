@@ -25,7 +25,8 @@
       "Bash(timeout 3 python:*)",
       "Bash(taskkill:*)",
       "Bash(curl:*)",
-      "Bash(node --check:*)"
+      "Bash(node --check:*)",
+      "Bash(\"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\.venv\\\\Scripts\\\\pip.exe\" install --upgrade openai)"
     ],
     "deny": [],
     "ask": []

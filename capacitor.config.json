@@ -1,6 +1,6 @@
 {
   "appId": "com.taskflow.app",
-  "appName": "TaskFlow",
+  "appName": "Mind Your Own",
   "webDir": "static",
   "server": {
     "url": "https://simplytasks.simplifiedsuite.com",

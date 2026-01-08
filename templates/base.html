@@ -44,12 +44,7 @@
                 <i class="fa-solid fa-layer-group"></i>
                 <span>TaskFlow</span>
             </div>
-            <div class="mobile-topbar-actions">
-                <div class="mobile-user" onclick="toggleUserMenu(event)">
-                    <i class="fa-solid fa-user"></i>
-                    <span id="mobile-username">User</span>
-            </div>
-        </div>
+            <div class="mobile-topbar-actions"></div>
         </div>
         <nav class="sidebar">
             <div class="logo">
@@ -108,14 +103,13 @@
                     </li>
                 </ul>
 
-                <div class="user-chip user-trigger" onclick="toggleUserMenu(event)">
+                <div class="user-chip user-trigger">
                     <i class="fa-solid fa-user"></i>
-                    <span id="current-username">Loading...</span>
-                    <i class="fa-solid fa-caret-down caret"></i>
-                    <div class="user-menu" id="user-menu">
-                        <a href="{{ url_for('select_user') }}"><i class="fa-solid fa-user-group"></i> Switch User</a>
-                    </div>
+                    <span id="current-username">Admin</span>
                 </div>
+                <a class="btn btn-ghost btn-small" href="{{ url_for('logout_user') }}">
+                    <i class="fa-solid fa-right-from-bracket"></i> Logout
+                </a>
             </div>
             <script>
                 // Load current user
@@ -124,49 +118,9 @@
                     .then(data => {
                         const name = data.username || 'None';
                         const desktop = document.getElementById('current-username');
-                        const mobile = document.getElementById('mobile-username');
                         if (desktop) desktop.textContent = name;
-                        if (mobile) mobile.textContent = name;
                     });
 
-                function toggleUserMenu(event) {
-                    event.stopPropagation();
-                    const menu = document.getElementById('user-menu');
-                    if (!menu) return;
-                    menu.classList.toggle('open');
-                    if (!menu.classList.contains('open')) return;
-
-                    const anchor = event.currentTarget || event.target;
-                    if (!anchor || !anchor.getBoundingClientRect) return;
-
-                    // Position relative to viewport to avoid clipping or overflow.
-                    menu.style.left = '';
-                    menu.style.right = '';
-                    menu.style.top = '';
-                    menu.style.bottom = '';
-                    menu.style.position = 'fixed';
-
-                    requestAnimationFrame(() => {
-                        const anchorRect = anchor.getBoundingClientRect();
-                        const menuRect = menu.getBoundingClientRect();
-                        const padding = 8;
-
-                        let left = anchorRect.right - menuRect.width;
-                        left = Math.max(padding, Math.min(left, window.innerWidth - menuRect.width - padding));
-                        let top = anchorRect.bottom + 8;
-                        if (top + menuRect.height > window.innerHeight - padding) {
-                            top = Math.max(padding, anchorRect.top - menuRect.height - 8);
-                        }
-
-                        menu.style.left = `${left}px`;
-                        menu.style.top = `${top}px`;
-                    });
-                }
-
-                document.addEventListener('click', () => {
-                    const menu = document.getElementById('user-menu');
-                    if (menu) menu.classList.remove('open');
-                });
             </script>
         </nav>
         <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebarDrawer(false)"></div>

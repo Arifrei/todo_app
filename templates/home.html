@@ -8,38 +8,30 @@
     </div>
 </header>
 
-<div class="module-grid">
-    <a class="module-card" href="/tasks">
-        <div class="module-icon tasks icon-bubble"><i class="fa-solid fa-list-check"></i></div>
-        <div class="module-label">Tasks</div>
+<div class="module-grid" id="homepage-grid">
+    {% set module_config = {
+        'tasks': {'icon': 'fa-solid fa-list-check', 'label': 'Tasks', 'href': '/tasks', 'class': 'tasks'},
+        'calendar': {'icon': 'fa-solid fa-calendar-day', 'label': 'Calendar', 'href': '/calendar', 'class': 'calendar'},
+        'notes': {'icon': 'fa-solid fa-note-sticky', 'label': 'Notes', 'href': '/notes', 'class': 'notes'},
+        'recalls': {'icon': 'fa-solid fa-inbox', 'label': 'Recalls', 'href': '/recalls', 'class': 'recalls'},
+        'quick-access': {'icon': 'fa-solid fa-star', 'label': 'Quick Access', 'href': '/quick-access', 'class': 'quick-access'},
+        'ai': {'icon': 'fa-solid fa-robot', 'label': 'Assistant', 'href': '/ai', 'class': 'ai'},
+        'settings': {'icon': 'fa-solid fa-gear', 'label': 'Settings', 'href': '/settings', 'class': 'settings'},
+        'download': {'icon': 'fa-solid fa-mobile-screen-button', 'label': 'Get App', 'href': '/download/app', 'class': 'download'}
+    } %}
+
+    {% for module_key in module_order %}
+        {% set module = module_config.get(module_key) %}
+        {% if module %}
+    <a class="module-card" href="{{ module.href }}" data-module-id="{{ module_key }}">
+        <div class="module-icon {{ module.class }} icon-bubble"><i class="{{ module.icon }}"></i></div>
+        <div class="module-label">{{ module.label }}</div>
     </a>
-    <a class="module-card" href="/calendar">
-        <div class="module-icon calendar icon-bubble"><i class="fa-solid fa-calendar-day"></i></div>
-        <div class="module-label">Calendar</div>
-    </a>
-    <a class="module-card" href="/notes">
-        <div class="module-icon notes icon-bubble"><i class="fa-solid fa-note-sticky"></i></div>
-        <div class="module-label">Notes</div>
-    </a>
-    <a class="module-card" href="/recalls">
-        <div class="module-icon recalls icon-bubble"><i class="fa-solid fa-inbox"></i></div>
-        <div class="module-label">Recalls</div>
-    </a>
-    <a class="module-card" href="/quick-access">
-        <div class="module-icon quick-access icon-bubble"><i class="fa-solid fa-star"></i></div>
-        <div class="module-label">Quick Access</div>
-    </a>
-    <a class="module-card" href="/ai">
-        <div class="module-icon ai icon-bubble"><i class="fa-solid fa-robot"></i></div>
-        <div class="module-label">Assistant</div>
-    </a>
-    <a class="module-card" href="/settings">
-        <div class="module-icon settings icon-bubble"><i class="fa-solid fa-gear"></i></div>
-        <div class="module-label">Settings</div>
-    </a>
-    <a class="module-card" href="/download/app">
-        <div class="module-icon download icon-bubble"><i class="fa-solid fa-mobile-screen-button"></i></div>
-        <div class="module-label">Get App</div>
-    </a>
+        {% endif %}
+    {% endfor %}
 </div>
+
+<button id="homepage-done-btn" class="btn btn-primary" style="display: none; position: fixed; top: 1rem; right: 1rem; z-index: 100;">
+    Done
+</button>
 {% endblock %}

@@ -46,7 +46,7 @@ textarea,
     /* Improved mobile list items */
     .task-item {
         padding: 1rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.35rem;
     }
 
     /* Better calendar day cells for touch */

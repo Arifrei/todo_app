@@ -97,6 +97,7 @@ def ensure_todo_item_table(cur):
                 order_index INTEGER DEFAULT 0,
                 is_phase BOOLEAN DEFAULT 0,
                 due_date DATE,
+                completed_at TIMESTAMP,
                 linked_list_id INTEGER,
                 phase_id INTEGER
             )
@@ -112,10 +113,16 @@ def ensure_todo_item_table(cur):
     add_column(cur, "todo_item", "is_phase", "BOOLEAN DEFAULT 0")
     add_column(cur, "todo_item", "phase_id", "INTEGER")
     add_column(cur, "todo_item", "due_date", "DATE")
+    add_column(cur, "todo_item", "completed_at", "TIMESTAMP")
     add_column(cur, "todo_item", "linked_list_id", "INTEGER")
 
     # Normalize legacy status
     cur.execute("UPDATE todo_item SET status='not_started' WHERE status='pending'")
+    # Seed completion timestamps for existing done tasks so cleanup can start.
+    cur.execute(
+        "UPDATE todo_item SET completed_at = CURRENT_TIMESTAMP "
+        "WHERE status='done' AND completed_at IS NULL"
+    )
 
 
 def ensure_note_table(cur):
@@ -204,11 +211,84 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "reminder_snoozed_until", "TIMESTAMP")
     add_column(cur, "calendar_event", "rollover_enabled", "BOOLEAN DEFAULT 1")
     add_column(cur, "calendar_event", "rolled_from_id", "INTEGER")
+    add_column(cur, "calendar_event", "recurrence_id", "INTEGER")
     add_column(cur, "calendar_event", "todo_item_id", "INTEGER")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
     add_column(cur, "calendar_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "calendar_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_recurring_event_table(cur):
+    if table_exists(cur, "recurring_event"):
+        add_column(cur, "recurring_event", "description", "TEXT")
+        add_column(cur, "recurring_event", "end_day", "DATE")
+        add_column(cur, "recurring_event", "start_time", "TIME")
+        add_column(cur, "recurring_event", "end_time", "TIME")
+        add_column(cur, "recurring_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
+        add_column(cur, "recurring_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
+        add_column(cur, "recurring_event", "is_event", "BOOLEAN DEFAULT 0")
+        add_column(cur, "recurring_event", "reminder_minutes_before", "INTEGER")
+        add_column(cur, "recurring_event", "rollover_enabled", "BOOLEAN DEFAULT 0")
+        add_column(cur, "recurring_event", "interval", "INTEGER DEFAULT 1")
+        add_column(cur, "recurring_event", "interval_unit", "VARCHAR(10)")
+        add_column(cur, "recurring_event", "days_of_week", "VARCHAR(50)")
+        add_column(cur, "recurring_event", "day_of_month", "INTEGER")
+        add_column(cur, "recurring_event", "month_of_year", "INTEGER")
+        add_column(cur, "recurring_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_column(cur, "recurring_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        print("[ok] recurring_event table exists")
+        return
+    cur.execute(
+        """
+        CREATE TABLE recurring_event (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title VARCHAR(200) NOT NULL,
+            description TEXT,
+            start_day DATE NOT NULL,
+            end_day DATE,
+            start_time TIME,
+            end_time TIME,
+            status VARCHAR(20) DEFAULT 'not_started',
+            priority VARCHAR(10) DEFAULT 'medium',
+            is_event BOOLEAN DEFAULT 0,
+            reminder_minutes_before INTEGER,
+            rollover_enabled BOOLEAN DEFAULT 0,
+            frequency VARCHAR(20) NOT NULL,
+            interval INTEGER DEFAULT 1,
+            interval_unit VARCHAR(10),
+            days_of_week VARCHAR(50),
+            day_of_month INTEGER,
+            month_of_year INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    print("[add] recurring_event table created")
+
+
+def ensure_recurrence_exception_table(cur):
+    if table_exists(cur, "recurrence_exception"):
+        add_column(cur, "recurrence_exception", "user_id", "INTEGER")
+        add_column(cur, "recurrence_exception", "recurrence_id", "INTEGER")
+        add_column(cur, "recurrence_exception", "day", "DATE")
+        add_column(cur, "recurrence_exception", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        print("[ok] recurrence_exception table exists")
+        return
+    cur.execute(
+        """
+        CREATE TABLE recurrence_exception (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            recurrence_id INTEGER NOT NULL,
+            day DATE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    print("[add] recurrence_exception table created")
 
 
 def ensure_recall_table(cur):
@@ -365,6 +445,8 @@ def main():
         ensure_todo_item_table(cur)
         ensure_note_table(cur)
         ensure_calendar_event_table(cur)
+        ensure_recurring_event_table(cur)
+        ensure_recurrence_exception_table(cur)
         ensure_recall_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)

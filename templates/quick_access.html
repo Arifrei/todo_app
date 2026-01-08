@@ -5,7 +5,7 @@
     <header class="header-row">
         <div>
             <h1>Quick Access</h1>
-            <p style="color: var(--text-muted);">Your frequently accessed items and shortcuts <kbd>Ctrl+Shift+K</kbd></p>
+            <p style="color: var(--text-muted);">Your frequently accessed items</p>
         </div>
         <button class="btn btn-primary" onclick="openAddQuickAccessModal()">
             <i class="fa-solid fa-plus"></i> Add Item
@@ -19,15 +19,25 @@
             <div class="quick-access-title">Today</div>
             <div class="quick-access-subtitle">Jump to today's calendar</div>
         </a>
+        <!-- Tomorrow button (system item) -->
+        <a class="quick-access-card system-item" href="#" onclick="goToTomorrow(event)" data-type="system">
+            <div class="quick-access-icon"><i class="fa-solid fa-calendar-plus"></i></div>
+            <div class="quick-access-title">Tomorrow</div>
+            <div class="quick-access-subtitle">Jump to tomorrow's calendar</div>
+        </a>
 
         <!-- User's custom items will be loaded here -->
     </div>
 </div>
 
+<button id="quick-access-done-btn" class="btn btn-primary" style="display: none; position: fixed; top: 1rem; right: 1rem; z-index: 100;">
+    Done
+</button>
+
 <!-- Add Quick Access Item Modal -->
 <div class="modal" id="add-quick-access-modal">
     <div class="modal-content">
-        <h2>Add Quick Access Item</h2>
+        <h2 id="qa-modal-title">Add Quick Access Item</h2>
         <br>
         <div class="form-group">
             <label>Title</label>
@@ -74,12 +84,15 @@
         </div>
         <div class="modal-actions">
             <button class="btn" onclick="closeAddQuickAccessModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveQuickAccessItem()">Add</button>
+            <button class="btn btn-primary" id="qa-save-btn" onclick="saveQuickAccessItem()">Add</button>
         </div>
     </div>
 </div>
 
 <script>
+const qaItemsById = new Map();
+let qaEditingId = null;
+
 // Load user's quick access items
 async function loadQuickAccessItems() {
     try {
@@ -88,9 +101,13 @@ async function loadQuickAccessItems() {
         const grid = document.getElementById('quick-access-grid');
 
         // Keep the system "Today" button and append custom items
-        const systemCards = grid.querySelectorAll('.system-item');
+        const systemCards = Array.from(grid.querySelectorAll('.system-item'));
+        grid.innerHTML = '';
+        systemCards.forEach(card => grid.appendChild(card));
+        qaItemsById.clear();
 
         items.forEach(item => {
+            qaItemsById.set(item.id, item);
             const card = document.createElement('a');
             card.className = 'quick-access-card';
             card.href = item.url;
@@ -99,6 +116,9 @@ async function loadQuickAccessItems() {
             card.innerHTML = `
                 <div class="quick-access-icon"><i class="${item.icon}"></i></div>
                 <div class="quick-access-title">${escapeHtml(item.title)}</div>
+                <button class="quick-access-edit" onclick="openEditQuickAccessModal(${item.id}, event)" title="Edit">
+                    <i class="fa-solid fa-pen"></i>
+                </button>
                 <button class="quick-access-delete" onclick="deleteQuickAccessItem(${item.id}, event)" title="Delete">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
@@ -106,13 +126,40 @@ async function loadQuickAccessItems() {
 
             grid.appendChild(card);
         });
+
+        initQuickAccessEditMode();
     } catch (error) {
         console.error('Failed to load quick access items:', error);
     }
 }
 
+function setQuickAccessModalMode(mode) {
+    const titleEl = document.getElementById('qa-modal-title');
+    const saveBtn = document.getElementById('qa-save-btn');
+    if (!titleEl || !saveBtn) return;
+    if (mode === 'edit') {
+        titleEl.textContent = 'Edit Quick Access Item';
+        saveBtn.textContent = 'Save';
+    } else {
+        titleEl.textContent = 'Add Quick Access Item';
+        saveBtn.textContent = 'Add';
+    }
+}
+
 function openAddQuickAccessModal() {
+    qaEditingId = null;
+    setQuickAccessModalMode('add');
     document.getElementById('add-quick-access-modal').classList.add('active');
+    // Reset form
+    document.getElementById('qa-title').value = '';
+    document.getElementById('qa-icon').value = 'fa-solid fa-bookmark';
+    document.getElementById('qa-type').value = 'custom';
+    document.getElementById('qa-url').value = '';
+    document.getElementById('qa-date').value = '';
+
+    resetQANavState();
+    handleQuickAccessTypeChange();
+
     // Load lists and notes for dropdowns
     loadListsForQuickAccess();
     loadNotesForQuickAccess();
@@ -120,22 +167,9 @@ function openAddQuickAccessModal() {
 
 function closeAddQuickAccessModal() {
     document.getElementById('add-quick-access-modal').classList.remove('active');
-    // Reset form
-    document.getElementById('qa-title').value = '';
-    document.getElementById('qa-icon').value = 'fa-solid fa-bookmark';
-    document.getElementById('qa-type').value = 'custom';
-    document.getElementById('qa-url').value = '';
-
-    // Reset navigation state
-    qaNavState = {
-        currentParent: null,
-        stack: [],
-        allLists: [],
-        selectedListId: null,
-        selectedListTitle: ''
-    };
-
-    handleQuickAccessTypeChange();
+    qaEditingId = null;
+    setQuickAccessModalMode('add');
+    resetQANavState();
 }
 
 // Close modal when clicking outside
@@ -163,12 +197,26 @@ let qaNavState = {
     selectedListTitle: ''
 };
 
-async function loadListsForQuickAccess() {
+function resetQANavState() {
+    qaNavState = {
+        currentParent: null,
+        stack: [],
+        allLists: [],
+        selectedListId: null,
+        selectedListTitle: ''
+    };
+}
+
+async function loadListsForQuickAccess(selectedListId = null, selectedListTitle = '') {
     try {
         const response = await fetch('/api/lists?include_children=true');
         qaNavState.allLists = await response.json();
         qaNavState.currentParent = null;
         qaNavState.stack = [];
+        if (selectedListId) {
+            qaNavState.selectedListId = selectedListId;
+            qaNavState.selectedListTitle = selectedListTitle || '';
+        }
         renderQANavigation();
     } catch (error) {
         console.error('Failed to load lists:', error);
@@ -213,6 +261,7 @@ function renderQANavigation() {
     itemsToShow.forEach(list => {
         const item = document.createElement('button');
         item.className = 'qa-nav-item';
+        item.dataset.listId = list.id;
 
         const icon = list.type === 'hub'
             ? '<i class="fa-solid fa-folder-tree"></i>'
@@ -238,6 +287,8 @@ function renderQANavigation() {
 
         container.appendChild(item);
     });
+
+    highlightSelectedQAList();
 }
 
 function navigateIntoHub(hubId) {
@@ -268,6 +319,7 @@ function renderQANavigationWithChildren(hub) {
     // Add option to select the hub itself
     const addHubBtn = document.createElement('button');
     addHubBtn.className = 'qa-nav-item qa-nav-current';
+    addHubBtn.dataset.listId = hub.id;
     addHubBtn.innerHTML = `
         <i class="fa-solid fa-folder-tree"></i>
         <span>Add "${escapeHtml(hub.title)}" (This Hub)</span>
@@ -297,6 +349,7 @@ function renderQANavigationWithChildren(hub) {
 
         const navItem = document.createElement('button');
         navItem.className = 'qa-nav-item';
+        navItem.dataset.listId = childList.id;
 
         const icon = childList.type === 'hub'
             ? '<i class="fa-solid fa-folder-tree"></i>'
@@ -320,6 +373,8 @@ function renderQANavigationWithChildren(hub) {
 
         container.appendChild(navItem);
     });
+
+    highlightSelectedQAList();
 }
 
 function qaNavBack() {
@@ -369,7 +424,19 @@ function selectQAList(listId, listTitle) {
     }
 }
 
-async function loadNotesForQuickAccess() {
+function highlightSelectedQAList() {
+    if (!qaNavState.selectedListId) return;
+    const container = document.getElementById('qa-list-nav-container');
+    if (!container) return;
+    const items = container.querySelectorAll('.qa-nav-item');
+    items.forEach(item => item.classList.remove('selected'));
+    const selectedItem = container.querySelector(`[data-list-id="${qaNavState.selectedListId}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
+    }
+}
+
+async function loadNotesForQuickAccess(selectedNoteId = '') {
     try {
         const response = await fetch('/api/notes');
         const notes = await response.json();
@@ -381,9 +448,54 @@ async function loadNotesForQuickAccess() {
             option.textContent = note.title;
             select.appendChild(option);
         });
+        if (selectedNoteId) {
+            select.value = String(selectedNoteId);
+        }
     } catch (error) {
         console.error('Failed to load notes:', error);
     }
+}
+
+function extractCalendarDate(url) {
+    if (!url) return '';
+    const match = url.match(/[?&]day=([^&]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+}
+
+function openEditQuickAccessModal(id, event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const item = qaItemsById.get(id);
+    if (!item) return;
+
+    qaEditingId = id;
+    setQuickAccessModalMode('edit');
+    document.getElementById('add-quick-access-modal').classList.add('active');
+
+    document.getElementById('qa-title').value = item.title || '';
+    document.getElementById('qa-icon').value = item.icon || 'fa-solid fa-bookmark';
+    document.getElementById('qa-type').value = item.item_type || 'custom';
+    document.getElementById('qa-url').value = item.url || '';
+    document.getElementById('qa-date').value = item.item_type === 'calendar' ? extractCalendarDate(item.url) : '';
+
+    resetQANavState();
+    if (item.item_type === 'list' && item.reference_id) {
+        qaNavState.selectedListId = item.reference_id;
+        qaNavState.selectedListTitle = item.title || '';
+        loadListsForQuickAccess(item.reference_id, item.title || '');
+    } else {
+        loadListsForQuickAccess();
+    }
+
+    if (item.item_type === 'note' && item.reference_id) {
+        loadNotesForQuickAccess(item.reference_id);
+    } else {
+        loadNotesForQuickAccess();
+    }
+
+    handleQuickAccessTypeChange();
 }
 
 async function saveQuickAccessItem() {
@@ -430,8 +542,11 @@ async function saveQuickAccessItem() {
     }
 
     try {
-        const response = await fetch('/api/quick-access', {
-            method: 'POST',
+        const isEdit = !!qaEditingId;
+        const endpoint = isEdit ? `/api/quick-access/${qaEditingId}` : '/api/quick-access';
+        const method = isEdit ? 'PUT' : 'POST';
+        const response = await fetch(endpoint, {
+            method: method,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 title: title,
@@ -444,19 +559,13 @@ async function saveQuickAccessItem() {
 
         if (response.ok) {
             closeAddQuickAccessModal();
-            // Reload items
-            const grid = document.getElementById('quick-access-grid');
-            // Keep only system items
-            const systemCards = Array.from(grid.querySelectorAll('.system-item'));
-            grid.innerHTML = '';
-            systemCards.forEach(card => grid.appendChild(card));
             loadQuickAccessItems();
         } else {
-            alert('Failed to add item');
+            alert(`Failed to ${isEdit ? 'update' : 'add'} item`);
         }
     } catch (error) {
         console.error('Failed to save quick access item:', error);
-        alert('Failed to add item');
+        alert('Failed to save item');
     }
 }
 
@@ -517,6 +626,368 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+let qaDragState = {
+    draggingEl: null,
+    dragMoved: false
+};
+
+let qaTouchState = {
+    active: false,
+    card: null,
+    clone: null,
+    startX: 0,
+    startY: 0,
+    offsetX: 0,
+    offsetY: 0,
+    longPressTimer: null
+};
+
+let qaEditMode = {
+    active: false,
+    longPressTimer: null,
+    longPressTriggered: false,
+    touchStart: null,
+    pendingTouch: null,
+    pendingCard: null,
+    currentDragCard: null
+};
+
+function initQuickAccessEditMode() {
+    const grid = document.getElementById('quick-access-grid');
+    if (!grid) return;
+
+    const cards = Array.from(grid.querySelectorAll('.quick-access-card:not(.system-item)'));
+    cards.forEach(card => {
+        card.classList.add('qa-draggable');
+        card.removeAttribute('draggable');
+        card.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+
+        if (card.dataset.qaInit !== 'true') {
+            card.dataset.qaInit = 'true';
+            card.addEventListener('click', preventQuickAccessNavigation);
+            card.addEventListener('touchstart', handleQuickAccessTouchStart, { passive: false });
+            card.addEventListener('touchmove', handleQuickAccessTouchMove, { passive: false });
+            card.addEventListener('touchend', handleQuickAccessTouchEnd);
+            card.addEventListener('mousedown', handleQuickAccessMouseDown);
+            card.addEventListener('mouseup', handleQuickAccessMouseUp);
+            card.addEventListener('mouseleave', handleQuickAccessMouseUp);
+        }
+    });
+
+    const doneBtn = document.getElementById('quick-access-done-btn');
+    if (doneBtn) {
+        doneBtn.addEventListener('click', exitQuickAccessEditMode);
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!qaEditMode.active) return;
+        if (e.target.closest('.quick-access-card')) return;
+        if (e.target.closest('#quick-access-done-btn')) return;
+        if (e.target.closest('#add-quick-access-modal')) return;
+        exitQuickAccessEditMode();
+    });
+}
+
+function enterQuickAccessEditMode() {
+    qaEditMode.active = true;
+    const grid = document.getElementById('quick-access-grid');
+    const doneBtn = document.getElementById('quick-access-done-btn');
+    if (grid) {
+        grid.classList.add('edit-mode');
+        grid.querySelectorAll('.quick-access-card.qa-draggable').forEach(card => {
+            card.setAttribute('draggable', 'true');
+            card.classList.add('wiggle');
+        });
+    }
+    if (doneBtn) {
+        doneBtn.style.display = 'inline-flex';
+    }
+    initQuickAccessDrag();
+}
+
+function exitQuickAccessEditMode() {
+    qaEditMode.active = false;
+    const grid = document.getElementById('quick-access-grid');
+    const doneBtn = document.getElementById('quick-access-done-btn');
+    if (grid) {
+        grid.classList.remove('edit-mode');
+        grid.querySelectorAll('.quick-access-card.qa-draggable').forEach(card => {
+            card.removeAttribute('draggable');
+            card.classList.remove('dragging');
+            card.classList.remove('wiggle');
+        });
+    }
+    if (doneBtn) {
+        doneBtn.style.display = 'none';
+    }
+    qaDragState.draggingEl = null;
+    qaDragState.dragMoved = false;
+    qaEditMode.currentDragCard = null;
+    saveQuickAccessOrder();
+}
+
+async function saveQuickAccessOrder() {
+    const grid = document.getElementById('quick-access-grid');
+    if (!grid) return;
+    const orderedIds = Array.from(grid.querySelectorAll('.quick-access-card.qa-draggable'))
+        .map(card => card.dataset.id)
+        .filter(Boolean);
+    if (!orderedIds.length) return;
+
+    try {
+        await fetch('/api/quick-access/order', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: orderedIds })
+        });
+    } catch (error) {
+        console.error('Failed to save quick access order:', error);
+    }
+}
+
+function preventQuickAccessNavigation(e) {
+    if (qaEditMode.active || qaDragState.dragMoved) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+}
+
+function initQuickAccessDrag() {
+    const grid = document.getElementById('quick-access-grid');
+    if (!grid) return;
+
+    const cards = grid.querySelectorAll('.quick-access-card.qa-draggable');
+    cards.forEach(card => {
+        if (card.dataset.qaDragInit === 'true') return;
+        card.dataset.qaDragInit = 'true';
+
+        // Desktop drag events
+        card.addEventListener('dragstart', handleQuickAccessDragStart);
+        card.addEventListener('dragend', handleQuickAccessDragEnd);
+        card.addEventListener('dragover', handleQuickAccessDragOver);
+        card.addEventListener('drop', handleQuickAccessDrop);
+
+        // Mobile touch drag events
+        card.addEventListener('touchstart', handleQuickAccessTouchDragStart, { passive: false });
+        card.addEventListener('touchmove', handleQuickAccessTouchDragMove, { passive: false });
+        card.addEventListener('touchend', handleQuickAccessTouchDragEnd);
+    });
+}
+
+function handleQuickAccessDragStart(e) {
+    if (!qaEditMode.active) return;
+    qaEditMode.currentDragCard = e.currentTarget;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', '');
+}
+
+function handleQuickAccessDragEnd() {
+    if (qaEditMode.currentDragCard) {
+        qaEditMode.currentDragCard.classList.remove('dragging');
+        qaEditMode.currentDragCard = null;
+    }
+    if (qaDragState.dragMoved) {
+        saveQuickAccessOrder();
+    }
+    setTimeout(() => { qaDragState.dragMoved = false; }, 0);
+}
+
+function handleQuickAccessDragOver(e) {
+    if (!qaEditMode.active || !qaEditMode.currentDragCard) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    const grid = document.getElementById('quick-access-grid');
+    const afterElement = getQuickAccessDragAfterElement(grid, e.clientX, e.clientY);
+    const draggingCard = qaEditMode.currentDragCard;
+
+    if (afterElement == null) {
+        grid.appendChild(draggingCard);
+    } else if (afterElement !== draggingCard) {
+        grid.insertBefore(draggingCard, afterElement);
+    }
+    qaDragState.dragMoved = true;
+}
+
+function handleQuickAccessDrop(e) {
+    e.preventDefault();
+}
+
+function getQuickAccessDragAfterElement(container, x, y) {
+    const draggableElements = [...container.querySelectorAll('.quick-access-card.qa-draggable:not(.dragging)')];
+    if (draggableElements.length === 0) {
+        return null;
+    }
+
+    for (const element of draggableElements) {
+        const box = element.getBoundingClientRect();
+        const centerX = box.left + box.width / 2;
+
+        if (y < box.top) {
+            return element;
+        }
+
+        if (y >= box.top && y <= box.bottom) {
+            if (x < centerX) {
+                return element;
+            }
+        }
+    }
+
+    return null;
+}
+
+function handleQuickAccessTouchStart(e) {
+    if (!e.touches || e.touches.length !== 1) return;
+    if (qaEditMode.active) return;
+    const card = e.currentTarget;
+    const touch = e.touches[0];
+    qaEditMode.longPressTriggered = false;
+    qaEditMode.touchStart = { x: touch.clientX, y: touch.clientY };
+    qaEditMode.pendingTouch = { x: touch.clientX, y: touch.clientY };
+    qaEditMode.pendingCard = card;
+    qaEditMode.longPressTimer = setTimeout(() => {
+        qaEditMode.longPressTimer = null;
+        qaEditMode.longPressTriggered = true;
+        enterQuickAccessEditMode();
+        if (qaEditMode.pendingCard && qaEditMode.pendingTouch) {
+            startQuickAccessTouchDrag(qaEditMode.pendingCard, qaEditMode.pendingTouch);
+            qaEditMode.pendingCard = null;
+            qaEditMode.pendingTouch = null;
+        }
+    }, 1000);
+}
+
+function handleQuickAccessTouchMove(e) {
+    if (!e.touches || e.touches.length !== 1) return;
+    if (qaEditMode.active) return;
+    if (!qaEditMode.longPressTimer || !qaEditMode.touchStart) return;
+    const touch = e.touches[0];
+    qaEditMode.pendingTouch = { x: touch.clientX, y: touch.clientY };
+    const dx = Math.abs(touch.clientX - qaEditMode.touchStart.x);
+    const dy = Math.abs(touch.clientY - qaEditMode.touchStart.y);
+    if (dx > 10 || dy > 10) {
+        clearTimeout(qaEditMode.longPressTimer);
+        qaEditMode.longPressTimer = null;
+    }
+}
+
+function handleQuickAccessTouchEnd(e) {
+    if (qaEditMode.longPressTimer) {
+        clearTimeout(qaEditMode.longPressTimer);
+        qaEditMode.longPressTimer = null;
+    }
+    if (!qaEditMode.active && qaEditMode.longPressTriggered) {
+        e.preventDefault();
+        qaEditMode.longPressTriggered = false;
+    }
+}
+
+function handleQuickAccessTouchDragStart(e) {
+    if (!qaEditMode.active) return;
+    if (!e.touches || !e.touches.length) return;
+    const card = e.currentTarget;
+    const touch = e.touches[0];
+    startQuickAccessTouchDrag(card, { x: touch.clientX, y: touch.clientY });
+}
+
+function startQuickAccessTouchDrag(card, touch) {
+    const rect = card.getBoundingClientRect();
+    const clone = card.cloneNode(true);
+    clone.classList.add('touch-drag-clone');
+    clone.style.width = `${rect.width}px`;
+    clone.style.height = `${rect.height}px`;
+    clone.style.left = `0px`;
+    clone.style.top = `0px`;
+
+    qaTouchState.active = true;
+    qaTouchState.clone = clone;
+    qaTouchState.offsetX = touch.x - rect.left;
+    qaTouchState.offsetY = touch.y - rect.top;
+    qaTouchState.card = card;
+
+    card.classList.add('dragging');
+    card.style.opacity = '0.35';
+    document.body.appendChild(clone);
+
+    const startX = touch.x - qaTouchState.offsetX;
+    const startY = touch.y - qaTouchState.offsetY;
+    clone.style.transform = `translate3d(${startX}px, ${startY}px, 0)`;
+}
+
+function handleQuickAccessTouchDragMove(e) {
+    if (!qaTouchState.active || !qaTouchState.clone) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const targetX = touch.clientX - qaTouchState.offsetX;
+    const targetY = touch.clientY - qaTouchState.offsetY;
+    qaTouchState.clone.style.transform = `translate3d(${targetX}px, ${targetY}px, 0)`;
+
+    const grid = document.getElementById('quick-access-grid');
+    const target = getQuickAccessCardFromPoint(touch.clientX, touch.clientY, grid);
+    if (target && target !== qaTouchState.card) {
+        const rect = target.getBoundingClientRect();
+        const isAfter = touch.clientY > rect.top + rect.height / 2 ||
+            (touch.clientY >= rect.top && touch.clientY <= rect.bottom && touch.clientX > rect.left + rect.width / 2);
+        if (isAfter) {
+            grid.insertBefore(qaTouchState.card, target.nextSibling);
+        } else {
+            grid.insertBefore(qaTouchState.card, target);
+        }
+    }
+}
+
+function handleQuickAccessTouchDragEnd(e) {
+    if (!qaTouchState.active) return;
+    if (qaTouchState.clone) {
+        qaTouchState.clone.remove();
+    }
+    if (qaTouchState.card) {
+        qaTouchState.card.classList.remove('dragging');
+        qaTouchState.card.style.opacity = '';
+    }
+    qaTouchState = {
+        active: false,
+        card: null,
+        clone: null,
+        startX: 0,
+        startY: 0,
+        offsetX: 0,
+        offsetY: 0,
+        longPressTimer: null
+    };
+    saveQuickAccessOrder();
+    e.preventDefault();
+}
+
+function handleQuickAccessMouseDown() {
+    if (qaEditMode.active) return;
+    qaEditMode.longPressTriggered = false;
+    qaEditMode.longPressTimer = setTimeout(() => {
+        qaEditMode.longPressTimer = null;
+        qaEditMode.longPressTriggered = true;
+        enterQuickAccessEditMode();
+    }, 1000);
+}
+
+function handleQuickAccessMouseUp() {
+    if (qaEditMode.longPressTimer) {
+        clearTimeout(qaEditMode.longPressTimer);
+        qaEditMode.longPressTimer = null;
+    }
+}
+
+function getQuickAccessCardFromPoint(x, y, grid) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return null;
+    const card = el.closest('.quick-access-card.qa-draggable');
+    if (!card || !grid.contains(card)) return null;
+    return card;
+}
+
 // Go to today's calendar in day view
 function goToToday(event) {
     event.preventDefault();
@@ -529,6 +1000,21 @@ function goToToday(event) {
     const todayStr = `${year}-${month}-${day}`;
 
     window.location.href = `/calendar?day=${todayStr}&mode=day`;
+}
+
+// Go to tomorrow's calendar in day view
+function goToTomorrow(event) {
+    event.preventDefault();
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Get local date components (respects user's timezone)
+    const year = tomorrow.getFullYear();
+    const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+    const day = String(tomorrow.getDate()).padStart(2, '0');
+    const tomorrowStr = `${year}-${month}-${day}`;
+
+    window.location.href = `/calendar?day=${tomorrowStr}&mode=day`;
 }
 
 // Load items on page load
