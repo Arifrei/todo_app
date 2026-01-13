@@ -10,7 +10,7 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.3
 beautifulsoup4==4.12.3
-openai==1.35.13
+openai>=1.50.0
 python-dotenv==1.2.1
 SQLAlchemy==2.0.25
 typing_extensions==4.15.0
