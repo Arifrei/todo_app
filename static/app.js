@@ -61,6 +61,7 @@ function showToast(message, type = 'info', duration = 4000) {
 }
 let currentDragId = null;
 let currentDragBlock = [];
+let currentDragIsPhase = false;
 let longPressTimer = null;
 let longPressTriggered = false;
 let touchStartX = 0;
@@ -73,6 +74,7 @@ let moveItemType = 'task';
 let touchDragActive = false;
 let touchDragId = null;
 let touchDragBlock = [];
+let touchDragIsPhase = false;
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false };
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
@@ -1996,6 +1998,66 @@ function getTaskDragAfterElement(container, y) {
     return closestElement;
 }
 
+// When dragging a phase, snap to phase boundaries to avoid splitting other phases
+function getPhaseDragAfterElement(container, y) {
+    const allElements = [...container.querySelectorAll('.task-item:not(.dragging):not(.drag-placeholder)')];
+
+    if (allElements.length === 0) {
+        return null; // Empty container, append at end
+    }
+
+    // Find all phase headers and the first element (for inserting at the very top)
+    const phaseHeaders = allElements.filter(el => el.classList.contains('phase'));
+
+    // Build list of valid drop positions: each phase header, plus the end
+    // Each position has a reference element to insert before (null = append at end)
+    const dropPositions = [];
+
+    // Add position before the first element (top of list)
+    if (allElements.length > 0) {
+        const firstEl = allElements[0];
+        const box = firstEl.getBoundingClientRect();
+        dropPositions.push({
+            y: box.top,
+            insertBefore: firstEl
+        });
+    }
+
+    // Add position before each phase header (except if it's the first element, already added)
+    phaseHeaders.forEach(phase => {
+        const box = phase.getBoundingClientRect();
+        // Avoid duplicate if this phase is the first element
+        if (phase !== allElements[0]) {
+            dropPositions.push({
+                y: box.top,
+                insertBefore: phase
+            });
+        }
+    });
+
+    // Add position at the end
+    const lastEl = allElements[allElements.length - 1];
+    const lastBox = lastEl.getBoundingClientRect();
+    dropPositions.push({
+        y: lastBox.bottom,
+        insertBefore: null // null means append at end
+    });
+
+    // Find the closest drop position
+    let closestPosition = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    dropPositions.forEach(pos => {
+        const distance = Math.abs(y - pos.y);
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestPosition = pos;
+        }
+    });
+
+    return closestPosition ? closestPosition.insertBefore : null;
+}
+
 function handleDragStart(e) {
     const handle = e.target.closest('.drag-handle');
     if (!handle) return;
@@ -2007,8 +2069,10 @@ function handleDragStart(e) {
     currentDragId = itemId;
     const row = document.getElementById(`item-${itemId}`);
     currentDragBlock = [];
+    currentDragIsPhase = false;
     if (row) {
         const isPhase = row.classList.contains('phase');
+        currentDragIsPhase = isPhase;
         if (isPhase) {
             const siblings = Array.from(document.querySelectorAll('.task-item'));
             const startIdx = siblings.indexOf(row);
@@ -2031,6 +2095,7 @@ function handleDragEnd() {
     currentDragId = null;
     currentDragBlock.forEach(el => el.classList.remove('dragging'));
     currentDragBlock = [];
+    currentDragIsPhase = false;
 }
 
 async function commitOrderFromDOM() {
@@ -2055,7 +2120,10 @@ function handleDragOver(e) {
     e.preventDefault();
     const container = document.getElementById('items-container');
     if (!container) return;
-    const afterElement = getTaskDragAfterElement(container, e.clientY);
+    // When dragging a phase, snap to phase boundaries to avoid splitting other phases
+    const afterElement = currentDragIsPhase
+        ? getPhaseDragAfterElement(container, e.clientY)
+        : getTaskDragAfterElement(container, e.clientY);
     if (!currentDragBlock.length) return;
 
     // Remove current block to reinsert
@@ -2078,6 +2146,9 @@ async function handleDrop(e) {
     if (!container) return;
     await commitOrderFromDOM();
     handleDragEnd();
+    // Re-organize done tasks after drag to maintain proper grouping
+    normalizePhaseParents();
+    organizePhaseDoneTasks();
 }
 
 async function refreshListView() {
@@ -2225,11 +2296,13 @@ function touchHandleDragStart(e) {
     touchDragActive = true;
     touchDragId = itemId;
     touchDragBlock = [];
+    touchDragIsPhase = false;
 
     const row = document.getElementById(`item-${itemId}`);
     if (row) {
         console.log('🔵 Row found:', row);
         const isPhase = row.classList.contains('phase');
+        touchDragIsPhase = isPhase;
         if (isPhase) {
             const siblings = Array.from(document.querySelectorAll('.task-item'));
             const startIdx = siblings.indexOf(row);
@@ -2344,7 +2417,10 @@ function touchHandleDragMove(e) {
     }
 
     // Find where to insert placeholder based on touch position
-    const afterElement = getTaskDragAfterElement(container, touchDragCurrentY);
+    // When dragging a phase, snap to phase boundaries to avoid splitting other phases
+    const afterElement = touchDragIsPhase
+        ? getPhaseDragAfterElement(container, touchDragCurrentY)
+        : getTaskDragAfterElement(container, touchDragCurrentY);
 
     console.log('🟢 Placeholder should be inserted', afterElement ? 'before item ' + afterElement.dataset.itemId : 'at end');
 
@@ -2431,6 +2507,10 @@ async function touchHandleDragEnd(e) {
     touchDragBlock = [];
     touchDragStartY = 0;
     touchDragCurrentY = 0;
+    touchDragIsPhase = false;
+    // Re-organize done tasks after drag to maintain proper grouping
+    normalizePhaseParents();
+    organizePhaseDoneTasks();
     console.log('🔴 ===== DRAG COMPLETE =====');
 }
 // --- Phase Visibility ---
@@ -2731,26 +2811,181 @@ function applyNoteCommand(command) {
         return;
     }
     if (command === 'quote') {
-        if (toggleBlockquote()) return;
-        document.execCommand('formatBlock', false, 'blockquote');
+        toggleBlockquote();
         setNoteDirty(true);
         updateNoteToolbarStates();
         return;
     }
     if (command === 'code') {
-        if (toggleInlineCode()) return;
-        const selection = window.getSelection ? window.getSelection().toString() : '';
-        const html = selection ? `<code>${selection}</code>` : '<code></code>';
-        document.execCommand('insertHTML', false, html);
+        toggleInlineCode();
         setNoteDirty(true);
         updateNoteToolbarStates();
         return;
     }
 
-    document.execCommand(command, false, null);
-    refreshNoteDirtyState();
-    // Update toolbar states after a short delay to let the DOM update
-    setTimeout(() => updateNoteToolbarStates(), 10);
+    // Map commands to HTML tags
+    const formatMap = {
+        'bold': ['STRONG', 'B'],
+        'italic': ['EM', 'I'],
+        'underline': ['U'],
+        'strikeThrough': ['S', 'STRIKE', 'DEL'],
+        'insertUnorderedList': ['UL'],
+        'insertOrderedList': ['OL'],
+        'removeFormat': null
+    };
+
+    if (command === 'removeFormat') {
+        removeAllFormatting();
+        setNoteDirty(true);
+        updateNoteToolbarStates();
+        return;
+    }
+
+    if (command === 'insertUnorderedList' || command === 'insertOrderedList') {
+        // Use execCommand for lists as it handles them well
+        document.execCommand(command, false, null);
+        setNoteDirty(true);
+        setTimeout(() => updateNoteToolbarStates(), 10);
+        return;
+    }
+
+    // Handle inline formatting with proper toggle
+    const tags = formatMap[command];
+    if (tags) {
+        toggleInlineFormat(tags[0], tags);
+        setNoteDirty(true);
+        setTimeout(() => updateNoteToolbarStates(), 10);
+    }
+}
+
+// Toggle inline formatting (bold, italic, underline, strikethrough)
+function toggleInlineFormat(primaryTag, allTags) {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+
+    // Check if cursor/selection is inside any of the format tags
+    let existingFormat = null;
+    for (const tag of allTags) {
+        existingFormat = findAncestorInEditor(sel.focusNode, tag, editor);
+        if (existingFormat) break;
+    }
+
+    if (existingFormat) {
+        // Remove formatting - unwrap the element
+        unwrapFormatElement(existingFormat);
+        return;
+    }
+
+    // Apply new formatting
+    if (range.collapsed) {
+        // No selection - insert empty formatted element for typing
+        const wrapper = document.createElement(primaryTag.toLowerCase());
+        wrapper.appendChild(document.createTextNode('\u200B')); // Zero-width space
+        range.insertNode(wrapper);
+
+        // Position cursor inside
+        const newRange = document.createRange();
+        newRange.setStart(wrapper.firstChild, 1);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    } else {
+        // Wrap selected content
+        const wrapper = document.createElement(primaryTag.toLowerCase());
+        try {
+            const contents = range.extractContents();
+            wrapper.appendChild(contents);
+            range.insertNode(wrapper);
+
+            // Select the wrapped content
+            const newRange = document.createRange();
+            newRange.selectNodeContents(wrapper);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        } catch (e) {
+            // Fallback if extraction fails
+            const text = range.toString();
+            range.deleteContents();
+            wrapper.textContent = text;
+            range.insertNode(wrapper);
+        }
+    }
+}
+
+// Unwrap a formatting element, preserving contents and cursor position
+function unwrapFormatElement(element) {
+    const sel = window.getSelection();
+    const parent = element.parentNode;
+    if (!parent) return;
+
+    // Move all children out of the element
+    const fragment = document.createDocumentFragment();
+    let lastChild = null;
+    while (element.firstChild) {
+        lastChild = element.firstChild;
+        fragment.appendChild(lastChild);
+    }
+
+    // Replace element with its contents
+    parent.insertBefore(fragment, element);
+    parent.removeChild(element);
+
+    // Normalize to merge adjacent text nodes
+    parent.normalize();
+
+    // Restore cursor position
+    if (sel && lastChild) {
+        const newRange = document.createRange();
+        if (lastChild.nodeType === 3) {
+            newRange.setStart(lastChild, lastChild.length);
+        } else {
+            newRange.setStartAfter(lastChild);
+        }
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    }
+}
+
+// Remove all formatting from selection
+function removeAllFormatting() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+    if (range.collapsed) return;
+
+    // Get plain text and replace selection with it
+    const text = range.toString();
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+
+    // Select the text
+    const newRange = document.createRange();
+    newRange.selectNodeContents(textNode);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+}
+
+// Find ancestor element within editor
+function findAncestorInEditor(node, tagName, editor) {
+    let current = node;
+    while (current && current !== editor && current !== document.body) {
+        if (current.nodeType === 1 && current.tagName === tagName) {
+            return current;
+        }
+        current = current.parentElement;
+    }
+    return null;
 }
 
 function applyNoteFontSize(sizePx) {
@@ -2758,110 +2993,196 @@ function applyNoteFontSize(sizePx) {
     if (!editor) return;
     editor.focus();
 
-    // Wrap selection using execCommand, then replace with a span that uses pixel sizing
-    document.execCommand('fontSize', false, '7');
-    const fonts = editor.querySelectorAll('font[size="7"]');
-    fonts.forEach(font => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+
+    if (range.collapsed) {
+        // No selection - create a span for new text
         const span = document.createElement('span');
         span.style.fontSize = `${sizePx}px`;
-        while (font.firstChild) {
-            span.appendChild(font.firstChild);
-        }
-        font.replaceWith(span);
-    });
-    setNoteDirty(true);
-}
+        span.appendChild(document.createTextNode('\u200B'));
+        range.insertNode(span);
 
-function unwrapTag(tagName) {
-    const sel = window.getSelection ? window.getSelection() : null;
-    if (!sel || sel.rangeCount === 0) return false;
-    let node = sel.focusNode;
-    let el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
-    while (el && el !== document.body && el.tagName !== tagName) {
-        el = el.parentElement;
-    }
-    if (!el || el.tagName !== tagName) return false;
-
-    const textNode = document.createTextNode(el.textContent || '');
-    el.replaceWith(textNode);
-
-    // Restore caret at end of unwrapped content
-    const range = document.createRange();
-    range.setStart(textNode, textNode.length);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    return true;
-}
-
-function findAncestor(el, tagName) {
-    let node = el;
-    while (node && node !== document.body) {
-        if (node.tagName === tagName) return node;
-        node = node.parentElement;
-    }
-    return null;
-}
-
-function toggleBlockquote() {
-    const sel = window.getSelection ? window.getSelection() : null;
-    if (!sel || sel.rangeCount === 0) return false;
-    const range = sel.getRangeAt(0);
-    const el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-    const blockquote = findAncestor(el, 'BLOCKQUOTE');
-    if (!blockquote) return false;
-
-    const frag = document.createDocumentFragment();
-    while (blockquote.firstChild) {
-        frag.appendChild(blockquote.firstChild);
-    }
-    blockquote.replaceWith(frag);
-
-    const endNode = frag.lastChild || frag.firstChild;
-    if (endNode) {
         const newRange = document.createRange();
-        if (endNode.nodeType === 3) {
-            newRange.setStart(endNode, endNode.length);
-        } else {
-            newRange.setStartAfter(endNode);
-        }
+        newRange.setStart(span.firstChild, 1);
         newRange.collapse(true);
         sel.removeAllRanges();
         sel.addRange(newRange);
+    } else {
+        // Wrap selection in a span with font size
+        const span = document.createElement('span');
+        span.style.fontSize = `${sizePx}px`;
+        try {
+            span.appendChild(range.extractContents());
+            range.insertNode(span);
+
+            const newRange = document.createRange();
+            newRange.selectNodeContents(span);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        } catch (e) {
+            const text = range.toString();
+            range.deleteContents();
+            span.textContent = text;
+            range.insertNode(span);
+        }
     }
     setNoteDirty(true);
-    return true;
+}
+
+function toggleBlockquote() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+    const el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const blockquote = findAncestorInEditor(el, 'BLOCKQUOTE', editor);
+
+    if (blockquote) {
+        // Remove blockquote - unwrap contents
+        const frag = document.createDocumentFragment();
+        while (blockquote.firstChild) {
+            frag.appendChild(blockquote.firstChild);
+        }
+
+        const lastChild = frag.lastChild;
+        blockquote.parentNode.insertBefore(frag, blockquote);
+        blockquote.remove();
+
+        // Position cursor at end
+        if (lastChild) {
+            const newRange = document.createRange();
+            if (lastChild.nodeType === 3) {
+                newRange.setStart(lastChild, lastChild.length);
+            } else {
+                newRange.setStartAfter(lastChild);
+            }
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        }
+    } else {
+        // Create new blockquote
+        const bq = document.createElement('blockquote');
+
+        if (range.collapsed) {
+            // No selection - create empty blockquote
+            bq.appendChild(document.createTextNode('\u200B'));
+            range.insertNode(bq);
+
+            const newRange = document.createRange();
+            newRange.setStart(bq.firstChild, 0);
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        } else {
+            // Wrap selection in blockquote
+            try {
+                bq.appendChild(range.extractContents());
+                range.insertNode(bq);
+
+                const newRange = document.createRange();
+                newRange.selectNodeContents(bq);
+                sel.removeAllRanges();
+                sel.addRange(newRange);
+            } catch (e) {
+                const text = range.toString();
+                range.deleteContents();
+                bq.textContent = text;
+                range.insertNode(bq);
+            }
+        }
+    }
+    setNoteDirty(true);
 }
 
 function toggleInlineCode() {
-    const sel = window.getSelection ? window.getSelection() : null;
-    if (!sel || sel.rangeCount === 0) return false;
-    const node = sel.focusNode;
-    const codeEl = node ? findAncestor(node.nodeType === 1 ? node : node.parentElement, 'CODE') : null;
-    if (!codeEl) return false;
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
 
-    const textNode = document.createTextNode(codeEl.textContent || '');
-    codeEl.replaceWith(textNode);
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
 
-    const range = document.createRange();
-    range.setStart(textNode, textNode.length);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
+    const range = sel.getRangeAt(0);
+    const el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const codeEl = findAncestorInEditor(el, 'CODE', editor);
+
+    if (codeEl) {
+        // Remove code - unwrap contents
+        const textNode = document.createTextNode(codeEl.textContent || '');
+        codeEl.replaceWith(textNode);
+
+        const newRange = document.createRange();
+        newRange.setStart(textNode, textNode.length);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    } else {
+        // Create new code element
+        const code = document.createElement('code');
+        const selectedText = range.toString();
+
+        if (range.collapsed) {
+            // No selection - create empty code element
+            code.appendChild(document.createTextNode('\u200B'));
+            range.insertNode(code);
+
+            const newRange = document.createRange();
+            newRange.setStart(code.firstChild, 1);
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        } else {
+            // Wrap selection in code
+            range.deleteContents();
+            code.textContent = selectedText;
+            range.insertNode(code);
+
+            const newRange = document.createRange();
+            newRange.selectNodeContents(code);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        }
+    }
     setNoteDirty(true);
-    return true;
 }
 
 function insertCheckbox() {
-    document.execCommand('insertHTML', false, '<label class="note-inline-checkbox"><input type="checkbox"> </label>');
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+
+    // Create the checkbox container (using span so text clicks don't toggle)
+    const container = document.createElement('span');
+    container.className = 'note-inline-checkbox';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    container.appendChild(checkbox);
+    container.appendChild(document.createTextNode(' '));
+
+    // Insert at cursor position
+    range.deleteContents();
+    range.insertNode(container);
+
+    // Position cursor after the checkbox (inside the container, after the space)
+    const newRange = document.createRange();
+    newRange.setStartAfter(container.lastChild);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
 
     // Bind the newly inserted checkbox
-    setTimeout(() => {
-        const editor = document.getElementById('note-editor');
-        if (editor) {
-            bindNoteCheckboxes();
-        }
-    }, 0);
+    setTimeout(() => bindNoteCheckboxes(), 0);
 }
 
 function bindNoteCheckboxes() {
@@ -2908,7 +3229,8 @@ function handleCheckboxChange(e) {
 
 function updateNoteToolbarStates() {
     const toolbar = document.getElementById('note-toolbar');
-    if (!toolbar) return;
+    const editor = document.getElementById('note-editor');
+    if (!toolbar || !editor) return;
 
     // Update checkbox button state
     const checkboxBtn = toolbar.querySelector('[data-command="checkbox"]');
@@ -2920,60 +3242,78 @@ function updateNoteToolbarStates() {
         }
     }
 
-    // Update other formatting buttons based on current selection
-    const commands = ['bold', 'italic', 'underline', 'strikeThrough', 'insertUnorderedList', 'insertOrderedList'];
-    commands.forEach(cmd => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const node = sel.focusNode;
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+
+    // Map commands to tag names for detection
+    const formatMap = {
+        'bold': ['STRONG', 'B'],
+        'italic': ['EM', 'I'],
+        'underline': ['U'],
+        'strikeThrough': ['S', 'STRIKE', 'DEL'],
+        'insertUnorderedList': ['UL'],
+        'insertOrderedList': ['OL'],
+        'code': ['CODE'],
+        'quote': ['BLOCKQUOTE']
+    };
+
+    // Check each formatting command
+    Object.keys(formatMap).forEach(cmd => {
         const btn = toolbar.querySelector(`[data-command="${cmd}"]`);
-        if (btn) {
-            try {
-                const isActive = document.queryCommandState(cmd);
-                if (isActive) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            } catch (e) {
-                // Some commands might not be supported
-                btn.classList.remove('active');
+        if (!btn) return;
+
+        const tags = formatMap[cmd];
+        let isActive = false;
+
+        // Check if current selection is inside any of the tags
+        for (const tag of tags) {
+            if (el && findAncestorInEditor(el, tag, editor)) {
+                isActive = true;
+                break;
             }
+        }
+
+        if (isActive) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
         }
     });
-
-    // Check for code and quote formatting
-    const sel = window.getSelection ? window.getSelection() : null;
-    if (sel && sel.rangeCount > 0) {
-        const node = sel.focusNode;
-        const el = node && (node.nodeType === 1 ? node : node.parentElement);
-
-        const codeBtn = toolbar.querySelector('[data-command="code"]');
-        if (codeBtn) {
-            const inCode = el && findAncestor(el, 'CODE');
-            if (inCode) {
-                codeBtn.classList.add('active');
-            } else {
-                codeBtn.classList.remove('active');
-            }
-        }
-
-        const quoteBtn = toolbar.querySelector('[data-command="quote"]');
-        if (quoteBtn) {
-            const inQuote = el && findAncestor(el, 'BLOCKQUOTE');
-            if (inQuote) {
-                quoteBtn.classList.add('active');
-            } else {
-                quoteBtn.classList.remove('active');
-            }
-        }
-    }
 }
 
 function handleNoteEditorKeydown(e) {
     const editor = document.getElementById('note-editor');
-    if (!editor || e.key !== 'Enter') return;
+    if (!editor) return;
+
+    // Handle keyboard shortcuts for formatting (Ctrl/Cmd + B/I/U)
+    const isMeta = e.metaKey || e.ctrlKey;
+    if (isMeta && !e.shiftKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'b') {
+            e.preventDefault();
+            applyNoteCommand('bold');
+            return;
+        }
+        if (key === 'i') {
+            e.preventDefault();
+            applyNoteCommand('italic');
+            return;
+        }
+        if (key === 'u') {
+            e.preventDefault();
+            applyNoteCommand('underline');
+            return;
+        }
+    }
+
+    if (e.key !== 'Enter') return;
 
     // Handle checkbox mode
     if (notesState.checkboxMode) {
-        const sel = window.getSelection ? window.getSelection() : null;
+        const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
 
         // Check if we're on an empty line with just a checkbox
@@ -2997,15 +3337,33 @@ function handleNoteEditorKeydown(e) {
                 updateNoteToolbarStates();
 
                 // Remove the empty checkbox and insert a new line
+                const br = document.createElement('br');
+                label.parentNode.insertBefore(br, label);
                 label.remove();
-                document.execCommand('insertParagraph', false, null);
+
+                // Position cursor after the br
+                const newRange = document.createRange();
+                newRange.setStartAfter(br);
+                newRange.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(newRange);
                 return;
             }
         }
 
         // Not an empty line, insert new checkbox on next line
         e.preventDefault();
-        document.execCommand('insertParagraph', false, null);
+
+        // Insert a line break and then the checkbox
+        const br = document.createElement('br');
+        range.insertNode(br);
+
+        const newRange = document.createRange();
+        newRange.setStartAfter(br);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+
         insertCheckbox();
         setNoteDirty(true);
     }

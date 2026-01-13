@@ -628,18 +628,16 @@ function escapeHtml(text) {
 
 let qaDragState = {
     draggingEl: null,
-    dragMoved: false
+    dragMoved: false,
+    orderChanged: false
 };
 
 let qaTouchState = {
     active: false,
     card: null,
     clone: null,
-    startX: 0,
-    startY: 0,
     offsetX: 0,
-    offsetY: 0,
-    longPressTimer: null
+    offsetY: 0
 };
 
 let qaEditMode = {
@@ -647,8 +645,6 @@ let qaEditMode = {
     longPressTimer: null,
     longPressTriggered: false,
     touchStart: null,
-    pendingTouch: null,
-    pendingCard: null,
     currentDragCard: null
 };
 
@@ -666,32 +662,74 @@ function initQuickAccessEditMode() {
 
         if (card.dataset.qaInit !== 'true') {
             card.dataset.qaInit = 'true';
-            card.addEventListener('click', preventQuickAccessNavigation);
-            card.addEventListener('touchstart', handleQuickAccessTouchStart, { passive: false });
-            card.addEventListener('touchmove', handleQuickAccessTouchMove, { passive: false });
-            card.addEventListener('touchend', handleQuickAccessTouchEnd);
+            // Desktop events
+            card.addEventListener('click', preventQuickAccessNavigation, true);
             card.addEventListener('mousedown', handleQuickAccessMouseDown);
             card.addEventListener('mouseup', handleQuickAccessMouseUp);
             card.addEventListener('mouseleave', handleQuickAccessMouseUp);
+            card.addEventListener('dragstart', handleQuickAccessDragStart);
+            card.addEventListener('dragend', handleQuickAccessDragEnd);
+            card.addEventListener('dragover', handleQuickAccessDragOver);
+            card.addEventListener('drop', handleQuickAccessDrop);
+
+            // Mobile touch events - unified handler
+            card.addEventListener('touchstart', handleQuickAccessTouchStart, { passive: false });
+            card.addEventListener('touchmove', handleQuickAccessTouchMove, { passive: false });
+            card.addEventListener('touchend', handleQuickAccessTouchEnd);
+            card.addEventListener('touchcancel', handleQuickAccessTouchEnd);
         }
     });
 
     const doneBtn = document.getElementById('quick-access-done-btn');
-    if (doneBtn) {
+    if (doneBtn && !doneBtn.dataset.qaInit) {
+        doneBtn.dataset.qaInit = 'true';
         doneBtn.addEventListener('click', exitQuickAccessEditMode);
     }
 
-    document.addEventListener('click', (e) => {
-        if (!qaEditMode.active) return;
-        if (e.target.closest('.quick-access-card')) return;
-        if (e.target.closest('#quick-access-done-btn')) return;
-        if (e.target.closest('#add-quick-access-modal')) return;
-        exitQuickAccessEditMode();
-    });
+    // Global click handler to exit edit mode when clicking outside
+    if (!grid.dataset.qaGlobalInit) {
+        grid.dataset.qaGlobalInit = 'true';
+
+        // Grid-level dragover for handling drops in empty areas
+        grid.addEventListener('dragover', (e) => {
+            if (!qaEditMode.active || !qaEditMode.currentDragCard) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const draggingCard = qaEditMode.currentDragCard;
+            const targetPosition = getQuickAccessInsertPosition(grid, e.clientX, e.clientY, draggingCard);
+
+            if (targetPosition.insertBefore) {
+                if (targetPosition.insertBefore !== draggingCard &&
+                    targetPosition.insertBefore !== draggingCard.nextElementSibling) {
+                    grid.insertBefore(draggingCard, targetPosition.insertBefore);
+                    qaDragState.dragMoved = true;
+                }
+            } else if (targetPosition.append) {
+                const lastChild = grid.lastElementChild;
+                if (lastChild !== draggingCard) {
+                    grid.appendChild(draggingCard);
+                    qaDragState.dragMoved = true;
+                }
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!qaEditMode.active) return;
+            if (e.target.closest('.quick-access-card')) return;
+            if (e.target.closest('#quick-access-done-btn')) return;
+            if (e.target.closest('#add-quick-access-modal')) return;
+            if (e.target.closest('.modal')) return;
+            exitQuickAccessEditMode();
+        });
+    }
 }
 
 function enterQuickAccessEditMode() {
+    if (qaEditMode.active) return;
     qaEditMode.active = true;
+    qaDragState.orderChanged = false;
+
     const grid = document.getElementById('quick-access-grid');
     const doneBtn = document.getElementById('quick-access-done-btn');
     if (grid) {
@@ -704,11 +742,12 @@ function enterQuickAccessEditMode() {
     if (doneBtn) {
         doneBtn.style.display = 'inline-flex';
     }
-    initQuickAccessDrag();
 }
 
 function exitQuickAccessEditMode() {
+    if (!qaEditMode.active) return;
     qaEditMode.active = false;
+
     const grid = document.getElementById('quick-access-grid');
     const doneBtn = document.getElementById('quick-access-done-btn');
     if (grid) {
@@ -717,15 +756,28 @@ function exitQuickAccessEditMode() {
             card.removeAttribute('draggable');
             card.classList.remove('dragging');
             card.classList.remove('wiggle');
+            card.style.opacity = '';
         });
     }
     if (doneBtn) {
         doneBtn.style.display = 'none';
     }
+
+    // Clean up any leftover clones
+    document.querySelectorAll('.touch-drag-clone').forEach(el => el.remove());
+
+    // Save order if changed
+    if (qaDragState.orderChanged) {
+        saveQuickAccessOrder();
+    }
+
     qaDragState.draggingEl = null;
     qaDragState.dragMoved = false;
+    qaDragState.orderChanged = false;
     qaEditMode.currentDragCard = null;
-    saveQuickAccessOrder();
+    qaTouchState.active = false;
+    qaTouchState.card = null;
+    qaTouchState.clone = null;
 }
 
 async function saveQuickAccessOrder() {
@@ -748,51 +800,42 @@ async function saveQuickAccessOrder() {
 }
 
 function preventQuickAccessNavigation(e) {
-    if (qaEditMode.active || qaDragState.dragMoved) {
+    if (qaEditMode.active || qaDragState.dragMoved || qaTouchState.active) {
         e.preventDefault();
         e.stopPropagation();
     }
 }
 
-function initQuickAccessDrag() {
-    const grid = document.getElementById('quick-access-grid');
-    if (!grid) return;
-
-    const cards = grid.querySelectorAll('.quick-access-card.qa-draggable');
-    cards.forEach(card => {
-        if (card.dataset.qaDragInit === 'true') return;
-        card.dataset.qaDragInit = 'true';
-
-        // Desktop drag events
-        card.addEventListener('dragstart', handleQuickAccessDragStart);
-        card.addEventListener('dragend', handleQuickAccessDragEnd);
-        card.addEventListener('dragover', handleQuickAccessDragOver);
-        card.addEventListener('drop', handleQuickAccessDrop);
-
-        // Mobile touch drag events
-        card.addEventListener('touchstart', handleQuickAccessTouchDragStart, { passive: false });
-        card.addEventListener('touchmove', handleQuickAccessTouchDragMove, { passive: false });
-        card.addEventListener('touchend', handleQuickAccessTouchDragEnd);
-    });
-}
-
+// Desktop drag-and-drop handlers
 function handleQuickAccessDragStart(e) {
-    if (!qaEditMode.active) return;
+    if (!qaEditMode.active) {
+        e.preventDefault();
+        return;
+    }
     qaEditMode.currentDragCard = e.currentTarget;
     e.currentTarget.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', '');
+    e.dataTransfer.setData('text/plain', e.currentTarget.dataset.id || '');
+
+    // Use a timeout to allow the drag image to be created
+    setTimeout(() => {
+        if (qaEditMode.currentDragCard) {
+            qaEditMode.currentDragCard.style.opacity = '0.4';
+        }
+    }, 0);
 }
 
-function handleQuickAccessDragEnd() {
+function handleQuickAccessDragEnd(e) {
     if (qaEditMode.currentDragCard) {
         qaEditMode.currentDragCard.classList.remove('dragging');
+        qaEditMode.currentDragCard.style.opacity = '';
         qaEditMode.currentDragCard = null;
     }
     if (qaDragState.dragMoved) {
+        qaDragState.orderChanged = true;
         saveQuickAccessOrder();
     }
-    setTimeout(() => { qaDragState.dragMoved = false; }, 0);
+    setTimeout(() => { qaDragState.dragMoved = false; }, 50);
 }
 
 function handleQuickAccessDragOver(e) {
@@ -801,176 +844,258 @@ function handleQuickAccessDragOver(e) {
     e.dataTransfer.dropEffect = 'move';
 
     const grid = document.getElementById('quick-access-grid');
-    const afterElement = getQuickAccessDragAfterElement(grid, e.clientX, e.clientY);
     const draggingCard = qaEditMode.currentDragCard;
+    const targetPosition = getQuickAccessInsertPosition(grid, e.clientX, e.clientY, draggingCard);
 
-    if (afterElement == null) {
-        grid.appendChild(draggingCard);
-    } else if (afterElement !== draggingCard) {
-        grid.insertBefore(draggingCard, afterElement);
+    if (targetPosition.insertBefore) {
+        if (targetPosition.insertBefore !== draggingCard &&
+            targetPosition.insertBefore !== draggingCard.nextElementSibling) {
+            grid.insertBefore(draggingCard, targetPosition.insertBefore);
+            qaDragState.dragMoved = true;
+        }
+    } else if (targetPosition.append) {
+        const lastChild = grid.lastElementChild;
+        if (lastChild !== draggingCard) {
+            grid.appendChild(draggingCard);
+            qaDragState.dragMoved = true;
+        }
     }
-    qaDragState.dragMoved = true;
 }
 
 function handleQuickAccessDrop(e) {
     e.preventDefault();
 }
 
-function getQuickAccessDragAfterElement(container, x, y) {
-    const draggableElements = [...container.querySelectorAll('.quick-access-card.qa-draggable:not(.dragging)')];
-    if (draggableElements.length === 0) {
-        return null;
-    }
+// Get the correct insert position, ensuring we never place before system items
+function getQuickAccessInsertPosition(container, x, y, excludeCard) {
+    const grid = container;
+    const systemItems = [...grid.querySelectorAll('.quick-access-card.system-item')];
+    const draggableCards = [...grid.querySelectorAll('.quick-access-card.qa-draggable')]
+        .filter(card => card !== excludeCard);
 
-    for (const element of draggableElements) {
-        const box = element.getBoundingClientRect();
-        const centerX = box.left + box.width / 2;
+    // Find the last system item to ensure we never insert before it
+    const lastSystemItem = systemItems.length > 0 ? systemItems[systemItems.length - 1] : null;
 
-        if (y < box.top) {
-            return element;
+    // Find where to insert based on position
+    let insertBefore = null;
+
+    for (const card of draggableCards) {
+        const rect = card.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+
+        // Check if the cursor is in the row above this card
+        if (y < rect.top) {
+            insertBefore = card;
+            break;
         }
 
-        if (y >= box.top && y <= box.bottom) {
+        // Check if cursor is on the same row (within vertical bounds)
+        if (y >= rect.top && y <= rect.bottom) {
             if (x < centerX) {
-                return element;
+                insertBefore = card;
+                break;
             }
         }
     }
 
-    return null;
+    // If insertBefore is null, append to end
+    if (!insertBefore) {
+        return { append: true };
+    }
+
+    // Make sure we don't insert before system items
+    if (lastSystemItem) {
+        const systemRect = lastSystemItem.getBoundingClientRect();
+        const insertRect = insertBefore.getBoundingClientRect();
+
+        // If the target position is before or at the system item row, insert after system items
+        if (insertRect.top <= systemRect.bottom && insertRect.left <= systemRect.right) {
+            // Find the first draggable card after system items
+            const firstDraggable = grid.querySelector('.quick-access-card.qa-draggable');
+            if (firstDraggable && firstDraggable !== excludeCard) {
+                return { insertBefore: firstDraggable };
+            }
+            return { append: true };
+        }
+    }
+
+    return { insertBefore };
 }
 
+// Mobile touch handlers - unified approach
 function handleQuickAccessTouchStart(e) {
     if (!e.touches || e.touches.length !== 1) return;
-    if (qaEditMode.active) return;
+
     const card = e.currentTarget;
     const touch = e.touches[0];
-    qaEditMode.longPressTriggered = false;
+
     qaEditMode.touchStart = { x: touch.clientX, y: touch.clientY };
-    qaEditMode.pendingTouch = { x: touch.clientX, y: touch.clientY };
-    qaEditMode.pendingCard = card;
-    qaEditMode.longPressTimer = setTimeout(() => {
-        qaEditMode.longPressTimer = null;
-        qaEditMode.longPressTriggered = true;
-        enterQuickAccessEditMode();
-        if (qaEditMode.pendingCard && qaEditMode.pendingTouch) {
-            startQuickAccessTouchDrag(qaEditMode.pendingCard, qaEditMode.pendingTouch);
-            qaEditMode.pendingCard = null;
-            qaEditMode.pendingTouch = null;
-        }
-    }, 1000);
+    qaEditMode.longPressTriggered = false;
+
+    // Clear any existing timer
+    if (qaEditMode.longPressTimer) {
+        clearTimeout(qaEditMode.longPressTimer);
+    }
+
+    if (qaEditMode.active) {
+        // Already in edit mode - start drag immediately
+        e.preventDefault();
+        startQuickAccessTouchDrag(card, touch.clientX, touch.clientY);
+    } else {
+        // Not in edit mode - wait for long press
+        qaEditMode.longPressTimer = setTimeout(() => {
+            qaEditMode.longPressTimer = null;
+            qaEditMode.longPressTriggered = true;
+
+            // Enter edit mode
+            enterQuickAccessEditMode();
+
+            // Start dragging this card
+            startQuickAccessTouchDrag(card, touch.clientX, touch.clientY);
+        }, 600); // 600ms long press
+    }
 }
 
 function handleQuickAccessTouchMove(e) {
     if (!e.touches || e.touches.length !== 1) return;
-    if (qaEditMode.active) return;
-    if (!qaEditMode.longPressTimer || !qaEditMode.touchStart) return;
+
     const touch = e.touches[0];
-    qaEditMode.pendingTouch = { x: touch.clientX, y: touch.clientY };
-    const dx = Math.abs(touch.clientX - qaEditMode.touchStart.x);
-    const dy = Math.abs(touch.clientY - qaEditMode.touchStart.y);
-    if (dx > 10 || dy > 10) {
-        clearTimeout(qaEditMode.longPressTimer);
-        qaEditMode.longPressTimer = null;
+
+    // If we're actively dragging
+    if (qaTouchState.active && qaTouchState.clone) {
+        e.preventDefault();
+
+        // Move the clone
+        const targetX = touch.clientX - qaTouchState.offsetX;
+        const targetY = touch.clientY - qaTouchState.offsetY;
+        qaTouchState.clone.style.transform = `translate3d(${targetX}px, ${targetY}px, 0)`;
+
+        // Find what card we're over and reorder
+        const grid = document.getElementById('quick-access-grid');
+        const targetPosition = getQuickAccessInsertPosition(grid, touch.clientX, touch.clientY, qaTouchState.card);
+
+        if (targetPosition.insertBefore) {
+            if (targetPosition.insertBefore !== qaTouchState.card &&
+                targetPosition.insertBefore !== qaTouchState.card.nextElementSibling) {
+                grid.insertBefore(qaTouchState.card, targetPosition.insertBefore);
+                qaDragState.orderChanged = true;
+            }
+        } else if (targetPosition.append) {
+            const lastChild = grid.lastElementChild;
+            if (lastChild !== qaTouchState.card) {
+                grid.appendChild(qaTouchState.card);
+                qaDragState.orderChanged = true;
+            }
+        }
+        return;
+    }
+
+    // Not dragging yet - check if we should cancel long press
+    if (qaEditMode.longPressTimer && qaEditMode.touchStart) {
+        const dx = Math.abs(touch.clientX - qaEditMode.touchStart.x);
+        const dy = Math.abs(touch.clientY - qaEditMode.touchStart.y);
+
+        if (dx > 10 || dy > 10) {
+            clearTimeout(qaEditMode.longPressTimer);
+            qaEditMode.longPressTimer = null;
+        }
     }
 }
 
 function handleQuickAccessTouchEnd(e) {
+    // Clear long press timer
     if (qaEditMode.longPressTimer) {
         clearTimeout(qaEditMode.longPressTimer);
         qaEditMode.longPressTimer = null;
     }
-    if (!qaEditMode.active && qaEditMode.longPressTriggered) {
+
+    // End drag if active
+    if (qaTouchState.active) {
+        e.preventDefault();
+        endQuickAccessTouchDrag();
+        return;
+    }
+
+    // Prevent navigation if long press was triggered
+    if (qaEditMode.longPressTriggered) {
         e.preventDefault();
         qaEditMode.longPressTriggered = false;
     }
 }
 
-function handleQuickAccessTouchDragStart(e) {
-    if (!qaEditMode.active) return;
-    if (!e.touches || !e.touches.length) return;
-    const card = e.currentTarget;
-    const touch = e.touches[0];
-    startQuickAccessTouchDrag(card, { x: touch.clientX, y: touch.clientY });
-}
+function startQuickAccessTouchDrag(card, touchX, touchY) {
+    if (qaTouchState.active) return; // Already dragging
 
-function startQuickAccessTouchDrag(card, touch) {
     const rect = card.getBoundingClientRect();
+
+    // Create clone for dragging visual
     const clone = card.cloneNode(true);
     clone.classList.add('touch-drag-clone');
+    clone.classList.remove('wiggle');
     clone.style.width = `${rect.width}px`;
     clone.style.height = `${rect.height}px`;
-    clone.style.left = `0px`;
-    clone.style.top = `0px`;
 
     qaTouchState.active = true;
-    qaTouchState.clone = clone;
-    qaTouchState.offsetX = touch.x - rect.left;
-    qaTouchState.offsetY = touch.y - rect.top;
     qaTouchState.card = card;
+    qaTouchState.clone = clone;
+    qaTouchState.offsetX = touchX - rect.left;
+    qaTouchState.offsetY = touchY - rect.top;
 
+    // Style the original card
     card.classList.add('dragging');
-    card.style.opacity = '0.35';
-    document.body.appendChild(clone);
+    card.style.opacity = '0.3';
 
-    const startX = touch.x - qaTouchState.offsetX;
-    const startY = touch.y - qaTouchState.offsetY;
+    // Position and add clone
+    document.body.appendChild(clone);
+    const startX = touchX - qaTouchState.offsetX;
+    const startY = touchY - qaTouchState.offsetY;
     clone.style.transform = `translate3d(${startX}px, ${startY}px, 0)`;
 }
 
-function handleQuickAccessTouchDragMove(e) {
-    if (!qaTouchState.active || !qaTouchState.clone) return;
-    e.preventDefault();
-    const touch = e.touches[0];
-    const targetX = touch.clientX - qaTouchState.offsetX;
-    const targetY = touch.clientY - qaTouchState.offsetY;
-    qaTouchState.clone.style.transform = `translate3d(${targetX}px, ${targetY}px, 0)`;
-
-    const grid = document.getElementById('quick-access-grid');
-    const target = getQuickAccessCardFromPoint(touch.clientX, touch.clientY, grid);
-    if (target && target !== qaTouchState.card) {
-        const rect = target.getBoundingClientRect();
-        const isAfter = touch.clientY > rect.top + rect.height / 2 ||
-            (touch.clientY >= rect.top && touch.clientY <= rect.bottom && touch.clientX > rect.left + rect.width / 2);
-        if (isAfter) {
-            grid.insertBefore(qaTouchState.card, target.nextSibling);
-        } else {
-            grid.insertBefore(qaTouchState.card, target);
-        }
-    }
-}
-
-function handleQuickAccessTouchDragEnd(e) {
-    if (!qaTouchState.active) return;
+function endQuickAccessTouchDrag() {
+    // Remove clone
     if (qaTouchState.clone) {
         qaTouchState.clone.remove();
     }
+
+    // Restore original card
     if (qaTouchState.card) {
         qaTouchState.card.classList.remove('dragging');
         qaTouchState.card.style.opacity = '';
     }
+
+    // Save order if changed
+    if (qaDragState.orderChanged) {
+        saveQuickAccessOrder();
+    }
+
+    // Reset state
     qaTouchState = {
         active: false,
         card: null,
         clone: null,
-        startX: 0,
-        startY: 0,
         offsetX: 0,
-        offsetY: 0,
-        longPressTimer: null
+        offsetY: 0
     };
-    saveQuickAccessOrder();
-    e.preventDefault();
+    qaDragState.orderChanged = false;
 }
 
-function handleQuickAccessMouseDown() {
+// Desktop mouse long-press handlers
+function handleQuickAccessMouseDown(e) {
+    // Don't trigger on edit/delete buttons
+    if (e.target.closest('.quick-access-edit') || e.target.closest('.quick-access-delete')) {
+        return;
+    }
+
     if (qaEditMode.active) return;
+
     qaEditMode.longPressTriggered = false;
     qaEditMode.longPressTimer = setTimeout(() => {
         qaEditMode.longPressTimer = null;
         qaEditMode.longPressTriggered = true;
         enterQuickAccessEditMode();
-    }, 1000);
+    }, 600);
 }
 
 function handleQuickAccessMouseUp() {
@@ -978,14 +1103,6 @@ function handleQuickAccessMouseUp() {
         clearTimeout(qaEditMode.longPressTimer);
         qaEditMode.longPressTimer = null;
     }
-}
-
-function getQuickAccessCardFromPoint(x, y, grid) {
-    const el = document.elementFromPoint(x, y);
-    if (!el) return null;
-    const card = el.closest('.quick-access-card.qa-draggable');
-    if (!card || !grid.contains(card)) return null;
-    return card;
 }
 
 // Go to today's calendar in day view

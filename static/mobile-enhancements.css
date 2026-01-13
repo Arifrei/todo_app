@@ -131,7 +131,8 @@ textarea,
     /* Tighten add-task modal spacing so the full form fits on screen */
     #add-item-modal .modal-content {
         padding: 1rem;
-        max-height: 92dvh;
+        max-height: calc(100vh - 2rem);
+        max-height: calc(100dvh - 2rem);
     }
 
     #add-item-modal h2 {
@@ -168,6 +169,23 @@ textarea,
     #add-item-modal .modal-actions .btn {
         padding: 0.6rem 1rem;
         font-size: 0.9rem;
+    }
+
+    /* Stabilize add-task modal rendering when the keyboard opens in WebView */
+    #add-item-modal {
+        align-items: flex-start;
+    }
+
+    #add-item-modal .modal-content {
+        transform: none;
+        transition: opacity 0.2s ease;
+        margin: 1rem 0;
+        -webkit-overflow-scrolling: touch;
+        will-change: auto;
+    }
+
+    #add-item-modal.active .modal-content {
+        transform: none;
     }
 }
 

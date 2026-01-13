@@ -3880,8 +3880,27 @@ body.note-selection-mode-active .notes-sidebar-header {
 .note-editor-surface * {
     color: inherit;
     font-family: inherit;
-    font-weight: inherit;
-    font-style: inherit;
+}
+
+/* Text formatting styles */
+.note-editor-surface strong,
+.note-editor-surface b {
+    font-weight: bold;
+}
+
+.note-editor-surface em,
+.note-editor-surface i {
+    font-style: italic;
+}
+
+.note-editor-surface u {
+    text-decoration: underline;
+}
+
+.note-editor-surface s,
+.note-editor-surface strike,
+.note-editor-surface del {
+    text-decoration: line-through;
 }
 
 .note-editor-surface:empty:before {
@@ -7101,10 +7120,16 @@ section.card.calendar-board,
     animation: wiggle 0.25s ease-in-out infinite alternate;
 }
 
+.quick-access-grid.edit-mode .quick-access-card.qa-draggable.dragging {
+    animation: none;
+}
+
 .quick-access-card.dragging {
-    opacity: 0.5;
-    transform: scale(1.03);
-    box-shadow: var(--shadow-xl);
+    opacity: 0.3 !important;
+    transform: scale(0.95);
+    box-shadow: var(--shadow-sm);
+    background: var(--primary-light);
+    border: 2px dashed var(--primary-color);
 }
 
 .quick-access-card.touch-drag-clone {
@@ -7113,15 +7138,22 @@ section.card.calendar-board,
     pointer-events: none;
     margin: 0;
     opacity: 0.95;
-    box-shadow: var(--shadow-xl);
-    transform: translate3d(0, 0, 0);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
     will-change: transform;
+    animation: none !important;
+    transform-origin: center center;
+    border: 2px solid var(--primary-color);
 }
 
 .quick-access-card:hover {
     transform: translateY(-4px);
     box-shadow: var(--shadow-lg);
     border-color: var(--primary-color);
+}
+
+/* Disable hover effects during edit mode */
+.quick-access-grid.edit-mode .quick-access-card:hover {
+    transform: none;
 }
 
 .quick-access-card.system-item {
