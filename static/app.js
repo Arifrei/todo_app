@@ -12,6 +12,14 @@ const confirmMessage = document.getElementById('confirm-message');
 const confirmYesButton = document.getElementById('confirm-yes-button');
 let pendingConfirm = null;
 
+// --- Utility Functions ---
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // --- Toast Notification System ---
 function showToast(message, type = 'info', duration = 4000) {
     // Ensure toast container exists
@@ -62,6 +70,7 @@ function showToast(message, type = 'info', duration = 4000) {
 let currentDragId = null;
 let currentDragBlock = [];
 let currentDragIsPhase = false;
+let currentDragPhaseId = null;
 let longPressTimer = null;
 let longPressTriggered = false;
 let touchStartX = 0;
@@ -75,6 +84,7 @@ let touchDragActive = false;
 let touchDragId = null;
 let touchDragBlock = [];
 let touchDragIsPhase = false;
+let touchDragPhaseId = null;
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false };
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
@@ -610,11 +620,35 @@ async function createAndLinkNote() {
 
 async function updateLinkedTaskStatus(taskId, status) {
     try {
-        await fetch(`/api/items/${taskId}`, {
+        const res = await fetch(`/api/items/${taskId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status })
         });
+        if (!res.ok) throw new Error('Failed to update task status');
+
+        let changed = false;
+        if (Array.isArray(calendarState.events)) {
+            calendarState.events = calendarState.events.map(ev => {
+                if (ev.is_task_link && ev.task_id === taskId) {
+                    if (ev.status !== status) changed = true;
+                    return { ...ev, status };
+                }
+                return ev;
+            });
+        }
+        if (calendarState.selectedDay && calendarState.monthEventsByDay && Array.isArray(calendarState.monthEventsByDay[calendarState.selectedDay])) {
+            calendarState.monthEventsByDay[calendarState.selectedDay] = calendarState.monthEventsByDay[calendarState.selectedDay].map(ev => {
+                if (ev.is_task_link && ev.task_id === taskId) {
+                    return { ...ev, status };
+                }
+                return ev;
+            });
+        }
+        if (changed) {
+            renderCalendarEvents();
+            if (calendarState.monthCursor) renderCalendarMonth();
+        }
     } catch (e) {
         console.error('Error updating task status:', e);
     }
@@ -883,13 +917,15 @@ function applyTaskFilter() {
     const items = Array.from(document.querySelectorAll('.task-item'));
     if (!items.length) return;
     const phaseVisibility = new Map();
+    const tagFiltering = selectedTagFilters.size > 0;
 
     items.forEach(item => {
         if (item.classList.contains('phase')) return;
         const status = item.dataset.status;
         const matchesStatus = currentTaskFilter === 'all' || status === currentTaskFilter;
         const matchesTags = itemMatchesTagFilter(item);
-        const matches = matchesStatus && matchesTags;
+        const hideDoneForTags = tagFiltering && currentTaskFilter !== 'done' && status === 'done';
+        const matches = matchesStatus && matchesTags && !hideDoneForTags;
         item.classList.toggle('hidden-by-filter', !matches);
         if (matches) {
             const phaseParent = item.dataset.phaseParent;
@@ -903,6 +939,51 @@ function applyTaskFilter() {
         const showPhase = (currentTaskFilter === 'all' && selectedTagFilters.size === 0) || phaseVisibility.get(phaseId);
         item.classList.toggle('hidden-by-filter', !showPhase);
     });
+
+    const hideDoneBars = tagFiltering && currentTaskFilter !== 'done';
+    document.querySelectorAll('.phase-done-bar, .phase-done-container').forEach(el => {
+        el.classList.toggle('hidden-by-filter', hideDoneBars);
+    });
+}
+
+function shouldMoveLinkedNotesToFooter() {
+    return window.matchMedia && window.matchMedia('(max-width: 1024px)').matches;
+}
+
+function repositionLinkedNoteChips() {
+    const moveToFooter = shouldMoveLinkedNotesToFooter();
+    document.querySelectorAll('.task-item').forEach(item => {
+        const footer = item.querySelector('.task-footer');
+        const meta = item.querySelector('.task-meta-lite');
+        if (!footer) return;
+
+        let footerNotes = footer.querySelector('.task-footer-notes');
+        if (moveToFooter) {
+            if (!footerNotes) {
+                footerNotes = document.createElement('div');
+                footerNotes.className = 'task-footer-notes';
+                footer.insertBefore(footerNotes, footer.firstChild);
+            }
+            if (meta) {
+                meta.querySelectorAll('.linked-note-chip').forEach(chip => {
+                    footerNotes.appendChild(chip);
+                });
+            }
+            if (footerNotes.children.length === 0) {
+                footerNotes.remove();
+            }
+            footer.classList.toggle('has-footer-notes', !!footer.querySelector('.task-footer-notes'));
+        } else {
+            if (!meta || !footerNotes) return;
+            footerNotes.querySelectorAll('.linked-note-chip').forEach(chip => {
+                meta.appendChild(chip);
+            });
+            if (footerNotes.children.length === 0) {
+                footerNotes.remove();
+            }
+            footer.classList.remove('has-footer-notes');
+        }
+    });
 }
 
 function toggleTaskFilterSubmenu(kind, event) {
@@ -911,14 +992,15 @@ function toggleTaskFilterSubmenu(kind, event) {
     if (!menu) return;
     const statusMenu = document.getElementById('task-filter-submenu-status');
     const tagsMenu = document.getElementById('task-filter-submenu-tags');
-    if (!statusMenu || !tagsMenu) return;
+    if (!statusMenu) return;
     const openStatus = statusMenu.classList.contains('show');
-    const openTags = tagsMenu.classList.contains('show');
+    const openTags = tagsMenu ? tagsMenu.classList.contains('show') : false;
 
     if (kind === 'status') {
         statusMenu.classList.toggle('show', !openStatus);
-        tagsMenu.classList.remove('show');
+        if (tagsMenu) tagsMenu.classList.remove('show');
     } else if (kind === 'tags') {
+        if (!tagsMenu) return;
         tagsMenu.classList.toggle('show', !openTags);
         statusMenu.classList.remove('show');
     }
@@ -1021,8 +1103,20 @@ function closeCreateModal() {
 function openAddItemModal(phaseId = null, mode = 'task') {
     if (!addItemModal) return;
     addItemModal.classList.add('active');
+
+    // Delay focus to allow modal animation to complete and prevent keyboard flicker
     const contentInput = document.getElementById('item-content');
-    if (contentInput) contentInput.focus();
+    if (contentInput) {
+        setTimeout(() => {
+            contentInput.focus();
+            // On mobile, scroll input into view after keyboard opens
+            if (window.innerWidth <= 768) {
+                setTimeout(() => {
+                    contentInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 300);
+            }
+        }, 150);
+    }
 
     const phaseSelect = document.getElementById('item-phase-select');
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -1306,6 +1400,14 @@ function renderMoveRoot(itemType = 'task') {
         actions.push({
             label: `<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
             handler: () => pushMoveView(() => renderPhasePicker(CURRENT_LIST_ID, typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'This project'))
+        });
+    } else if (effectiveType === 'project') {
+        actions.push({
+            label: '<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move to main page',
+            handler: () => {
+                moveSelectedDestination = { destination_hub_id: null, label: 'Main page' };
+                moveItem();
+            }
         });
     }
     actions.push({
@@ -1961,8 +2063,43 @@ async function bulkUnpinNotes() {
 // --- Drag & Drop Reorder ---
 
 // Task list and pinned notes need different drag logic; keep these helpers distinct.
-function getTaskDragAfterElement(container, y) {
-    const elements = [...container.querySelectorAll('.task-item:not(.dragging):not(.drag-placeholder)')];
+function getDoneBarForY(container, y) {
+    const bars = [...container.querySelectorAll('.phase-done-bar')];
+    for (const bar of bars) {
+        const rect = bar.getBoundingClientRect();
+        if (y < rect.top) continue;
+        const phaseId = bar.getAttribute('data-phase-id');
+        const doneBox = container.querySelector(`.phase-done-container[data-phase-id='${phaseId}']`);
+        let bottom = rect.bottom;
+        if (doneBox) {
+            const boxRect = doneBox.getBoundingClientRect();
+            bottom = Math.max(bottom, boxRect.bottom);
+        }
+        if (y <= bottom) return bar;
+    }
+    return null;
+}
+
+function getPhaseEndAnchor(container, phaseId) {
+    if (phaseId) {
+        const doneBar = container.querySelector(`.phase-done-bar[data-phase-id='${phaseId}']`);
+        if (doneBar) return doneBar;
+        const phaseEl = container.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
+        if (!phaseEl) return null;
+        let cursor = phaseEl.nextElementSibling;
+        while (cursor && !cursor.classList.contains('phase')) {
+            cursor = cursor.nextElementSibling;
+        }
+        return cursor || null;
+    }
+    return container.querySelector('.task-item.phase') || null;
+}
+
+function getTaskDragAfterElement(container, y, phaseId) {
+    const elements = [...container.querySelectorAll('.task-item:not(.dragging):not(.drag-placeholder)')]
+        .filter(el => !el.closest('.phase-done-container'))
+        .filter(el => !el.classList.contains('phase'))
+        .filter(el => (el.dataset.phaseParent || '') === (phaseId || ''));
 
     if (elements.length === 0) {
         return null; // No elements to compare, will append to container
@@ -2070,6 +2207,7 @@ function handleDragStart(e) {
     const row = document.getElementById(`item-${itemId}`);
     currentDragBlock = [];
     currentDragIsPhase = false;
+    currentDragPhaseId = null;
     if (row) {
         const isPhase = row.classList.contains('phase');
         currentDragIsPhase = isPhase;
@@ -2083,6 +2221,7 @@ function handleDragStart(e) {
                 el.classList.add('dragging');
             }
         } else {
+            currentDragPhaseId = row.dataset.phaseParent || '';
             currentDragBlock.push(row);
             row.classList.add('dragging');
         }
@@ -2096,6 +2235,7 @@ function handleDragEnd() {
     currentDragBlock.forEach(el => el.classList.remove('dragging'));
     currentDragBlock = [];
     currentDragIsPhase = false;
+    currentDragPhaseId = null;
 }
 
 async function commitOrderFromDOM() {
@@ -2121,9 +2261,14 @@ function handleDragOver(e) {
     const container = document.getElementById('items-container');
     if (!container) return;
     // When dragging a phase, snap to phase boundaries to avoid splitting other phases
-    const afterElement = currentDragIsPhase
+    const doneBar = currentDragIsPhase ? null : getDoneBarForY(container, e.clientY);
+    const phaseEndAnchor = currentDragIsPhase ? null : getPhaseEndAnchor(container, currentDragPhaseId || '');
+    let afterElement = doneBar || (currentDragIsPhase
         ? getPhaseDragAfterElement(container, e.clientY)
-        : getTaskDragAfterElement(container, e.clientY);
+        : getTaskDragAfterElement(container, e.clientY, currentDragPhaseId || ''));
+    if (!currentDragIsPhase && afterElement == null && phaseEndAnchor) {
+        afterElement = phaseEndAnchor;
+    }
     if (!currentDragBlock.length) return;
 
     // Remove current block to reinsert
@@ -2167,6 +2312,7 @@ async function refreshListView() {
         selectedItems.forEach(id => setTaskSelected(id, true, true));
         updateBulkBar();
         initDragAndDrop(); // Re-initialize drag and drop on new elements
+        repositionLinkedNoteChips();
         restorePhaseVisibility();
         applyTaskFilter();
     } catch (e) {
@@ -2297,6 +2443,7 @@ function touchHandleDragStart(e) {
     touchDragId = itemId;
     touchDragBlock = [];
     touchDragIsPhase = false;
+    touchDragPhaseId = null;
 
     const row = document.getElementById(`item-${itemId}`);
     if (row) {
@@ -2312,6 +2459,7 @@ function touchHandleDragStart(e) {
                 touchDragBlock.push(el);
             }
         } else {
+            touchDragPhaseId = row.dataset.phaseParent || '';
             touchDragBlock.push(row);
         }
 
@@ -2418,11 +2566,22 @@ function touchHandleDragMove(e) {
 
     // Find where to insert placeholder based on touch position
     // When dragging a phase, snap to phase boundaries to avoid splitting other phases
-    const afterElement = touchDragIsPhase
+    const doneBar = touchDragIsPhase ? null : getDoneBarForY(container, touchDragCurrentY);
+    const phaseEndAnchor = touchDragIsPhase ? null : getPhaseEndAnchor(container, touchDragPhaseId || '');
+    let afterElement = doneBar || (touchDragIsPhase
         ? getPhaseDragAfterElement(container, touchDragCurrentY)
-        : getTaskDragAfterElement(container, touchDragCurrentY);
+        : getTaskDragAfterElement(container, touchDragCurrentY, touchDragPhaseId || ''));
+    if (!touchDragIsPhase && afterElement == null && phaseEndAnchor) {
+        afterElement = phaseEndAnchor;
+    }
 
-    console.log('🟢 Placeholder should be inserted', afterElement ? 'before item ' + afterElement.dataset.itemId : 'at end');
+    let dragLog = 'at end';
+    if (afterElement) {
+        dragLog = afterElement.classList.contains('phase-done-bar')
+            ? 'before done bar'
+            : 'before item ' + afterElement.dataset.itemId;
+    }
+    console.log('🟢 Placeholder should be inserted', dragLog);
 
     if (touchDragPlaceholder && touchDragPlaceholder.parentElement) {
         touchDragPlaceholder.parentElement.removeChild(touchDragPlaceholder);
@@ -2508,6 +2667,7 @@ async function touchHandleDragEnd(e) {
     touchDragStartY = 0;
     touchDragCurrentY = 0;
     touchDragIsPhase = false;
+    touchDragPhaseId = null;
     // Re-organize done tasks after drag to maintain proper grouping
     normalizePhaseParents();
     organizePhaseDoneTasks();
@@ -2730,12 +2890,14 @@ function initNotesPage() {
 
     const saveBtn = document.getElementById('note-save-btn');
     const newBtn = document.getElementById('note-new-btn');
+    const newTopBtn = document.getElementById('note-new-top-btn');
     const deleteBtn = document.getElementById('note-delete-btn');
     const refreshBtn = document.getElementById('note-refresh-btn');
     const shareBtn = document.getElementById('note-share-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote());
-    if (newBtn) newBtn.addEventListener('click', () => createNote());
+    if (newBtn) newBtn.addEventListener('click', () => handleNewNoteClick());
+    if (newTopBtn) newTopBtn.addEventListener('click', () => handleNewNoteClick());
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
     if (refreshBtn) refreshBtn.addEventListener('click', () => loadNotes({ keepSelection: true }));
     if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
@@ -2759,6 +2921,23 @@ function initNotesPage() {
 
     bindNoteToolbar();
     loadNotes({ keepSelection: false, targetNoteId });
+}
+
+function isMobileNotesView() {
+    return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+}
+
+function scrollToNoteEditor() {
+    const editorCard = document.querySelector('.notes-editor.card');
+    if (!editorCard) return;
+    editorCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function handleNewNoteClick() {
+    await createNote();
+    if (isMobileNotesView()) {
+        scrollToNoteEditor();
+    }
 }
 
 function initNotificationsUI() {
@@ -3608,7 +3787,9 @@ function renderNotesList() {
 
 function formatNoteDate(dateStr) {
     if (!dateStr) return 'New note';
-    const date = new Date(dateStr);
+    const hasTz = /[zZ]|[+-]\d{2}:\d{2}$/.test(dateStr);
+    const normalized = hasTz ? dateStr : `${dateStr}Z`;
+    const date = new Date(normalized);
     return date.toLocaleString('en-US', { timeZone: USER_TIMEZONE });
 }
 
@@ -3863,19 +4044,37 @@ async function openShareNoteModal() {
     const note = notesState.notes.find(n => n.id === noteId);
     if (!note) return;
 
-    // Try to use native Web Share API first (works like Google/real apps)
+    // Convert HTML content to plain text for sharing
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = note.content || '';
+    const plainText = tempDiv.textContent || tempDiv.innerText || '';
+    const sharePayload = {
+        title: note.title || 'Untitled Note',
+        text: plainText
+    };
+
+    // Prefer Capacitor native share when running in the APK
+    const nativeShare = window?.Capacitor?.Plugins?.Share;
+    if (nativeShare && typeof nativeShare.share === 'function' && window.Capacitor.isNativePlatform?.()) {
+        console.log('Capacitor Share is available, attempting native share...');
+        try {
+            await nativeShare.share(sharePayload);
+            console.log('Native share successful!');
+            return;
+        } catch (err) {
+            console.log('Native share error:', err?.name, err?.message || err);
+            if (err?.name === 'AbortError') {
+                console.log('User cancelled native share');
+                return;
+            }
+        }
+    }
+
+    // Try to use Web Share API (works in mobile browsers)
     if (navigator.share) {
         console.log('Web Share API is available, attempting to share...');
         try {
-            // Convert HTML content to plain text for sharing
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = note.content || '';
-            const plainText = tempDiv.textContent || tempDiv.innerText || '';
-
-            await navigator.share({
-                title: note.title || 'Untitled Note',
-                text: plainText
-            });
+            await navigator.share(sharePayload);
             console.log('Share successful!');
             return; // Successfully shared, exit
         } catch (err) {
@@ -4441,7 +4640,7 @@ function renderCalendarMonth() {
         const previews = eventsForDay.slice(0, 3);
         previews.forEach(ev => {
             const row = document.createElement('div');
-            row.className = `calendar-month-event ${ev.is_phase ? 'phase' : ''}`;
+            row.className = `calendar-month-event ${ev.is_phase ? 'phase' : ''} ${ev.status === 'done' ? 'done' : ''}`;
             const time = ev.start_time ? ev.start_time.slice(0, 5) + (ev.end_time ? `-${ev.end_time.slice(0, 5)}` : '') : '';
             row.innerHTML = `
                 <span class="dot priority-${ev.priority || 'medium'}"></span>
@@ -4535,7 +4734,8 @@ function openCalendarTimeModal(ev) {
     const title = document.getElementById('calendar-time-title');
     const startInput = document.getElementById('calendar-time-start');
     const endInput = document.getElementById('calendar-time-end');
-    if (!modal || !startInput || !endInput) return;
+    const reminderInput = document.getElementById('calendar-time-reminder');
+    if (!modal || !startInput || !endInput || !reminderInput) return;
     timeModalState.eventId = ev.id;
     if (title) title.textContent = ev.title || 'Calendar item';
     const normalize = (t) => {
@@ -4548,6 +4748,7 @@ function openCalendarTimeModal(ev) {
     };
     startInput.value = normalize(ev.start_time);
     endInput.value = normalize(ev.end_time);
+    reminderInput.value = formatReminderMinutes(ev.reminder_minutes_before);
     modal.classList.add('active');
 }
 
@@ -4555,17 +4756,27 @@ function closeCalendarTimeModal() {
     const modal = document.getElementById('calendar-time-modal');
     if (modal) modal.classList.remove('active');
     timeModalState.eventId = null;
+    const reminderInput = document.getElementById('calendar-time-reminder');
+    if (reminderInput) reminderInput.value = '';
 }
 
 async function saveCalendarTimeModal() {
     if (!timeModalState.eventId) return;
     const startInput = document.getElementById('calendar-time-start');
     const endInput = document.getElementById('calendar-time-end');
+    const reminderInput = document.getElementById('calendar-time-reminder');
     const startVal = startInput ? startInput.value.trim() : '';
     const endVal = endInput ? endInput.value.trim() : '';
+    const reminderRaw = reminderInput ? reminderInput.value.trim() : '';
+    const reminderMinutes = reminderRaw ? parseReminderMinutesInput(reminderRaw) : null;
+    if (reminderRaw && reminderMinutes === null) {
+        showToast('Use 30m, 2h, or 1d for reminders.', 'error');
+        return;
+    }
     await updateCalendarEvent(timeModalState.eventId, {
         start_time: startVal || null,
-        end_time: endVal || null
+        end_time: endVal || null,
+        reminder_minutes_before: reminderMinutes
     });
     closeCalendarTimeModal();
 }
@@ -4593,40 +4804,9 @@ function updateRecurringFieldVisibility() {
 function openRecurringModal() {
     const modal = document.getElementById('calendar-recurring-modal');
     if (!modal) return;
-    const titleInput = document.getElementById('calendar-recurring-title');
-    const startDayInput = document.getElementById('calendar-recurring-start-day');
-    const startTimeInput = document.getElementById('calendar-recurring-start-time');
-    const endTimeInput = document.getElementById('calendar-recurring-end-time');
-    const reminderInput = document.getElementById('calendar-recurring-reminder');
-    const rolloverInput = document.getElementById('calendar-recurring-rollover');
-    const typeInput = document.getElementById('calendar-recurring-type');
-    const freqEl = document.getElementById('calendar-recurring-frequency');
-    const intervalEl = document.getElementById('calendar-recurring-interval');
-    const unitEl = document.getElementById('calendar-recurring-interval-unit');
-    const dayOfMonthEl = document.getElementById('calendar-recurring-day-of-month');
-    const monthEl = document.getElementById('calendar-recurring-month');
-    if (titleInput) titleInput.value = '';
-    if (startTimeInput) startTimeInput.value = '';
-    if (endTimeInput) endTimeInput.value = '';
-    if (reminderInput) reminderInput.value = '';
-    if (rolloverInput) rolloverInput.checked = true;
-    if (typeInput && rolloverInput) {
-        rolloverInput.checked = typeInput.value !== 'event';
-    }
-    if (freqEl) freqEl.value = 'daily';
-    if (intervalEl) intervalEl.value = '1';
-    if (unitEl) unitEl.value = 'days';
-    const todayStr = calendarState.selectedDay || new Date().toISOString().slice(0, 10);
-    if (startDayInput) startDayInput.value = todayStr;
-    const dateObj = new Date(`${todayStr}T00:00:00`);
-    if (dayOfMonthEl) dayOfMonthEl.value = dateObj.getDate();
-    if (monthEl) monthEl.value = String(dateObj.getMonth() + 1);
-    const dow = (dateObj.getDay() + 6) % 7; // JS Sunday=0 -> Monday=0
-    const dayCheckboxes = modal.querySelectorAll('#calendar-recurring-days-row input[type="checkbox"]');
-    dayCheckboxes.forEach(cb => {
-        cb.checked = Number(cb.value) === dow;
-    });
-    updateRecurringFieldVisibility();
+    // Show list view by default
+    showRecurringListView();
+    loadRecurringList();
     modal.classList.add('active');
     recurringModalState.open = true;
 }
@@ -4637,7 +4817,211 @@ function closeRecurringModal() {
     recurringModalState.open = false;
 }
 
+function showRecurringListView() {
+    const listView = document.getElementById('recurring-list-view');
+    const formView = document.getElementById('recurring-form-view');
+    if (listView) listView.classList.remove('is-hidden');
+    if (formView) formView.classList.add('is-hidden');
+}
+
+function showRecurringFormView(editItem = null) {
+    const listView = document.getElementById('recurring-list-view');
+    const formView = document.getElementById('recurring-form-view');
+    const formTitle = document.getElementById('recurring-form-title');
+    const editIdInput = document.getElementById('calendar-recurring-edit-id');
+    const modal = document.getElementById('calendar-recurring-modal');
+
+    if (listView) listView.classList.add('is-hidden');
+    if (formView) formView.classList.remove('is-hidden');
+
+    // Reset form
+    const titleInput = document.getElementById('calendar-recurring-title');
+    const startDayInput = document.getElementById('calendar-recurring-start-day');
+    const startTimeInput = document.getElementById('calendar-recurring-start-time');
+    const endTimeInput = document.getElementById('calendar-recurring-end-time');
+    const reminderInput = document.getElementById('calendar-recurring-reminder');
+    const rolloverInput = document.getElementById('calendar-recurring-rollover');
+    const typeInput = document.getElementById('calendar-recurring-type');
+    const priorityInput = document.getElementById('calendar-recurring-priority');
+    const freqEl = document.getElementById('calendar-recurring-frequency');
+    const intervalEl = document.getElementById('calendar-recurring-interval');
+    const unitEl = document.getElementById('calendar-recurring-interval-unit');
+    const dayOfMonthEl = document.getElementById('calendar-recurring-day-of-month');
+    const monthEl = document.getElementById('calendar-recurring-month');
+
+    if (editItem) {
+        // Edit mode
+        if (formTitle) formTitle.textContent = 'Edit Recurring Item';
+        if (editIdInput) editIdInput.value = editItem.id;
+        if (titleInput) titleInput.value = editItem.title || '';
+        if (typeInput) typeInput.value = editItem.is_event ? 'event' : 'task';
+        if (startDayInput) startDayInput.value = editItem.start_day || '';
+        if (startTimeInput) startTimeInput.value = editItem.start_time || '';
+        if (endTimeInput) endTimeInput.value = editItem.end_time || '';
+        if (priorityInput) priorityInput.value = editItem.priority || 'medium';
+        if (rolloverInput) rolloverInput.checked = editItem.rollover_enabled;
+        if (freqEl) freqEl.value = editItem.frequency || 'daily';
+        if (intervalEl) intervalEl.value = editItem.interval || 1;
+        if (unitEl) unitEl.value = editItem.interval_unit || 'days';
+        if (dayOfMonthEl) dayOfMonthEl.value = editItem.day_of_month || '';
+        if (monthEl) monthEl.value = editItem.month_of_year || '';
+        // Reminder
+        if (reminderInput) {
+            if (editItem.reminder_minutes_before) {
+                const mins = editItem.reminder_minutes_before;
+                if (mins >= 1440 && mins % 1440 === 0) {
+                    reminderInput.value = `${mins / 1440}d`;
+                } else if (mins >= 60 && mins % 60 === 0) {
+                    reminderInput.value = `${mins / 60}h`;
+                } else {
+                    reminderInput.value = `${mins}m`;
+                }
+            } else {
+                reminderInput.value = '';
+            }
+        }
+        // Days of week
+        if (modal) {
+            modal.querySelectorAll('#calendar-recurring-days-row input[type="checkbox"]').forEach(cb => {
+                cb.checked = editItem.days_of_week && editItem.days_of_week.includes(Number(cb.value));
+            });
+        }
+    } else {
+        // Add mode
+        if (formTitle) formTitle.textContent = 'Add Recurring Item';
+        if (editIdInput) editIdInput.value = '';
+        if (titleInput) titleInput.value = '';
+        if (typeInput) typeInput.value = 'task';
+        if (startTimeInput) startTimeInput.value = '';
+        if (endTimeInput) endTimeInput.value = '';
+        if (reminderInput) reminderInput.value = '';
+        if (rolloverInput) rolloverInput.checked = true;
+        if (priorityInput) priorityInput.value = 'medium';
+        if (freqEl) freqEl.value = 'daily';
+        if (intervalEl) intervalEl.value = '1';
+        if (unitEl) unitEl.value = 'days';
+        const todayStr = calendarState.selectedDay || new Date().toISOString().slice(0, 10);
+        if (startDayInput) startDayInput.value = todayStr;
+        const dateObj = new Date(`${todayStr}T00:00:00`);
+        if (dayOfMonthEl) dayOfMonthEl.value = dateObj.getDate();
+        if (monthEl) monthEl.value = String(dateObj.getMonth() + 1);
+        const dow = (dateObj.getDay() + 6) % 7;
+        if (modal) {
+            modal.querySelectorAll('#calendar-recurring-days-row input[type="checkbox"]').forEach(cb => {
+                cb.checked = Number(cb.value) === dow;
+            });
+        }
+    }
+    updateRecurringFieldVisibility();
+}
+
+async function loadRecurringList() {
+    const listEl = document.getElementById('recurring-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="recurring-empty">Loading...</div>';
+
+    try {
+        const res = await fetch('/api/calendar/recurring');
+        if (!res.ok) throw new Error('Failed to load');
+        const items = await res.json();
+        window.recurringItemsCache = items;
+        renderRecurringList(items);
+    } catch (e) {
+        console.error('Error loading recurring items:', e);
+        listEl.innerHTML = '<div class="recurring-empty">Failed to load recurring items.</div>';
+    }
+}
+
+function renderRecurringList(items) {
+    const listEl = document.getElementById('recurring-list');
+    if (!listEl) return;
+
+    if (!items || items.length === 0) {
+        listEl.innerHTML = '<div class="recurring-empty">No recurring items yet.<br>Click "Add New" to create one.</div>';
+        return;
+    }
+
+    const freqLabels = {
+        daily: 'Daily',
+        weekly: 'Weekly',
+        biweekly: 'Bi-weekly',
+        monthly: 'Monthly',
+        yearly: 'Yearly',
+        custom: 'Custom'
+    };
+
+    listEl.innerHTML = items.map(item => {
+        const typeClass = item.is_event ? 'event' : '';
+        const typeLabel = item.is_event ? 'Event' : 'Task';
+        const freqLabel = freqLabels[item.frequency] || item.frequency;
+        const timeStr = item.start_time ? ` @ ${item.start_time}` : '';
+        return `
+            <div class="recurring-item" data-id="${item.id}">
+                <div class="recurring-item-info">
+                    <div class="recurring-item-title">${escapeHtml(item.title)}</div>
+                    <div class="recurring-item-meta">
+                        <span class="recurring-item-type ${typeClass}">${typeLabel}</span>
+                        ${freqLabel}${timeStr}
+                    </div>
+                </div>
+                <div class="recurring-item-actions">
+                    <button class="btn-icon" onclick="editRecurringItem(${item.id})" title="Edit">
+                        <i class="fa-solid fa-pen"></i>
+                    </button>
+                    <button class="btn-icon btn-danger" onclick="deleteRecurringItem(${item.id})" title="Delete">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function editRecurringItem(id) {
+    const items = window.recurringItemsCache || [];
+    const item = items.find(i => i.id === id);
+    if (item) {
+        showRecurringFormView(item);
+    } else {
+        // Fetch fresh if not in cache
+        try {
+            const res = await fetch('/api/calendar/recurring');
+            if (!res.ok) throw new Error('Failed to load');
+            const freshItems = await res.json();
+            window.recurringItemsCache = freshItems;
+            const freshItem = freshItems.find(i => i.id === id);
+            if (freshItem) {
+                showRecurringFormView(freshItem);
+            }
+        } catch (e) {
+            console.error('Error loading recurring item:', e);
+            alert('Could not load item for editing.');
+        }
+    }
+}
+
+function deleteRecurringItem(id) {
+    openConfirmModal('Delete this recurring item? This will also remove all generated instances.', async () => {
+        try {
+            const res = await fetch(`/api/calendar/recurring/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Failed to delete');
+            await loadRecurringList();
+            await loadCalendarMonth();
+            if (calendarState.selectedDay) {
+                await loadCalendarDay(calendarState.selectedDay);
+            }
+        } catch (e) {
+            console.error('Error deleting recurring item:', e);
+            showToast('Could not delete recurring item.', 'error');
+        }
+    });
+}
+
 async function saveRecurringModal() {
+    const editIdInput = document.getElementById('calendar-recurring-edit-id');
+    const editId = editIdInput ? editIdInput.value : '';
+    const isEdit = !!editId;
+
     const titleInput = document.getElementById('calendar-recurring-title');
     const typeInput = document.getElementById('calendar-recurring-type');
     const startDayInput = document.getElementById('calendar-recurring-start-day');
@@ -4696,24 +5080,28 @@ async function saveRecurringModal() {
     }
 
     try {
-        const res = await fetch('/api/calendar/recurring', {
-            method: 'POST',
+        const url = isEdit ? `/api/calendar/recurring/${editId}` : '/api/calendar/recurring';
+        const method = isEdit ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+            method,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (!res.ok) {
             const data = await res.json().catch(() => ({}));
-            alert(data.error || 'Could not create recurring item.');
+            alert(data.error || `Could not ${isEdit ? 'update' : 'create'} recurring item.`);
             return;
         }
-        closeRecurringModal();
+        // Go back to list view and refresh
+        showRecurringListView();
+        await loadRecurringList();
         if (calendarState.selectedDay) {
             await loadCalendarDay(calendarState.selectedDay);
         }
         await loadCalendarMonth();
     } catch (e) {
-        console.error('Error creating recurring item:', e);
-        alert('Could not create recurring item.');
+        console.error(`Error ${isEdit ? 'updating' : 'creating'} recurring item:`, e);
+        alert(`Could not ${isEdit ? 'update' : 'create'} recurring item.`);
     }
 }
 
@@ -5038,22 +5426,96 @@ function renderCalendarEvents() {
 
             const actions = document.createElement('div');
             actions.className = 'calendar-actions-row';
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = 'btn-icon';
-            deleteBtn.title = 'Delete';
-            deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-            deleteBtn.onclick = () => deleteCalendarEvent(ev.id);
-            const moveUp = document.createElement('button');
-            moveUp.className = 'btn-icon';
-            moveUp.title = 'Move up';
-            moveUp.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
-            moveUp.onclick = () => nudgeCalendarEvent(ev.id, -1);
-            const moveDown = document.createElement('button');
-            moveDown.className = 'btn-icon';
-            moveDown.title = 'Move down';
-            moveDown.innerHTML = '<i class="fa-solid fa-arrow-down"></i>';
-            moveDown.onclick = () => nudgeCalendarEvent(ev.id, 1);
-            actions.append(moveUp, moveDown, deleteBtn);
+
+            const overflowMenuContainer = document.createElement('div');
+            overflowMenuContainer.className = 'calendar-overflow-menu';
+            const overflowBtn = document.createElement('button');
+            overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+            overflowBtn.title = 'More options';
+            overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+            overflowBtn.style.display = 'inline-flex';
+            overflowBtn.style.width = '28px';
+            overflowBtn.style.height = '28px';
+
+            const overflowDropdown = document.createElement('div');
+            overflowDropdown.className = 'calendar-item-dropdown';
+
+            const moveUpMenuItem = document.createElement('button');
+            moveUpMenuItem.className = 'calendar-item-menu-option';
+            moveUpMenuItem.innerHTML = '<i class="fa-solid fa-arrow-up"></i> Move up';
+            moveUpMenuItem.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                nudgeCalendarEvent(ev.id, -1);
+            };
+
+            const moveDownMenuItem = document.createElement('button');
+            moveDownMenuItem.className = 'calendar-item-menu-option';
+            moveDownMenuItem.innerHTML = '<i class="fa-solid fa-arrow-down"></i> Move down';
+            moveDownMenuItem.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                nudgeCalendarEvent(ev.id, 1);
+            };
+
+            const deleteMenuItem = document.createElement('button');
+            deleteMenuItem.className = 'calendar-item-menu-option delete-option';
+            deleteMenuItem.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
+            deleteMenuItem.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                deleteCalendarEvent(ev.id);
+            };
+
+            overflowDropdown.append(moveUpMenuItem, moveDownMenuItem, deleteMenuItem);
+            overflowMenuContainer.append(overflowBtn);
+            document.body.appendChild(overflowDropdown);
+
+            const positionDropdown = () => {
+                const rect = overflowBtn.getBoundingClientRect();
+                const dropdownWidth = 180;
+                const dropdownHeight = overflowDropdown.offsetHeight || 120;
+                const screenWidth = window.innerWidth;
+                const screenHeight = window.innerHeight;
+                const padding = 8;
+
+                overflowDropdown.style.position = 'fixed';
+                let topPos = rect.bottom + 8;
+                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
+                    topPos = rect.top - dropdownHeight - 8;
+                }
+                const maxTop = screenHeight - dropdownHeight - padding;
+                const minTop = padding;
+                topPos = Math.max(minTop, Math.min(topPos, maxTop));
+
+                let leftPos = rect.right - dropdownWidth;
+                if (leftPos < padding) leftPos = padding;
+                if (leftPos + dropdownWidth > screenWidth - padding) {
+                    leftPos = screenWidth - dropdownWidth - padding;
+                }
+
+                overflowDropdown.style.top = `${topPos}px`;
+                overflowDropdown.style.left = `${leftPos}px`;
+            };
+
+            overflowBtn.onclick = (e) => {
+                e.stopPropagation();
+                const isOpen = overflowDropdown.classList.contains('active');
+                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
+                    if (d !== overflowDropdown) d.classList.remove('active');
+                });
+                if (!isOpen) {
+                    positionDropdown();
+                    overflowDropdown.classList.add('active');
+                } else {
+                    overflowDropdown.classList.remove('active');
+                }
+            };
+
+            overflowDropdown.updatePosition = positionDropdown;
+            overflowDropdown.triggerButton = overflowBtn;
+
+            actions.append(overflowMenuContainer);
             row.append(left, titleWrap, actions);
             attachCalendarRowSelection(row, ev);
             return row;
@@ -5180,6 +5642,21 @@ function renderCalendarEvents() {
             e.stopPropagation();
             overflowDropdown.classList.remove('active');
             linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+        };
+
+        const convertMenuItem = document.createElement('button');
+        convertMenuItem.className = 'calendar-item-menu-option';
+        convertMenuItem.innerHTML = '<i class="fa-solid fa-list-check"></i> Convert to task';
+        convertMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            try {
+                await updateCalendarEvent(ev.id, { is_event: false });
+                ev.is_event = false;
+                renderCalendarEvents();
+            } catch (err) {
+                console.error('Failed to convert event to task', err);
+            }
         };
 
         const rolloverMenuItem = document.createElement('button');
@@ -5390,6 +5867,21 @@ function renderCalendarEvents() {
             linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
         };
 
+        const convertMenuItem = document.createElement('button');
+        convertMenuItem.className = 'calendar-item-menu-option';
+        convertMenuItem.innerHTML = '<i class="fa-solid fa-list-check"></i> Convert to task';
+        convertMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            try {
+                await updateCalendarEvent(ev.id, { is_event: false });
+                ev.is_event = false;
+                renderCalendarEvents();
+            } catch (err) {
+                console.error('Failed to convert event to task', err);
+            }
+        };
+
         const rolloverMenuItem = document.createElement('button');
         rolloverMenuItem.className = 'calendar-item-menu-option';
         rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
@@ -5423,7 +5915,7 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -5703,6 +6195,7 @@ function handleCalendarTouchStart(e, ev) {
     if (ev.is_phase || ev.is_group) return;
     if (shouldIgnoreCalendarSelection(e.target)) return;
     calendarSelection.longPressTriggered = false;
+    calendarSelection.touchMoved = false;
     if (calendarSelection.longPressTimer) {
         clearTimeout(calendarSelection.longPressTimer);
     }
@@ -5717,12 +6210,16 @@ function handleCalendarTouchStart(e, ev) {
 }
 
 function handleCalendarTouchMove(e) {
-    if (!calendarSelection.longPressTimer || !e.touches || !e.touches.length) return;
+    if (!e.touches || !e.touches.length || !calendarSelection.touchStart) return;
     const dx = Math.abs(e.touches[0].clientX - calendarSelection.touchStart.x);
     const dy = Math.abs(e.touches[0].clientY - calendarSelection.touchStart.y);
+    // If moved more than threshold, mark as scrolling
     if (dx > 8 || dy > 8) {
-        clearTimeout(calendarSelection.longPressTimer);
-        calendarSelection.longPressTimer = null;
+        calendarSelection.touchMoved = true;
+        if (calendarSelection.longPressTimer) {
+            clearTimeout(calendarSelection.longPressTimer);
+            calendarSelection.longPressTimer = null;
+        }
     }
 }
 
@@ -5734,6 +6231,11 @@ function handleCalendarTouchEnd(e, ev) {
     if (calendarSelection.longPressTriggered) {
         e.preventDefault();
         calendarSelection.longPressTriggered = false;
+        return;
+    }
+    // Don't toggle selection if user was scrolling
+    if (calendarSelection.touchMoved) {
+        calendarSelection.touchMoved = false;
         return;
     }
     if (calendarSelection.active && !shouldIgnoreCalendarSelection(e.target)) {
@@ -7375,6 +7877,61 @@ function initCalendarPage() {
     };
     if (picker) picker.onchange = (e) => openDayDetails(e.target.value);
     if (todayBtn) todayBtn.onclick = () => openDayDetails(todayStr);
+    const goToBtn = document.getElementById('calendar-go-to-btn');
+    if (goToBtn) {
+        goToBtn.onclick = () => {
+            // Close dropdown menu if open
+            const menu = document.querySelector('.calendar-month-menu');
+            if (menu) menu.classList.remove('open');
+            openCalendarPrompt({
+                title: 'Go to date',
+                message: 'Pick any date to jump to.',
+                type: 'date',
+                defaultValue: calendarState.selectedDay || todayStr,
+                onSubmit: (val) => {
+                    if (!val) return;
+                    // Jump to the month containing the selected date
+                    const targetDate = new Date(val + 'T00:00:00');
+                    setCalendarMonth(targetDate);
+                }
+            });
+        };
+    }
+    // Today button in month view - jumps to current month
+    const todayMonthBtn = document.getElementById('calendar-today-month-btn');
+    if (todayMonthBtn) {
+        todayMonthBtn.onclick = () => {
+            setCalendarMonth(new Date());
+            closeCalendarMonthMenu();
+        };
+    }
+
+    // Calendar month menu dropdown toggle
+    const monthMenuBtn = document.getElementById('calendar-month-menu-btn');
+    const monthMenu = document.querySelector('.calendar-month-menu');
+    if (monthMenuBtn && monthMenu) {
+        monthMenuBtn.onclick = (e) => {
+            e.stopPropagation();
+            monthMenu.classList.toggle('open');
+        };
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!monthMenu.contains(e.target)) {
+                monthMenu.classList.remove('open');
+            }
+        });
+        // Close dropdown when clicking menu items
+        monthMenu.querySelectorAll('.calendar-month-menu-item').forEach(item => {
+            item.addEventListener('click', () => {
+                monthMenu.classList.remove('open');
+            });
+        });
+    }
+    function closeCalendarMonthMenu() {
+        const menu = document.querySelector('.calendar-month-menu');
+        if (menu) menu.classList.remove('open');
+    }
+
     if (quickInput) {
         quickInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -7461,15 +8018,27 @@ function initCalendarPage() {
             if (e.target === timeModal) closeCalendarTimeModal();
         });
     }
-    if (recurringBtn) recurringBtn.onclick = openRecurringModal;
+    if (recurringBtn) recurringBtn.onclick = () => {
+        // Close dropdown menu if open
+        const menu = document.querySelector('.calendar-month-menu');
+        if (menu) menu.classList.remove('open');
+        openRecurringModal();
+    };
     if (recurringSaveBtn) recurringSaveBtn.onclick = saveRecurringModal;
-    if (recurringCancelBtn) recurringCancelBtn.onclick = closeRecurringModal;
+    if (recurringCancelBtn) recurringCancelBtn.onclick = showRecurringListView;
     if (recurringFreq) recurringFreq.onchange = updateRecurringFieldVisibility;
     if (recurringUnit) recurringUnit.onchange = updateRecurringFieldVisibility;
     if (recurringType) recurringType.onchange = () => {
         const rolloverInput = document.getElementById('calendar-recurring-rollover');
         if (rolloverInput) rolloverInput.checked = recurringType.value !== 'event';
     };
+    // New recurring modal buttons
+    const recurringAddNewBtn = document.getElementById('recurring-add-new-btn');
+    const recurringBackBtn = document.getElementById('recurring-back-btn');
+    const recurringCloseBtn = document.getElementById('calendar-recurring-close');
+    if (recurringAddNewBtn) recurringAddNewBtn.onclick = () => showRecurringFormView(null);
+    if (recurringBackBtn) recurringBackBtn.onclick = showRecurringListView;
+    if (recurringCloseBtn) recurringCloseBtn.onclick = closeRecurringModal;
     if (recurringModal) {
         recurringModal.addEventListener('click', (e) => {
             if (e.target === recurringModal) closeRecurringModal();
@@ -7964,6 +8533,61 @@ document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('calendar-prompt-modal');
     if (modal) modal.classList.add('is-hidden');
 
+    // ===== ANDROID KEYBOARD HANDLING =====
+    // Use visualViewport API to detect keyboard open/close and adjust modals
+    if (window.visualViewport) {
+        let initialHeight = window.visualViewport.height;
+        let keyboardOpen = false;
+
+        const handleViewportResize = () => {
+            const currentHeight = window.visualViewport.height;
+            const heightDiff = initialHeight - currentHeight;
+            const isKeyboardNowOpen = heightDiff > 150; // Keyboard typically > 150px
+
+            if (isKeyboardNowOpen !== keyboardOpen) {
+                keyboardOpen = isKeyboardNowOpen;
+                document.body.classList.toggle('keyboard-open', keyboardOpen);
+
+                // Scroll focused element into view when keyboard opens
+                if (keyboardOpen && document.activeElement) {
+                    const activeEl = document.activeElement;
+                    const tagName = activeEl.tagName.toLowerCase();
+                    if (tagName === 'input' || tagName === 'textarea') {
+                        setTimeout(() => {
+                            activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 100);
+                    }
+                }
+            }
+        };
+
+        window.visualViewport.addEventListener('resize', handleViewportResize);
+        window.visualViewport.addEventListener('scroll', handleViewportResize);
+
+        // Update initial height on orientation change
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => {
+                initialHeight = window.visualViewport.height;
+            }, 500);
+        });
+    }
+
+    // Fallback for browsers without visualViewport
+    let lastWindowHeight = window.innerHeight;
+    window.addEventListener('resize', () => {
+        const currentHeight = window.innerHeight;
+        const heightDiff = lastWindowHeight - currentHeight;
+
+        // Only use fallback if visualViewport not available
+        if (!window.visualViewport && heightDiff > 150) {
+            document.body.classList.add('keyboard-open');
+        } else if (!window.visualViewport && heightDiff < -150) {
+            document.body.classList.remove('keyboard-open');
+        }
+
+        lastWindowHeight = currentHeight;
+    });
+
     // Close modals on outside click
     window.onclick = function (event) {
         if (event.target == createModal) closeCreateModal();
@@ -8006,6 +8630,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initStickyListHeader();
     initTaskFilters();
     initTagFilters();
+    repositionLinkedNoteChips();
     applyTagColors();
     initMobileTopbar();
     initSidebarReorder();
@@ -8020,6 +8645,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initAIPanel();
     initAIDragLauncher();
     initHomepageReorder();
+    let noteResizeTimer = null;
+    window.addEventListener('resize', () => {
+        if (noteResizeTimer) clearTimeout(noteResizeTimer);
+        noteResizeTimer = setTimeout(repositionLinkedNoteChips, 120);
+    });
 });
 
 function initStickyListHeader() {
@@ -9902,6 +10532,20 @@ function renderAIMessages(context = 'panel') {
     const container = document.getElementById(containerId);
     if (!container) return;
     container.innerHTML = '';
+
+    // Show placeholder when no messages
+    if (!aiMessages.length && !aiTyping) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'ai-empty-state';
+        placeholder.innerHTML = `
+            <i class="fa-solid fa-robot"></i>
+            <p>Start a conversation</p>
+            <span>Ask me to manage tasks, calendar events, or recalls</span>
+        `;
+        container.appendChild(placeholder);
+        return;
+    }
+
     aiMessages.forEach(m => {
         const div = document.createElement('div');
         div.className = `ai-msg ${m.role === 'user' ? 'user' : 'ai'}`;

@@ -124,7 +124,7 @@
         <div class="shared-note-header">
             <h1>{{ note.title }}</h1>
             <div class="shared-note-meta">
-                <span><i class="fa-regular fa-clock"></i> Updated {{ note.updated_at.strftime('%B %d, %Y at %I:%M %p') if note.updated_at else 'Recently' }}</span>
+                <span><i class="fa-regular fa-clock"></i> Updated {{ note_updated_at_local.strftime('%B %d, %Y at %I:%M %p') if note_updated_at_local else 'Recently' }}</span>
             </div>
         </div>
 

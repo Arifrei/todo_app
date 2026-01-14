@@ -3,19 +3,32 @@
 {% block content %}
 <div id="calendar-page" class="calendar-page">
     <section id="calendar-month-card" class="calendar-month card">
-        <div class="calendar-month-nav">
-            <div class="calendar-month-nav-left">
+        <div class="calendar-month-header">
+            <div class="calendar-month-nav">
                 <button class="btn-icon" id="calendar-prev-month" aria-label="Previous month"><i class="fa-solid fa-chevron-left"></i></button>
-            </div>
-            <div class="calendar-month-label-wrap">
-                <div id="calendar-month-label" class="calendar-month-label"></div>
-                <div class="calendar-month-sub">Click: quick add ??? Double-click: full view</div>
-            </div>
-            <div class="calendar-month-nav-right">
-                <button class="btn btn-secondary btn-icon-text calendar-recurring-btn" id="calendar-recurring-btn">
-                    <i class="fa-solid fa-repeat"></i><span class="btn-text">Recurring</span>
-                </button>
-                <button class="btn-icon" id="calendar-next-month" aria-label="Next month"><i class="fa-solid fa-chevron-right"></i></button>
+                <div class="calendar-month-label-wrap">
+                    <div id="calendar-month-label" class="calendar-month-label"></div>
+                    <div class="calendar-month-sub">Click: quick add &bull; Double-click: full view</div>
+                </div>
+                <div class="calendar-month-nav-right">
+                    <button class="btn-icon" id="calendar-next-month" aria-label="Next month"><i class="fa-solid fa-chevron-right"></i></button>
+                    <div class="calendar-month-menu">
+                        <button class="btn-icon calendar-month-menu-btn" id="calendar-month-menu-btn" aria-label="Calendar options" title="Options">
+                            <i class="fa-solid fa-ellipsis-vertical"></i>
+                        </button>
+                        <div class="calendar-month-dropdown" id="calendar-month-dropdown">
+                            <button class="calendar-month-menu-item" id="calendar-today-month-btn">
+                                <i class="fa-solid fa-calendar-day"></i> Today
+                            </button>
+                            <button class="calendar-month-menu-item" id="calendar-go-to-btn">
+                                <i class="fa-solid fa-magnifying-glass"></i> Go to date
+                            </button>
+                            <button class="calendar-month-menu-item" id="calendar-recurring-btn">
+                                <i class="fa-solid fa-repeat"></i> Recurring items
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         <div class="calendar-weekdays">
@@ -196,6 +209,10 @@
                 <label>End time (optional)</label>
                 <input type="text" id="calendar-time-end" class="form-control" placeholder="e.g., 5:00pm">
             </div>
+            <div class="form-group">
+                <label>Reminder (e.g., 30m, 2h, 1d)</label>
+                <input type="text" id="calendar-time-reminder" class="form-control" placeholder="e.g., 30m">
+            </div>
             <div class="modal-actions">
                 <button class="btn" id="calendar-time-cancel">Cancel</button>
                 <button class="btn btn-primary" id="calendar-time-save">Save</button>
@@ -205,106 +222,131 @@
 
     <!-- Calendar Recurring Modal -->
     <div class="modal" id="calendar-recurring-modal">
-        <div class="modal-content">
-            <h2>Recurring Item</h2>
-            <div class="form-group">
-                <label for="calendar-recurring-title">Title</label>
-                <input type="text" id="calendar-recurring-title" class="form-control" placeholder="Title">
-            </div>
-            <div class="form-group">
-                <label for="calendar-recurring-type">Type</label>
-                <select id="calendar-recurring-type" class="form-control">
-                    <option value="task">Task</option>
-                    <option value="event">Event</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="calendar-recurring-start-day">Start date</label>
-                <input type="date" id="calendar-recurring-start-day" class="form-control">
-            </div>
-            <div class="form-group">
-                <label>Time</label>
-                <div class="recurrence-row">
-                    <input type="text" id="calendar-recurring-start-time" class="form-control" placeholder="Start time">
-                    <input type="text" id="calendar-recurring-end-time" class="form-control" placeholder="End time">
+        <div class="modal-content recurring-modal-content">
+            <!-- List View -->
+            <div id="recurring-list-view">
+                <div class="recurring-header">
+                    <h2>Recurring Items</h2>
+                    <button class="btn btn-primary btn-small" id="recurring-add-new-btn">
+                        <i class="fa-solid fa-plus"></i> Add New
+                    </button>
+                </div>
+                <div id="recurring-list" class="recurring-list">
+                    <div class="recurring-empty">Loading...</div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" id="calendar-recurring-close">Close</button>
                 </div>
             </div>
-            <div class="form-group">
-                <label for="calendar-recurring-priority">Priority</label>
-                <select id="calendar-recurring-priority" class="form-control">
-                    <option value="low">Low</option>
-                    <option value="medium" selected>Medium</option>
-                    <option value="high">High</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="calendar-recurring-reminder">Reminder (e.g., 30m, 2h, 1d)</label>
-                <input type="text" id="calendar-recurring-reminder" class="form-control" placeholder="e.g., 30m">
-            </div>
-            <div class="form-group">
-                <label class="recurrence-checkbox">
-                    <input type="checkbox" id="calendar-recurring-rollover"> Enable rollover
-                </label>
-            </div>
-            <div class="form-group">
-                <label for="calendar-recurring-frequency">Repeats</label>
-                <select id="calendar-recurring-frequency" class="form-control">
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="biweekly">Bi-weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="yearly">Yearly</option>
-                    <option value="custom">Custom</option>
-                </select>
-            </div>
-            <div class="form-group is-hidden" id="calendar-recurring-days-row">
-                <label>Days of week</label>
-                <div class="recurrence-days">
-                    <label><input type="checkbox" value="0"> Mon</label>
-                    <label><input type="checkbox" value="1"> Tue</label>
-                    <label><input type="checkbox" value="2"> Wed</label>
-                    <label><input type="checkbox" value="3"> Thu</label>
-                    <label><input type="checkbox" value="4"> Fri</label>
-                    <label><input type="checkbox" value="5"> Sat</label>
-                    <label><input type="checkbox" value="6"> Sun</label>
+
+            <!-- Form View (Add/Edit) -->
+            <div id="recurring-form-view" class="is-hidden">
+                <div class="recurring-header">
+                    <button class="btn-icon" id="recurring-back-btn" title="Back to list">
+                        <i class="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <h2 id="recurring-form-title">Add Recurring Item</h2>
                 </div>
-            </div>
-            <div class="form-group is-hidden" id="calendar-recurring-month-row">
-                <label for="calendar-recurring-day-of-month">Day of month</label>
-                <input type="number" id="calendar-recurring-day-of-month" class="form-control" min="1" max="31">
-            </div>
-            <div class="form-group is-hidden" id="calendar-recurring-year-row">
-                <label for="calendar-recurring-month">Month</label>
-                <select id="calendar-recurring-month" class="form-control">
-                    <option value="1">January</option>
-                    <option value="2">February</option>
-                    <option value="3">March</option>
-                    <option value="4">April</option>
-                    <option value="5">May</option>
-                    <option value="6">June</option>
-                    <option value="7">July</option>
-                    <option value="8">August</option>
-                    <option value="9">September</option>
-                    <option value="10">October</option>
-                    <option value="11">November</option>
-                    <option value="12">December</option>
-                </select>
-            </div>
-            <div class="form-group is-hidden" id="calendar-recurring-custom-row">
-                <label>Every</label>
-                <div class="recurrence-row">
-                    <input type="number" id="calendar-recurring-interval" class="form-control" min="1" value="1">
-                    <select id="calendar-recurring-interval-unit" class="form-control">
-                        <option value="days">Days</option>
-                        <option value="weeks">Weeks</option>
-                        <option value="months">Months</option>
-                        <option value="years">Years</option>
+                <input type="hidden" id="calendar-recurring-edit-id" value="">
+                <div class="form-group">
+                    <label for="calendar-recurring-title">Title</label>
+                    <input type="text" id="calendar-recurring-title" class="form-control" placeholder="Title">
+                </div>
+                <div class="form-group">
+                    <label for="calendar-recurring-type">Type</label>
+                    <select id="calendar-recurring-type" class="form-control">
+                        <option value="task">Task</option>
+                        <option value="event">Event</option>
                     </select>
                 </div>
-            </div>
-            <div class="modal-actions">
-                <button class="btn" id="calendar-recurring-cancel">Cancel</button>
-                <button class="btn btn-primary" id="calendar-recurring-save">Save</button>
+                <div class="form-group">
+                    <label for="calendar-recurring-start-day">Start date</label>
+                    <input type="date" id="calendar-recurring-start-day" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>Time</label>
+                    <div class="recurrence-row">
+                        <input type="text" id="calendar-recurring-start-time" class="form-control" placeholder="Start time">
+                        <input type="text" id="calendar-recurring-end-time" class="form-control" placeholder="End time">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="calendar-recurring-priority">Priority</label>
+                    <select id="calendar-recurring-priority" class="form-control">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="calendar-recurring-reminder">Reminder (e.g., 30m, 2h, 1d)</label>
+                    <input type="text" id="calendar-recurring-reminder" class="form-control" placeholder="e.g., 30m">
+                </div>
+                <div class="form-group">
+                    <label class="recurrence-checkbox">
+                        <input type="checkbox" id="calendar-recurring-rollover"> Enable rollover
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="calendar-recurring-frequency">Repeats</label>
+                    <select id="calendar-recurring-frequency" class="form-control">
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="biweekly">Bi-weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="yearly">Yearly</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+                <div class="form-group is-hidden" id="calendar-recurring-days-row">
+                    <label>Days of week</label>
+                    <div class="recurrence-days">
+                        <label><input type="checkbox" value="0"> Mon</label>
+                        <label><input type="checkbox" value="1"> Tue</label>
+                        <label><input type="checkbox" value="2"> Wed</label>
+                        <label><input type="checkbox" value="3"> Thu</label>
+                        <label><input type="checkbox" value="4"> Fri</label>
+                        <label><input type="checkbox" value="5"> Sat</label>
+                        <label><input type="checkbox" value="6"> Sun</label>
+                    </div>
+                </div>
+                <div class="form-group is-hidden" id="calendar-recurring-month-row">
+                    <label for="calendar-recurring-day-of-month">Day of month</label>
+                    <input type="number" id="calendar-recurring-day-of-month" class="form-control" min="1" max="31">
+                </div>
+                <div class="form-group is-hidden" id="calendar-recurring-year-row">
+                    <label for="calendar-recurring-month">Month</label>
+                    <select id="calendar-recurring-month" class="form-control">
+                        <option value="1">January</option>
+                        <option value="2">February</option>
+                        <option value="3">March</option>
+                        <option value="4">April</option>
+                        <option value="5">May</option>
+                        <option value="6">June</option>
+                        <option value="7">July</option>
+                        <option value="8">August</option>
+                        <option value="9">September</option>
+                        <option value="10">October</option>
+                        <option value="11">November</option>
+                        <option value="12">December</option>
+                    </select>
+                </div>
+                <div class="form-group is-hidden" id="calendar-recurring-custom-row">
+                    <label>Every</label>
+                    <div class="recurrence-row">
+                        <input type="number" id="calendar-recurring-interval" class="form-control" min="1" value="1">
+                        <select id="calendar-recurring-interval-unit" class="form-control">
+                            <option value="days">Days</option>
+                            <option value="weeks">Weeks</option>
+                            <option value="months">Months</option>
+                            <option value="years">Years</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" id="calendar-recurring-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="calendar-recurring-save">Save</button>
+                </div>
             </div>
         </div>
     </div>

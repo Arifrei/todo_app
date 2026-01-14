@@ -15,6 +15,7 @@ from pywebpush import webpush, WebPushException
 import requests
 from sqlalchemy import or_
 from bs4 import BeautifulSoup
+from markupsafe import Markup, escape
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DOTENV_PATH = find_dotenv() or os.path.join(BASE_DIR, '.env')
@@ -42,6 +43,29 @@ if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
 
 DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'ai', 'settings']
 DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'quick-access', 'ai', 'settings', 'download']
+
+LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
+
+
+def linkify_text(text):
+    """Convert [label](url) in task descriptions/notes into safe links."""
+    if not text:
+        return ''
+    parts = []
+    last = 0
+    for match in LINK_PATTERN.finditer(text):
+        parts.append(escape(text[last:match.start()]))
+        label = escape(match.group(1))
+        url = match.group(2)
+        parts.append(Markup(
+            f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{label}</a>'
+        ))
+        last = match.end()
+    parts.append(escape(text[last:]))
+    return Markup(''.join(str(part) for part in parts))
+
+
+app.jinja_env.filters['linkify_text'] = linkify_text
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -966,9 +990,11 @@ def _rollover_incomplete_events():
                 if not events:
                     continue
 
+                events_to_delete = {}
                 for ev in events:
                     # Skip if this event has already been rolled over today
                     if ev.id in rolled_lookup:
+                        events_to_delete[ev.id] = ev
                         continue
 
                     new_phase_id = None
@@ -1025,6 +1051,7 @@ def _rollover_incomplete_events():
                     )
                     db.session.add(copy_event)
                     created_events += 1
+                    events_to_delete[ev.id] = ev
                     if ev.todo_item_id:
                         linked_item = TodoItem.query.filter_by(id=ev.todo_item_id).first()
                         if linked_item:
@@ -1032,9 +1059,11 @@ def _rollover_incomplete_events():
 
                 for dup in duplicates_to_delete:
                     db.session.delete(dup)
+                for ev in events_to_delete.values():
+                    db.session.delete(ev)
 
                 db.session.commit()
-                if created_events or duplicates_to_delete:
+                if created_events or duplicates_to_delete or events_to_delete:
                     app.logger.info(
                         f"Rollover user {uid}: created {created_events} events, "
                         f"created {created_phases} phases, removed {len(duplicates_to_delete)} duplicates"
@@ -2335,7 +2364,15 @@ def share_note(note_id):
 def view_shared_note(token):
     """Public view for shared notes (no authentication required)."""
     note = Note.query.filter_by(share_token=token, is_public=True).first_or_404()
-    return render_template('shared_note.html', note=note)
+    tz_name = app.config.get('DEFAULT_TIMEZONE', 'America/New_York')
+    tz = pytz.timezone(tz_name)
+    updated_local = None
+    if note.updated_at:
+        updated_at = note.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = pytz.UTC.localize(updated_at)
+        updated_local = updated_at.astimezone(tz)
+    return render_template('shared_note.html', note=note, note_updated_at_local=updated_local)
 
 
 # Quick Access API
@@ -2492,19 +2529,53 @@ def calendar_events():
             CalendarEvent.day <= end_day
         ).order_by(CalendarEvent.day.asc(), CalendarEvent.order_index.asc()).all()
 
+        linked_event_map = {}
         phase_map_by_day = {}
         for ev in events:
+            if ev.todo_item_id:
+                day_key = ev.day.isoformat()
+                linked_event_map.setdefault(day_key, {})[ev.todo_item_id] = ev
+                continue
             if ev.is_phase:
                 day_key = ev.day.isoformat()
                 phase_map_by_day.setdefault(day_key, {})[ev.id] = ev.title
 
         by_day = {}
         for ev in events:
+            if ev.todo_item_id:
+                continue
             day_key = ev.day.isoformat()
             data = ev.to_dict()
             if ev.phase_id:
                 data['phase_title'] = phase_map_by_day.get(day_key, {}).get(ev.phase_id)
             by_day.setdefault(day_key, []).append(data)
+
+        due_items = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+            TodoList.user_id == user.id,
+            TodoItem.due_date >= start_day,
+            TodoItem.due_date <= end_day,
+            TodoItem.is_phase == False
+        ).all()
+        for idx, item in enumerate(due_items):
+            day_key = item.due_date.isoformat()
+            linked_event = linked_event_map.get(day_key, {}).get(item.id)
+            by_day.setdefault(day_key, []).append({
+                'id': -100000 - idx,
+                'title': item.content,
+                'status': item.status,
+                'is_task_link': True,
+                'task_id': item.id,
+                'task_list_id': item.list_id,
+                'task_list_title': item.list.title if item.list else '',
+                'calendar_event_id': linked_event.id if linked_event else None,
+                'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
+                'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
+                'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
+                'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
+                'priority': linked_event.priority if linked_event else 'medium',
+                'day': day_key,
+                'order_index': 100000 + idx
+            })
 
         return jsonify({
             'start': start_day.isoformat(),
@@ -2797,6 +2868,115 @@ def create_recurring_calendar_event():
     return jsonify({'id': rule.id}), 201
 
 
+@app.route('/api/calendar/recurring', methods=['GET'])
+def list_recurring_events():
+    """List all recurring event templates for the current user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    rules = RecurringEvent.query.filter_by(user_id=user.id).order_by(RecurringEvent.title).all()
+    result = []
+    for r in rules:
+        result.append({
+            'id': r.id,
+            'title': r.title,
+            'description': r.description,
+            'start_day': r.start_day.isoformat() if r.start_day else None,
+            'end_day': r.end_day.isoformat() if r.end_day else None,
+            'start_time': r.start_time.strftime('%H:%M') if r.start_time else None,
+            'end_time': r.end_time.strftime('%H:%M') if r.end_time else None,
+            'priority': r.priority,
+            'is_event': r.is_event,
+            'reminder_minutes_before': r.reminder_minutes_before,
+            'rollover_enabled': r.rollover_enabled,
+            'frequency': r.frequency,
+            'interval': r.interval,
+            'interval_unit': r.interval_unit,
+            'days_of_week': [int(d) for d in r.days_of_week.split(',')] if r.days_of_week else [],
+            'day_of_month': r.day_of_month,
+            'month_of_year': r.month_of_year
+        })
+    return jsonify(result)
+
+
+@app.route('/api/calendar/recurring/<int:rule_id>', methods=['PUT', 'DELETE'])
+def recurring_event_detail(rule_id):
+    """Update or delete a recurring event template."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    rule = RecurringEvent.query.filter_by(id=rule_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        # Delete all associated exceptions
+        RecurrenceException.query.filter_by(recurrence_id=rule.id).delete()
+        # Optionally delete future instances (generated events from this rule)
+        CalendarEvent.query.filter_by(recurrence_id=rule.id, user_id=user.id).delete()
+        db.session.delete(rule)
+        db.session.commit()
+        return '', 204
+
+    # PUT - update the recurring rule
+    data = request.json or {}
+    if 'title' in data:
+        title = (data.get('title') or '').strip()
+        if title:
+            rule.title = title
+    if 'description' in data:
+        rule.description = (data.get('description') or '').strip() or None
+    if 'priority' in data:
+        priority = (data.get('priority') or '').lower()
+        if priority in ALLOWED_PRIORITIES:
+            rule.priority = priority
+    if 'is_event' in data:
+        rule.is_event = bool(data.get('is_event'))
+    if 'rollover_enabled' in data:
+        rule.rollover_enabled = bool(data.get('rollover_enabled'))
+    if 'start_time' in data:
+        rule.start_time = _parse_time_str(data.get('start_time'))
+    if 'end_time' in data:
+        rule.end_time = _parse_time_str(data.get('end_time'))
+    if 'reminder_minutes_before' in data:
+        try:
+            rule.reminder_minutes_before = int(data['reminder_minutes_before']) if data['reminder_minutes_before'] else None
+        except (TypeError, ValueError):
+            pass
+    if 'frequency' in data:
+        freq = (data.get('frequency') or '').lower()
+        if freq in {'daily', 'weekly', 'biweekly', 'monthly', 'yearly', 'custom'}:
+            rule.frequency = freq
+    if 'interval' in data:
+        try:
+            rule.interval = max(int(data['interval']), 1)
+        except (TypeError, ValueError):
+            pass
+    if 'interval_unit' in data:
+        unit = (data.get('interval_unit') or '').lower()
+        if unit in {'days', 'weeks', 'months', 'years'}:
+            rule.interval_unit = unit
+    if 'days_of_week' in data:
+        rule.days_of_week = ','.join(str(d) for d in _parse_days_of_week(data.get('days_of_week'))) or None
+    if 'day_of_month' in data:
+        try:
+            dom = int(data['day_of_month']) if data['day_of_month'] else None
+            if dom is None or 1 <= dom <= 31:
+                rule.day_of_month = dom
+        except (TypeError, ValueError):
+            pass
+    if 'month_of_year' in data:
+        try:
+            moy = int(data['month_of_year']) if data['month_of_year'] else None
+            if moy is None or 1 <= moy <= 12:
+                rule.month_of_year = moy
+        except (TypeError, ValueError):
+            pass
+
+    db.session.commit()
+    return jsonify({'id': rule.id})
+
+
 @app.route('/api/calendar/events/<int:event_id>', methods=['PUT', 'DELETE'])
 def calendar_event_detail(event_id):
     user = get_current_user()
@@ -2829,10 +3009,13 @@ def calendar_event_detail(event_id):
         priority = (data.get('priority') or '').lower()
         if priority in ALLOWED_PRIORITIES:
             event.priority = priority
+    old_status = event.status
+    status_changed = False
     if 'status' in data:
         status = data.get('status')
         if status in ALLOWED_STATUSES:
             event.status = status
+            status_changed = (old_status != event.status)
     if 'is_event' in data and not event.is_phase:
         event.is_event = bool(data.get('is_event'))
     if 'is_group' in data and not event.is_phase and not event.is_event:
@@ -2897,17 +3080,27 @@ def calendar_event_detail(event_id):
             if not group_obj:
                 return jsonify({'error': 'Group not found for that day'}), 404
             event.group_id = gid
+
+    if status_changed:
+        if event.status == 'done':
+            _cancel_reminder_job(event)
+            event.reminder_sent = True
+            event.reminder_snoozed_until = None
+        elif old_status == 'done':
+            event.reminder_sent = False
     db.session.commit()
 
     # Reschedule reminder if relevant fields changed
-    if (reminder_changed or time_changed or day_changed) and event.reminder_minutes_before is not None:
-        if event.start_time:
-            _schedule_reminder_job(event)
-        else:
+    if event.status != 'done':
+        needs_reschedule = reminder_changed or time_changed or day_changed or (status_changed and old_status == 'done')
+        if needs_reschedule and event.reminder_minutes_before is not None:
+            if event.start_time:
+                _schedule_reminder_job(event)
+            else:
+                _cancel_reminder_job(event)
+        elif reminder_changed and event.reminder_minutes_before is None:
+            # Reminder was removed
             _cancel_reminder_job(event)
-    elif reminder_changed and event.reminder_minutes_before is None:
-        # Reminder was removed
-        _cancel_reminder_job(event)
 
     return jsonify(event.to_dict())
 
@@ -3497,6 +3690,18 @@ def handle_item(item_id):
                         _cancel_reminder_job(linked_event)
                         db.session.delete(linked_event)
 
+        if old_status != new_status:
+            linked_event = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).first()
+            if linked_event:
+                if new_status == 'done':
+                    _cancel_reminder_job(linked_event)
+                    linked_event.reminder_sent = True
+                    linked_event.reminder_snoozed_until = None
+                elif old_status == 'done':
+                    linked_event.reminder_sent = False
+                    if linked_event.reminder_minutes_before is not None and linked_event.start_time:
+                        _schedule_reminder_job(linked_event)
+
         # If this task's status changed and it belongs to a phase, update phase status
         if old_status != new_status and item.phase_id:
             phase_item = db.session.get(TodoItem, item.phase_id)
@@ -3647,8 +3852,23 @@ def move_item(item_id):
 
     # --- Moving a Project to another Hub ---
     if item.linked_list_id:
-        if dest_hub_id is None:
-            return jsonify({'error': 'destination_hub_id is required for projects'}), 400
+        if dest_hub_id in [None, '', 'null', 'none']:
+            child_list = item.linked_list
+            if not child_list:
+                return jsonify({'error': 'Project list not found'}), 404
+            order_query = db.session.query(db.func.coalesce(db.func.max(TodoList.order_index), 0)).filter(
+                TodoList.user_id == user.id,
+                TodoList.type == child_list.type
+            ).outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None)
+            child_list.order_index = (order_query.scalar() or 0) + 1
+            hub_list = item.list
+            db.session.delete(item)
+            db.session.flush()
+            if hub_list:
+                reindex_list(hub_list)
+            db.session.commit()
+            return jsonify({'message': 'Moved to main page'})
+
         try:
             dest_hub_id = int(dest_hub_id)
         except (ValueError, TypeError):
@@ -4092,4 +4312,4 @@ def reorder_items(list_id):
     return jsonify({'updated': len(ordered_ids)})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=True)

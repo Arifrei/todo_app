@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Simply Tasks</title>
     <meta name="theme-color" content="#3b82f6">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
@@ -20,6 +20,7 @@
 
     <script>
         window.VAPID_PUBLIC_KEY = "{{ config.get('VAPID_PUBLIC_KEY', '') }}";
+        window.USER_TIMEZONE = "{{ config.get('DEFAULT_TIMEZONE', 'America/New_York') }}";
     </script>
 </head>
 <body>
@@ -151,7 +152,7 @@
         <div class="ai-panel-header">
             <div>
                 <strong>AI Assistant</strong>
-                <div class="ai-subtitle">Ask to add/list/move tasks or capture/find recalls</div>
+                <div class="ai-subtitle">Manage tasks, calendar & recalls</div>
             </div>
             <button class="btn-icon" onclick="toggleAIPanel()" aria-label="Close AI panel">
                 <i class="fa-solid fa-xmark"></i>
@@ -159,7 +160,7 @@
         </div>
         <div class="ai-messages" id="ai-messages"></div>
         <div class="ai-input-row">
-            <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Remember https://example.com as a research link tagged ai, or move “Finish onboarding” into Phase Week 1"></textarea>
+            <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Add task to project, list today's events, save a link..."></textarea>
             <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('panel')" aria-label="Toggle voice input">
                 <i class="fa-solid fa-microphone"></i>
             </button>
@@ -169,13 +170,12 @@
         </div>
         <div class="ai-footer-actions">
             <button class="btn btn-secondary" type="button" onclick="clearAIConversation()">
-                <i class="fa-solid fa-trash"></i> Clear conversation
+                <i class="fa-solid fa-trash"></i> Clear
             </button>
             <button class="btn btn-secondary" type="button" onclick="openFullAIPage()">
-                <i class="fa-solid fa-up-right-from-square"></i> Open full AI page
+                <i class="fa-solid fa-expand"></i> Full page
             </button>
         </div>
-        <div class="ai-hint">Headers are auto-sent from your session; AI uses your data.</div>
     </div>
 
     <!-- Capacitor Notification Service -->

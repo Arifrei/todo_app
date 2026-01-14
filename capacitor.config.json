@@ -11,6 +11,10 @@
     "allowMixedContent": true
   },
   "plugins": {
+    "Keyboard": {
+      "resize": "body",
+      "resizeOnFullScreen": true
+    },
     "LocalNotifications": {
       "smallIcon": "ic_notification_bell",
       "iconColor": "#3b82f6",

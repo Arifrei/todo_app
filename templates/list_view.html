@@ -69,19 +69,27 @@
                 </button>
             </div>
         </div>
+        {% else %}
+        <div class="header-add-menu">
+            <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
+                <i class="fa-solid fa-plus"></i>
+                <span>Add</span>
+                <i class="fa-solid fa-caret-down"></i>
+            </button>
+            <div class="header-menu-dropdown header-add-dropdown" id="header-add-dropdown">
+                <button class="header-menu-item" onclick="openAddItemModal(null, 'project_list'); toggleHeaderAddMenu(event);">
+                    <i class="fa-solid fa-list-check"></i> Add Project (List)
+                </button>
+                <button class="header-menu-item" onclick="openAddItemModal(null, 'project_hub'); toggleHeaderAddMenu(event);">
+                    <i class="fa-solid fa-folder-tree"></i> Add Project (Hub)
+                </button>
+            </div>
+        </div>
         {% endif %}
         <button class="btn-icon header-menu-trigger" onclick="toggleHeaderMenu(event)" title="More options">
             <i class="fa-solid fa-ellipsis-vertical"></i>
         </button>
         <div class="header-menu-dropdown" id="header-menu-dropdown">
-            {% if todo_list.type != 'list' %}
-            <button class="header-menu-item" onclick="openAddItemModal(null, 'project_list'); toggleHeaderMenu(event);">
-                <i class="fa-solid fa-list-check"></i> Add Project (List)
-            </button>
-            <button class="header-menu-item" onclick="openAddItemModal(null, 'project_hub'); toggleHeaderMenu(event);">
-                <i class="fa-solid fa-folder-tree"></i> Add Project (Hub)
-            </button>
-            {% endif %}
             <button class="header-menu-item" onclick="openBulkImportModal(); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-list-check"></i> Bulk Add
             </button>
@@ -215,12 +223,12 @@
                 {% endif %}
                 {% if item.description %}
                 <div class="task-description" style="font-size: 0.9rem; color: var(--text-color); margin-top: 4px;">{{
-                    item.description }}</div>
+                    item.description|linkify_text }}</div>
                 {% endif %}
                 {% if item.notes %}
                 <div class="task-notes"
                     style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; font-style: italic;">{{
-                    item.notes }}</div>
+                    item.notes|linkify_text }}</div>
                 {% endif %}
                 {% if tag_list %}
                 <div class="task-tags">

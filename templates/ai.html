@@ -1,29 +1,30 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<header class="header-row">
+<header class="header-row compact ai-page-header-row">
     <div>
         <h1>AI Assistant</h1>
-        <p style="color: var(--text-muted);">Ask to add/list/move tasks or capture and find recall items.</p>
+        <p class="sub">Manage tasks, calendar & recalls</p>
+    </div>
+    <div class="header-actions">
+        <button class="btn-icon" type="button" onclick="clearAIConversation()" aria-label="Clear conversation" title="Clear conversation">
+            <i class="fa-solid fa-trash"></i>
+        </button>
     </div>
 </header>
 
-<div class="ai-page-container">
-    <div class="ai-page-header">
-        <button class="btn btn-secondary" type="button" onclick="clearAIConversation()">
-            <i class="fa-solid fa-trash"></i> Clear conversation
-        </button>
-    </div>
+<div class="ai-fullpage">
     <div class="ai-messages" id="ai-page-messages"></div>
-    <div class="ai-input-row">
-        <textarea id="ai-page-input" class="form-control" rows="3" placeholder="e.g. Remember https://example.com as a research link tagged ai, or add "Finish onboarding" under Phase Week 1"></textarea>
-        <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('page')" aria-label="Toggle voice input">
-            <i class="fa-solid fa-microphone"></i>
-        </button>
-        <button class="btn btn-primary ai-send-btn" type="button" id="ai-page-send" aria-label="Send AI prompt">
-            <i class="fa-solid fa-paper-plane"></i>
-        </button>
+    <div class="ai-fullpage-input">
+        <textarea id="ai-page-input" class="form-control" rows="2" placeholder="e.g. Add task to project, list today's events..."></textarea>
+        <div class="ai-fullpage-buttons">
+            <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('page')" aria-label="Toggle voice input">
+                <i class="fa-solid fa-microphone"></i>
+            </button>
+            <button class="btn btn-primary ai-send-btn" type="button" id="ai-page-send" aria-label="Send AI prompt">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
     </div>
-    <div class="ai-hint">AI uses your selected user. Data is applied immediately.</div>
 </div>
 {% endblock %}
