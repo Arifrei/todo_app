@@ -10,6 +10,7 @@ Creates/aligns all core tables to the current models:
 - todo_item
 - note
 - calendar_event
+- recall_items
 The script is idempotent: it only adds missing tables/columns and backfills
 order indexes and legacy statuses.
 """
@@ -293,49 +294,38 @@ def ensure_recurrence_exception_table(cur):
 
 def ensure_recall_table(cur):
     """Create or align the recalls table used for the Recall module."""
-    if not table_exists(cur, "recall_item"):
+    if not table_exists(cur, "recall_items"):
         cur.execute(
             """
-            CREATE TABLE recall_item (
+            CREATE TABLE recall_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                title VARCHAR(200) NOT NULL,
-                category VARCHAR(80) NOT NULL DEFAULT 'General',
-                type VARCHAR(30) NOT NULL DEFAULT 'note',
-                content TEXT,
-                description TEXT,
-                tags TEXT,
-                priority VARCHAR(10) NOT NULL DEFAULT 'medium',
-                pinned BOOLEAN DEFAULT 0,
-                reminder_at TIMESTAMP,
-                status VARCHAR(20) NOT NULL DEFAULT 'active',
-                source_url VARCHAR(400),
+                title VARCHAR(120) NOT NULL,
+                payload_type VARCHAR(10) NOT NULL,
+                payload TEXT NOT NULL,
+                when_context VARCHAR(30) NOT NULL,
+                why VARCHAR(500),
                 summary TEXT,
-                search_blob TEXT,
-                embedding TEXT,
+                ai_status VARCHAR(20) DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
-        print("[add] recall_item table created")
+        print("[add] recall_items table created")
+        if table_exists(cur, "recall_item"):
+            print("[warn] legacy recall_item table exists; drop it with one_time_drop_recalls.py")
         return
 
-    add_column(cur, "recall_item", "category", "VARCHAR(80) NOT NULL DEFAULT 'General'")
-    add_column(cur, "recall_item", "type", "VARCHAR(30) NOT NULL DEFAULT 'note'")
-    add_column(cur, "recall_item", "content", "TEXT")
-    add_column(cur, "recall_item", "description", "TEXT")
-    add_column(cur, "recall_item", "tags", "TEXT")
-    add_column(cur, "recall_item", "priority", "VARCHAR(10) NOT NULL DEFAULT 'medium'")
-    add_column(cur, "recall_item", "pinned", "BOOLEAN DEFAULT 0")
-    add_column(cur, "recall_item", "reminder_at", "TIMESTAMP")
-    add_column(cur, "recall_item", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'")
-    add_column(cur, "recall_item", "source_url", "VARCHAR(400)")
-    add_column(cur, "recall_item", "summary", "TEXT")
-    add_column(cur, "recall_item", "search_blob", "TEXT")
-    add_column(cur, "recall_item", "embedding", "TEXT")
-    add_column(cur, "recall_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-    add_column(cur, "recall_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "recall_items", "title", "VARCHAR(120) NOT NULL DEFAULT ''")
+    add_column(cur, "recall_items", "why", "VARCHAR(500)")
+    add_column(cur, "recall_items", "summary", "TEXT")
+    add_column(cur, "recall_items", "ai_status", "VARCHAR(20) DEFAULT 'pending'")
+    add_column(cur, "recall_items", "payload_type", "VARCHAR(10) NOT NULL DEFAULT 'text'")
+    add_column(cur, "recall_items", "payload", "TEXT NOT NULL DEFAULT ''")
+    add_column(cur, "recall_items", "when_context", "VARCHAR(30) NOT NULL DEFAULT 'free'")
+    add_column(cur, "recall_items", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "recall_items", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
 def ensure_notification_tables(cur):

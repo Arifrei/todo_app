@@ -238,51 +238,38 @@ class Note(db.Model):
 
 
 class RecallItem(db.Model):
-    """Lightweight personal recall item (links, ideas, sources, etc.)."""
+    __tablename__ = 'recall_items'
+
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    title = db.Column(db.String(200), nullable=False)
-    category = db.Column(db.String(80), nullable=False, default='General')
-    type = db.Column(db.String(30), nullable=False, default='note')  # link | idea | source | other
-    content = db.Column(db.Text, nullable=True)
-    description = db.Column(db.Text, nullable=True)
-    tags = db.Column(db.Text, nullable=True)  # comma-separated for simplicity
-    priority = db.Column(db.String(10), nullable=False, default='medium')  # low | medium | high
-    pinned = db.Column(db.Boolean, default=False)
-    reminder_at = db.Column(db.DateTime, nullable=True)
-    status = db.Column(db.String(20), nullable=False, default='active')  # active | archived
-    source_url = db.Column(db.String(400), nullable=True)
+
+    # User-entered fields
+    title = db.Column(db.String(120), nullable=False)
+    payload_type = db.Column(db.String(10), nullable=False)  # 'url' or 'text'
+    payload = db.Column(db.Text, nullable=False)
+    when_context = db.Column(db.String(30), nullable=False)
+
+    # AI-generated fields (populated in background)
+    why = db.Column(db.String(500), nullable=True)
     summary = db.Column(db.Text, nullable=True)
-    search_blob = db.Column(db.Text, nullable=True)
-    embedding = db.Column(db.Text, nullable=True)  # JSON array of floats
+    ai_status = db.Column(db.String(20), default='pending')  # pending|processing|done|failed
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def tag_list(self):
-        return _split_tags(self.tags)
-
-    def to_dict(self, include_similarity=False, similarity=None):
-        data = {
+    def to_dict(self):
+        return {
             'id': self.id,
-            'user_id': self.user_id,
             'title': self.title,
-            'category': self.category,
-            'type': self.type,
-            'content': self.content or '',
-            'description': self.description or '',
-            'tags': self.tag_list(),
-            'priority': self.priority,
-            'pinned': bool(self.pinned),
-            'reminder_at': self.reminder_at.isoformat() if self.reminder_at else None,
-            'status': self.status,
-            'source_url': self.source_url,
+            'why': self.why,
             'summary': self.summary,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'ai_status': self.ai_status,
+            'payload_type': self.payload_type,
+            'payload': self.payload,
+            'when_context': self.when_context,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
         }
-        if include_similarity and similarity is not None:
-            data['similarity'] = similarity
-        return data
 
 
 class CalendarEvent(db.Model):

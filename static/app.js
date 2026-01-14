@@ -88,10 +88,15 @@ let touchDragPhaseId = null;
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false };
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
-let recallState = { items: [], selectedId: null, editingId: null, filters: { q: '', category: 'all', type: 'all', status: 'active', sort: 'smart', pinnedOnly: false, tag: null }, aiResults: [] };
-let recallSummaryPollers = {}; // Track active pollers by recall ID
-let selectedRecallCategories = new Set();
-let selectedRecallTags = new Set();
+let recallState = {
+    items: [],
+    selectedWhen: null,
+    lastUsedWhen: null,
+    modalRecallId: null,
+    modalEditMode: false,
+    pollingIds: [],
+    pollingInterval: null
+};
 let currentTaskFilter = 'all';
 let selectedTagFilters = new Set();
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time' };
@@ -7284,6 +7289,11 @@ async function createCalendarEvent(payload) {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
+            if (err && err.error) {
+                showToast(err.error, 'warning');
+            } else {
+                showToast('Could not save calendar item.', 'error');
+            }
             console.error(err);
             return null;
         }
@@ -7304,7 +7314,16 @@ async function updateCalendarEvent(id, payload, options = {}) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        if (!res.ok) throw new Error('Failed to update event');
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            if (err && err.error) {
+                showToast(err.error, 'warning');
+            } else {
+                showToast('Could not update calendar item.', 'error');
+            }
+            console.error(err);
+            return;
+        }
 
         let updated = null;
         try {
@@ -8534,59 +8553,170 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modal) modal.classList.add('is-hidden');
 
     // ===== ANDROID KEYBOARD HANDLING =====
-    // Use visualViewport API to detect keyboard open/close and adjust modals
-    if (window.visualViewport) {
-        let initialHeight = window.visualViewport.height;
+    // Directly manipulate modal heights based on visual viewport (more reliable than CSS dvh/svh)
+    const isMobile = window.innerWidth <= 768;
+
+    if (isMobile) {
+        let initialHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
         let keyboardOpen = false;
+        let rafId = null;
 
-        const handleViewportResize = () => {
-            const currentHeight = window.visualViewport.height;
-            const heightDiff = initialHeight - currentHeight;
-            const isKeyboardNowOpen = heightDiff > 150; // Keyboard typically > 150px
+        // Force WebView to repaint an element (fixes Android WebView rendering bugs)
+        const forceRepaint = (element) => {
+            if (!element) return;
+            // Trigger reflow by reading offsetHeight
+            void element.offsetHeight;
+            // Toggle opacity to force repaint
+            element.style.opacity = '0.999';
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    element.style.opacity = '1';
+                });
+            });
+        };
 
-            if (isKeyboardNowOpen !== keyboardOpen) {
-                keyboardOpen = isKeyboardNowOpen;
-                document.body.classList.toggle('keyboard-open', keyboardOpen);
+        const adjustModalsForKeyboard = (viewportHeight) => {
+            const addModal = document.getElementById('add-item-modal');
+            const aiPanel = document.getElementById('ai-panel');
 
-                // Scroll focused element into view when keyboard opens
-                if (keyboardOpen && document.activeElement) {
-                    const activeEl = document.activeElement;
-                    const tagName = activeEl.tagName.toLowerCase();
-                    if (tagName === 'input' || tagName === 'textarea') {
+            // Adjust add-item-modal
+            if (addModal && addModal.classList.contains('active')) {
+                const modalContent = addModal.querySelector('.modal-content');
+                if (modalContent) {
+                    // Set explicit height based on viewport
+                    addModal.style.height = viewportHeight + 'px';
+                    modalContent.style.maxHeight = (viewportHeight - 20) + 'px';
+
+                    // Force repaint to fix WebView rendering bug
+                    forceRepaint(modalContent);
+
+                    // Scroll focused input into view within modal
+                    const focused = modalContent.querySelector(':focus');
+                    if (focused) {
                         setTimeout(() => {
-                            activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }, 100);
+                            focused.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+                            // Force another repaint after scroll
+                            forceRepaint(modalContent);
+                        }, 50);
                     }
+                }
+            }
+
+            // Adjust AI panel
+            if (aiPanel && aiPanel.classList.contains('open')) {
+                const maxH = Math.min(viewportHeight * 0.7, viewportHeight - 20);
+                aiPanel.style.maxHeight = maxH + 'px';
+
+                // Shrink messages when keyboard is open
+                const messages = aiPanel.querySelector('.ai-messages');
+                if (messages && keyboardOpen) {
+                    messages.style.maxHeight = '80px';
+                    messages.style.minHeight = '50px';
+                }
+
+                // Force repaint
+                forceRepaint(aiPanel);
+            }
+        };
+
+        const resetModalStyles = () => {
+            const addModal = document.getElementById('add-item-modal');
+            const aiPanel = document.getElementById('ai-panel');
+
+            if (addModal) {
+                addModal.style.height = '';
+                const modalContent = addModal.querySelector('.modal-content');
+                if (modalContent) modalContent.style.maxHeight = '';
+            }
+
+            if (aiPanel) {
+                aiPanel.style.maxHeight = '';
+                const messages = aiPanel.querySelector('.ai-messages');
+                if (messages) {
+                    messages.style.maxHeight = '';
+                    messages.style.minHeight = '';
                 }
             }
         };
 
-        window.visualViewport.addEventListener('resize', handleViewportResize);
-        window.visualViewport.addEventListener('scroll', handleViewportResize);
+        const handleViewportChange = () => {
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+                const currentHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+                const heightDiff = initialHeight - currentHeight;
+                const isKeyboardNowOpen = heightDiff > 150;
+
+                if (isKeyboardNowOpen !== keyboardOpen) {
+                    keyboardOpen = isKeyboardNowOpen;
+                    document.body.classList.toggle('keyboard-open', keyboardOpen);
+                }
+
+                if (keyboardOpen) {
+                    adjustModalsForKeyboard(currentHeight);
+                } else {
+                    resetModalStyles();
+                }
+            });
+        };
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', handleViewportChange);
+            window.visualViewport.addEventListener('scroll', handleViewportChange);
+        }
+
+        // Also listen to window resize as fallback
+        window.addEventListener('resize', handleViewportChange);
 
         // Update initial height on orientation change
         window.addEventListener('orientationchange', () => {
             setTimeout(() => {
-                initialHeight = window.visualViewport.height;
+                initialHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+                keyboardOpen = false;
+                resetModalStyles();
             }, 500);
         });
-    }
 
-    // Fallback for browsers without visualViewport
-    let lastWindowHeight = window.innerHeight;
-    window.addEventListener('resize', () => {
-        const currentHeight = window.innerHeight;
-        const heightDiff = lastWindowHeight - currentHeight;
-
-        // Only use fallback if visualViewport not available
-        if (!window.visualViewport && heightDiff > 150) {
-            document.body.classList.add('keyboard-open');
-        } else if (!window.visualViewport && heightDiff < -150) {
-            document.body.classList.remove('keyboard-open');
+        // Re-adjust when modals open
+        const originalOpenAddItemModal = window.openAddItemModal;
+        if (typeof originalOpenAddItemModal === 'function') {
+            window.openAddItemModal = function(...args) {
+                originalOpenAddItemModal.apply(this, args);
+                if (keyboardOpen) {
+                    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+                    adjustModalsForKeyboard(vh);
+                }
+            };
         }
 
-        lastWindowHeight = currentHeight;
-    });
+        // Force repaint while typing in modals (fixes WebView not painting text)
+        let repaintDebounce = null;
+        document.addEventListener('input', (e) => {
+            if (!keyboardOpen) return;
+            const target = e.target;
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+                const modal = target.closest('.modal-content') || target.closest('.ai-panel');
+                if (modal) {
+                    // Debounce repaint calls
+                    if (repaintDebounce) clearTimeout(repaintDebounce);
+                    repaintDebounce = setTimeout(() => {
+                        forceRepaint(modal);
+                    }, 100);
+                }
+            }
+        }, true);
+
+        // Also force repaint on focus changes within modals
+        document.addEventListener('focusin', (e) => {
+            if (!keyboardOpen) return;
+            const target = e.target;
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+                const modal = target.closest('.modal-content') || target.closest('.ai-panel');
+                if (modal) {
+                    setTimeout(() => forceRepaint(modal), 100);
+                }
+            }
+        }, true);
+    }
 
     // Close modals on outside click
     window.onclick = function (event) {
@@ -8599,8 +8729,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target == confirmModal) closeConfirmModal();
         const editListModal = document.getElementById('edit-list-modal');
         if (event.target == editListModal) closeEditListModal();
-        const recallModal = document.getElementById('recall-modal');
-        if (event.target == recallModal) closeRecallModal();
 
         const mainMenu = document.getElementById('phase-menu-main');
         if (!event.target.closest('.phase-add-dropdown')) {
@@ -8868,1224 +8996,707 @@ function initTaskSelectionUI() {
 }
 
 // --- Recalls ---
-let recallSearchTimer = null;
+const recallWhenDefaults = ['bored', 'free', 'work', 'travel'];
 
 function initRecallsPage() {
-    const listEl = document.getElementById('recall-list');
-    const modal = document.getElementById('recall-modal');
-    if (!listEl || !modal) return; // Not on recalls page
+    const cardsEl = document.getElementById('recall-cards');
+    const addInput = document.getElementById('recall-add-input');
+    const addBtn = document.getElementById('recall-add-btn');
+    const addForm = document.getElementById('recall-add-form');
+    if (!cardsEl) return;
 
-    // If any legacy filter/helper blocks remain in DOM, hide them defensively
-    ['recall-tag-cloud', 'recall-ai-input', 'recall-ai-results'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-    });
-    document.querySelectorAll('.recall-filter-card, .recall-ai-card, .recalls-toolbar').forEach(el => {
-        el.style.display = 'none';
-    });
-
-    const searchInput = document.getElementById('recall-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', (e) => {
-            recallState.filters.q = e.target.value.trim();
-            scheduleRecallReload();
+    // Toggle add form visibility
+    if (addBtn && addForm) {
+        addBtn.addEventListener('click', () => {
+            const isOpen = addForm.classList.contains('open');
+            if (isOpen) {
+                addForm.classList.remove('open');
+                addBtn.classList.remove('active');
+                addBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add';
+            } else {
+                addForm.classList.add('open');
+                addBtn.classList.add('active');
+                addBtn.innerHTML = '<i class="fa-solid fa-times"></i> Cancel';
+                if (addInput) addInput.focus();
+            }
         });
     }
 
-    const menuBtn = document.getElementById('recall-actions-btn');
-    const menu = document.getElementById('recall-actions-menu');
-    if (menuBtn && menu) {
-        menuBtn.addEventListener('click', (e) => {
+    // Setup add input - Enter key submits with last used when
+    if (addInput) {
+        addInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const val = addInput.value.trim();
+                if (val && recallState.lastUsedWhen) {
+                    handleAddRecall(val, recallState.lastUsedWhen);
+                } else if (val) {
+                    showToast('Select a context first', 'info');
+                }
+            }
+        });
+    }
+
+    // Setup modal overlay click to close
+    const overlay = document.getElementById('recall-modal-overlay');
+    if (overlay) {
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeRecallModal();
+        });
+    }
+
+    // Setup filter dropdown
+    const filterBtn = document.getElementById('recall-filter-btn');
+    if (filterBtn) {
+        filterBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            menu.classList.toggle('open');
+            toggleFilterDropdown();
         });
-        document.addEventListener('click', () => menu.classList.remove('open'));
     }
-    const menuAI = document.getElementById('recall-menu-ai');
-    if (menuAI) menuAI.addEventListener('click', () => { promptRecallAISearch(); menu?.classList.remove('open'); });
-    const menuRefresh = document.getElementById('recall-menu-refresh');
-    if (menuRefresh) menuRefresh.addEventListener('click', () => { loadRecalls(); menu?.classList.remove('open'); });
-    const menuEdit = document.getElementById('recall-menu-edit');
-    if (menuEdit) menuEdit.addEventListener('click', () => { editSelectedRecall(); menu?.classList.remove('open'); });
 
-    // Close filter menu when clicking outside
+    // Close dropdown when clicking outside
     document.addEventListener('click', (e) => {
-        const filterMenu = document.getElementById('recall-filter-menu');
-        const filterDropdown = document.getElementById('recall-filter-dropdown');
-        if (filterMenu && filterDropdown && !filterDropdown.contains(e.target)) {
-            filterMenu.classList.remove('show');
-            document.querySelectorAll('.recall-filter-submenu').forEach(sm => sm.classList.remove('show'));
+        const dropdown = document.getElementById('recall-filter-dropdown');
+        if (dropdown && !dropdown.contains(e.target)) {
+            closeFilterDropdown();
         }
     });
 
-    // Toggle quick add panel
-    const toggleAddBtn = document.getElementById('recall-toggle-add-btn');
-    const quickAddPanel = document.getElementById('recall-quick-add-panel');
-    if (toggleAddBtn && quickAddPanel) {
-        toggleAddBtn.addEventListener('click', () => {
-            quickAddPanel.classList.toggle('is-hidden');
-            if (!quickAddPanel.classList.contains('is-hidden')) {
-                const quickInput = document.getElementById('recall-quick-input');
-                if (quickInput) quickInput.focus();
-            }
-        });
-    }
-    const quickAddCloseBtn = document.getElementById('recall-quick-add-close');
-    if (quickAddCloseBtn && quickAddPanel) {
-        quickAddCloseBtn.addEventListener('click', () => {
-            quickAddPanel.classList.add('is-hidden');
-        });
-    }
-
-    const quickAddBtn = document.getElementById('recall-quick-add-btn');
-    if (quickAddBtn) quickAddBtn.addEventListener('click', handleRecallQuickAdd);
-    const quickInput = document.getElementById('recall-quick-input');
-    if (quickInput) {
-        quickInput.addEventListener('keydown', async (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                // Don't submit if autocomplete is open (let autocomplete handle it)
-                const dropdown = document.getElementById('recall-quick-category-autocomplete');
-                if (dropdown && dropdown.classList.contains('show')) {
-                    return; // Autocomplete handler will take care of this
-                }
-                e.preventDefault();
-                await handleRecallQuickAdd();
-            }
-        });
-    }
-    const quickHelpBtn = document.getElementById('recall-quick-help-btn');
-    if (quickHelpBtn) quickHelpBtn.addEventListener('click', toggleRecallQuickHelp);
-
-    const saveBtn = document.getElementById('recall-save-btn');
-    if (saveBtn) saveBtn.addEventListener('click', saveRecall);
-    const pinBtn = document.getElementById('recall-pin-btn');
-    if (pinBtn) pinBtn.addEventListener('click', toggleSelectedRecallPin);
-    const editBtn = document.getElementById('recall-edit-btn');
-    if (editBtn) editBtn.addEventListener('click', editSelectedRecall);
-    const deleteBtn = document.getElementById('recall-delete-btn');
-    if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
-
-    // Initialize category autocomplete
-    initCategoryAutocomplete();
-    initQuickCategoryAutocomplete();
-
-    loadRecalls();
+    loadAllRecalls();
 }
 
-function scheduleRecallReload() {
-    if (recallSearchTimer) clearTimeout(recallSearchTimer);
-    recallSearchTimer = setTimeout(() => loadRecalls(), 200);
+async function loadAllRecalls() {
+    const cardsEl = document.getElementById('recall-cards');
+    if (cardsEl) cardsEl.innerHTML = '<div class="recall-empty">Loading...</div>';
+    try {
+        const res = await fetch('/api/recalls');
+        if (!res.ok) throw new Error('Failed to load recalls');
+        recallState.items = await res.json();
+        renderWhenTabs();
+        renderWhenChipsForAdd();
+        renderRecallCards();
+        startPollingPendingAI();
+    } catch (err) {
+        console.error(err);
+        if (cardsEl) cardsEl.innerHTML = '<div class="recall-empty">Could not load recalls.</div>';
+    }
 }
 
-function parseRecallQuickInput(text) {
-    let raw = (text || '').trim();
-    if (!raw) return null;
-    const entry = { title: '', content: '', description: '', category: 'General', type: 'note', keywords: [], reminder_at: null };
+function getWhenOptions() {
+    const values = new Set(recallWhenDefaults);
+    recallState.items.forEach(item => {
+        if (item.when_context) values.add(item.when_context);
+    });
+    return Array.from(values);
+}
 
-    // Reminder: *YYYY-MM-DD or *YYYY-MM-DD HH:MM
-    const reminderMatch = raw.match(/\*(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?)/);
-    if (reminderMatch) {
-        entry.reminder_at = reminderMatch[1].trim();
-        raw = raw.replace(reminderMatch[0], '').trim();
+function renderFilterDropdown() {
+    const menu = document.getElementById('recall-filter-menu');
+    const label = document.getElementById('recall-filter-label');
+    if (!menu) return;
+
+    const options = getWhenOptions();
+    menu.innerHTML = '';
+
+    // "All" option
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = `recall-filter-option ${recallState.selectedWhen === null ? 'active' : ''}`;
+    allBtn.textContent = 'All';
+    allBtn.addEventListener('click', () => {
+        filterByWhen(null);
+        closeFilterDropdown();
+    });
+    menu.appendChild(allBtn);
+
+    // Context options
+    options.forEach(when => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `recall-filter-option ${recallState.selectedWhen === when ? 'active' : ''}`;
+        btn.textContent = when;
+        btn.addEventListener('click', () => {
+            filterByWhen(when);
+            closeFilterDropdown();
+        });
+        menu.appendChild(btn);
+    });
+
+    // Update label
+    if (label) {
+        label.textContent = recallState.selectedWhen || 'All';
     }
+}
 
-    // Type: @link|@idea|@source|@note|@other
-    const typeMatch = raw.match(/@(link|idea|source|note|other)/i);
-    if (typeMatch) {
-        entry.type = typeMatch[1].toLowerCase();
-        raw = raw.replace(typeMatch[0], '').trim();
-    }
+function toggleFilterDropdown() {
+    const btn = document.getElementById('recall-filter-btn');
+    const menu = document.getElementById('recall-filter-menu');
+    if (!btn || !menu) return;
 
-    // Category: #Category
-    const catMatch = raw.match(/#([A-Za-z0-9 _-]+)/);
-    if (catMatch) {
-        entry.category = catMatch[1].trim() || 'General';
-        raw = raw.replace(catMatch[0], '').trim();
-    }
-
-    // Keywords: +word
-    const keywordMatches = raw.match(/\+([A-Za-z0-9_-]+)/g) || [];
-    if (keywordMatches.length) {
-        entry.keywords = keywordMatches.map(k => k.substring(1));
-        keywordMatches.forEach(k => { raw = raw.replace(k, '').trim(); });
-    }
-
-    // Description: :: Description text
-    if (raw.includes('::')) {
-        const parts = raw.split('::');
-        entry.description = parts.slice(1).join('::').trim();
-        raw = parts[0].trim();
-    }
-
-    // Split title ; content
-    if (raw.includes(';')) {
-        const parts = raw.split(';');
-        entry.title = parts[0].trim();
-        entry.content = parts.slice(1).join(';').trim();
+    const isOpen = menu.classList.contains('open');
+    if (isOpen) {
+        closeFilterDropdown();
     } else {
-        entry.title = raw;
-        entry.content = '';
+        btn.classList.add('open');
+        menu.classList.add('open');
     }
-
-    // Source URL detection
-    const urlMatch = (entry.content || raw).match(/https?:\/\/\S+/);
-    if (urlMatch) {
-        entry.source_url = urlMatch[0];
-    }
-
-    if (!entry.title) return null;
-    return entry;
 }
 
-async function handleRecallQuickAdd() {
-    const input = document.getElementById('recall-quick-input');
-    if (!input) return;
-    const parsed = parseRecallQuickInput(input.value);
-    if (!parsed) return;
-    const payload = {
-        title: parsed.title,
-        content: parsed.content,
-        description: parsed.description,
-        category: parsed.category,
-        type: parsed.type,
-        reminder_at: parsed.reminder_at,
-        keywords: parsed.keywords,
-        source_url: parsed.source_url
+function closeFilterDropdown() {
+    const btn = document.getElementById('recall-filter-btn');
+    const menu = document.getElementById('recall-filter-menu');
+    if (btn) btn.classList.remove('open');
+    if (menu) menu.classList.remove('open');
+}
+
+// Keep old name as alias for compatibility
+function renderWhenTabs() {
+    renderFilterDropdown();
+}
+
+function renderWhenChipsForAdd() {
+    const container = document.getElementById('recall-when-chips');
+    if (!container) return;
+
+    const options = getWhenOptions();
+    container.innerHTML = '';
+
+    options.forEach(when => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = `recall-when-chip ${recallState.lastUsedWhen === when ? 'active' : ''}`;
+        chip.textContent = when;
+        chip.addEventListener('click', () => {
+            const input = document.getElementById('recall-add-input');
+            const val = input ? input.value.trim() : '';
+            if (val) {
+                handleAddRecall(val, when);
+            } else {
+                // Just select this as the default
+                recallState.lastUsedWhen = when;
+                renderWhenChipsForAdd();
+            }
+        });
+        container.appendChild(chip);
+    });
+
+    // Add "+" button for custom context
+    const addChip = document.createElement('button');
+    addChip.type = 'button';
+    addChip.className = 'recall-when-chip recall-when-chip-add';
+    addChip.innerHTML = '<i class="fa-solid fa-plus"></i>';
+    addChip.title = 'Add custom context';
+    addChip.addEventListener('click', () => {
+        showAddWhenInput(container);
+    });
+    container.appendChild(addChip);
+}
+
+function showAddWhenInput(container) {
+    // Check if input already exists
+    if (container.querySelector('.recall-when-add-input')) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'recall-when-add-wrapper';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'recall-when-add-input';
+    input.placeholder = 'New context...';
+    input.maxLength = 20;
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'recall-when-add-confirm';
+    confirmBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'recall-when-add-cancel';
+    cancelBtn.innerHTML = '<i class="fa-solid fa-times"></i>';
+
+    const addCustomWhen = () => {
+        const val = input.value.trim().toLowerCase();
+        if (val && val.length <= 20) {
+            // Add to defaults so it persists in this session
+            if (!recallWhenDefaults.includes(val)) {
+                recallWhenDefaults.push(val);
+            }
+            recallState.lastUsedWhen = val;
+            renderWhenChipsForAdd();
+            renderFilterDropdown();
+        }
     };
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addCustomWhen();
+        } else if (e.key === 'Escape') {
+            renderWhenChipsForAdd();
+        }
+    });
+
+    confirmBtn.addEventListener('click', addCustomWhen);
+    cancelBtn.addEventListener('click', () => renderWhenChipsForAdd());
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(confirmBtn);
+    wrapper.appendChild(cancelBtn);
+    container.appendChild(wrapper);
+
+    input.focus();
+}
+
+function filterByWhen(when) {
+    recallState.selectedWhen = when;
+    renderWhenTabs();
+    renderRecallCards();
+}
+
+function renderRecallCards() {
+    const container = document.getElementById('recall-cards');
+    if (!container) return;
+
+    const items = recallState.selectedWhen
+        ? recallState.items.filter(item => item.when_context === recallState.selectedWhen)
+        : recallState.items;
+
+    if (!items.length) {
+        container.innerHTML = '<div class="recall-empty">No recalls yet. Click Add to create one.</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+    items.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'recall-card';
+        card.dataset.id = item.id;
+
+        // Meta badges (URL + when context)
+        let metaHtml = '';
+        if (item.payload_type === 'url') {
+            metaHtml += `<a href="${recallEscape(item.payload)}" target="_blank" rel="noopener" class="recall-card-url" onclick="event.stopPropagation()"><i class="fa-solid fa-link"></i> URL</a>`;
+        }
+        metaHtml += `<span class="recall-card-when" data-when="${recallEscape(item.when_context)}">${recallEscape(item.when_context)}</span>`;
+
+        // Why display
+        let whyHtml = '';
+        if (item.ai_status === 'pending' || item.ai_status === 'processing') {
+            whyHtml = `<div class="recall-card-why pending">Generating...</div>`;
+        } else if (item.why) {
+            whyHtml = `<div class="recall-card-why">${recallEscape(item.why)}</div>`;
+        }
+
+        card.innerHTML = `
+            <div class="recall-card-header">
+                <div class="recall-card-title">${recallEscape(item.title)}</div>
+                <div class="recall-card-meta">${metaHtml}</div>
+            </div>
+            ${whyHtml}
+        `;
+
+        card.addEventListener('click', () => openRecallModal(item.id));
+        container.appendChild(card);
+    });
+}
+
+function openRecallModal(id) {
+    const recall = recallState.items.find(item => item.id === id);
+    if (!recall) return;
+
+    recallState.modalRecallId = id;
+    recallState.modalEditMode = false;
+    const overlay = document.getElementById('recall-modal-overlay');
+    const body = document.getElementById('recall-modal-body');
+    const titleText = document.getElementById('recall-modal-title-text');
+    if (!overlay || !body) return;
+
+    if (titleText) titleText.textContent = 'Recall';
+    renderModalViewMode(recall);
+    overlay.classList.add('open');
+}
+
+function renderModalViewMode(recall) {
+    const body = document.getElementById('recall-modal-body');
+    const titleText = document.getElementById('recall-modal-title-text');
+    if (!body) return;
+
+    if (titleText) titleText.textContent = 'Recall';
+
+    // URL badge
+    let urlHtml = '';
+    if (recall.payload_type === 'url') {
+        urlHtml = `<a href="${recallEscape(recall.payload)}" target="_blank" rel="noopener" class="recall-view-url"><i class="fa-solid fa-external-link"></i> URL</a>`;
+    }
+
+    // Why display
+    let whyHtml = '';
+    if (recall.ai_status === 'pending' || recall.ai_status === 'processing') {
+        whyHtml = `
+            <div class="recall-view-block">
+                <div class="recall-view-label">Why</div>
+                <div class="recall-view-box recall-view-why pending">Generating...</div>
+            </div>
+        `;
+    } else if (recall.why) {
+        whyHtml = `
+            <div class="recall-view-block">
+                <div class="recall-view-label">Why</div>
+                <div class="recall-view-box recall-view-why">${recallEscape(recall.why)}</div>
+            </div>
+        `;
+    }
+
+    // Summary display
+    let summaryHtml = '';
+    if (recall.ai_status === 'pending' || recall.ai_status === 'processing') {
+        summaryHtml = `
+            <div class="recall-view-block">
+                <div class="recall-view-label">Summary</div>
+                <div class="recall-view-box recall-view-summary pending">Generating summary...</div>
+            </div>
+        `;
+    } else if (recall.summary) {
+        summaryHtml = `
+            <div class="recall-view-block">
+                <div class="recall-view-label">Summary</div>
+                <div class="recall-view-box recall-view-summary">${recallEscape(recall.summary)}</div>
+            </div>
+        `;
+    }
+
+    // Content display for text payloads
+    let contentHtml = '';
+    if (recall.payload_type === 'text') {
+        contentHtml = `
+            <div class="recall-view-block">
+                <div class="recall-view-label">Content</div>
+                <div class="recall-view-box recall-view-content">${recallEscape(recall.payload)}</div>
+            </div>
+        `;
+    }
+
+    body.innerHTML = `
+        <div class="recall-view-section">
+            <div class="recall-view-title">${recallEscape(recall.title)}</div>
+            <div class="recall-view-meta">
+                <span class="recall-view-when" data-when="${recallEscape(recall.when_context)}">${recallEscape(recall.when_context)}</span>
+                ${urlHtml}
+            </div>
+        </div>
+        ${whyHtml ? `<div class="recall-view-section">${whyHtml}</div>` : ''}
+        ${summaryHtml ? `<div class="recall-view-section">${summaryHtml}</div>` : ''}
+        ${contentHtml ? `<div class="recall-view-section">${contentHtml}</div>` : ''}
+        <div class="recall-modal-actions">
+            <div class="recall-modal-actions-left">
+                <button type="button" class="recall-modal-delete" id="recall-modal-delete">Delete</button>
+                <button type="button" class="recall-modal-edit" id="recall-modal-edit">Edit</button>
+            </div>
+        </div>
+    `;
+
+    // Setup edit button
+    const editBtn = document.getElementById('recall-modal-edit');
+    if (editBtn) {
+        editBtn.addEventListener('click', () => {
+            recallState.modalEditMode = true;
+            renderModalEditMode(recall);
+        });
+    }
+
+    // Setup delete button
+    const deleteBtn = document.getElementById('recall-modal-delete');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', () => {
+            closeRecallModal();
+            deleteRecall(recall.id);
+        });
+    }
+}
+
+function renderModalEditMode(recall) {
+    const body = document.getElementById('recall-modal-body');
+    const titleText = document.getElementById('recall-modal-title-text');
+    if (!body) return;
+
+    if (titleText) titleText.textContent = 'Edit Recall';
+
+    // Payload field - only editable for text type
+    let payloadHtml = '';
+    if (recall.payload_type === 'text') {
+        payloadHtml = `
+            <div class="recall-modal-field">
+                <label>Content</label>
+                <textarea class="recall-modal-payload" id="recall-modal-payload">${recallEscape(recall.payload)}</textarea>
+            </div>
+        `;
+    }
+
+    // Summary field
+    let summaryHtml = '';
+    if (recall.ai_status === 'pending' || recall.ai_status === 'processing') {
+        summaryHtml = `
+            <div class="recall-modal-field">
+                <label>Summary</label>
+                <div class="recall-view-summary pending">Generating summary...</div>
+            </div>
+        `;
+    } else {
+        summaryHtml = `
+            <div class="recall-modal-field">
+                <label>Summary</label>
+                <textarea class="recall-modal-summary-input" id="recall-modal-summary">${recallEscape(recall.summary || '')}</textarea>
+            </div>
+        `;
+    }
+
+    body.innerHTML = `
+        <div class="recall-modal-field">
+            <label>Title</label>
+            <input type="text" class="recall-modal-input" id="recall-modal-title" value="${recallEscape(recall.title)}">
+        </div>
+        ${payloadHtml}
+        <div class="recall-modal-field">
+            <label>Context</label>
+            <div class="recall-when-chips" id="recall-modal-when-chips"></div>
+        </div>
+        <div class="recall-modal-field">
+            <label>Why</label>
+            <input type="text" class="recall-modal-input" id="recall-modal-why" value="${recallEscape(recall.why || '')}" placeholder="${recall.ai_status === 'pending' || recall.ai_status === 'processing' ? 'Generating...' : ''}">
+        </div>
+        ${summaryHtml}
+        <div class="recall-modal-actions">
+            <button type="button" class="recall-modal-cancel" id="recall-modal-cancel">Cancel</button>
+            <button type="button" class="recall-modal-save" id="recall-modal-save">Save</button>
+        </div>
+    `;
+
+    // Setup when chips
+    const chipsContainer = document.getElementById('recall-modal-when-chips');
+    if (chipsContainer) {
+        const options = getWhenOptions();
+        options.forEach(when => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = `recall-when-chip ${recall.when_context === when ? 'active' : ''}`;
+            chip.textContent = when;
+            chip.addEventListener('click', () => {
+                chipsContainer.querySelectorAll('.recall-when-chip').forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+            });
+            chipsContainer.appendChild(chip);
+        });
+    }
+
+    // Setup cancel button
+    const cancelBtn = document.getElementById('recall-modal-cancel');
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            recallState.modalEditMode = false;
+            renderModalViewMode(recall);
+        });
+    }
+
+    // Setup save button
+    const saveBtn = document.getElementById('recall-modal-save');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => saveRecallFromModal(recall.id));
+    }
+}
+
+// Keep for backward compatibility with polling updates
+function renderModalContent(recall) {
+    if (recallState.modalEditMode) {
+        renderModalEditMode(recall);
+    } else {
+        renderModalViewMode(recall);
+    }
+}
+
+function closeRecallModal() {
+    const overlay = document.getElementById('recall-modal-overlay');
+    if (overlay) overlay.classList.remove('open');
+    recallState.modalRecallId = null;
+    recallState.modalEditMode = false;
+}
+
+async function saveRecallFromModal(id) {
+    const titleInput = document.getElementById('recall-modal-title');
+    const whyInput = document.getElementById('recall-modal-why');
+    const payloadInput = document.getElementById('recall-modal-payload');
+    const summaryInput = document.getElementById('recall-modal-summary');
+    const activeChip = document.querySelector('#recall-modal-when-chips .recall-when-chip.active');
+
+    const fields = {};
+    if (titleInput) fields.title = titleInput.value.trim();
+    if (whyInput) fields.why = whyInput.value.trim();
+    if (payloadInput) fields.payload = payloadInput.value.trim();
+    if (summaryInput) fields.summary = summaryInput.value.trim();
+    if (activeChip) fields.when_context = activeChip.textContent;
+
+    try {
+        const res = await fetch(`/api/recalls/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(fields)
+        });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        const idx = recallState.items.findIndex(item => item.id === id);
+        if (idx !== -1) recallState.items[idx] = updated;
+        renderWhenTabs();
+        renderRecallCards();
+        closeRecallModal();
+        showToast('Recall updated', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update recall.', 'error');
+    }
+}
+
+function detectPayloadType(input) {
+    const trimmed = (input || '').trim();
+    return /^https?:\/\/\S+$/i.test(trimmed) ? 'url' : 'text';
+}
+
+function parseRecallInput(input) {
+    // Use ";" (semicolon) as delimiter for easier mobile typing
+    const idx = input.indexOf(';');
+    if (idx === -1) return null;
+    const title = input.substring(0, idx).trim();
+    const content = input.substring(idx + 1).trim();
+    if (!title || !content) return null;
+    return { title, content };
+}
+
+async function handleAddRecall(input, whenContext) {
+    const parsed = parseRecallInput(input);
+    if (!parsed) {
+        showToast('Use format: Title; Content or URL', 'error');
+        return;
+    }
+
+    const payload_type = detectPayloadType(parsed.content);
+
     try {
         const res = await fetch('/api/recalls', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (!res.ok) throw new Error('Create failed');
-        const saved = await res.json();
-        input.value = '';
-        await loadRecalls();
-        // Close the quick add panel after successful add
-        const quickAddPanel = document.getElementById('recall-quick-add-panel');
-        if (quickAddPanel) quickAddPanel.classList.add('is-hidden');
-
-        // Start polling for AI-generated summary
-        if (saved.summary) {
-            startRecallSummaryPoller(saved.id, saved.summary);
-        }
-    } catch (err) {
-        console.error(err);
-        showToast('Could not create recall.', 'error');
-    }
-}
-
-function toggleRecallQuickHelp() {
-    const guide = document.getElementById('recall-syntax-guide');
-    if (!guide) return;
-    const nowHidden = guide.classList.toggle('is-hidden');
-    guide.style.display = nowHidden ? 'none' : 'block';
-}
-
-async function loadRecalls() {
-    const listEl = document.getElementById('recall-list');
-    if (listEl) listEl.innerHTML = '<div class=\"recall-empty\">Loading...</div>';
-    const params = new URLSearchParams();
-    const f = recallState.filters;
-    if (f.q) params.set('q', f.q);
-    if (f.status) params.set('status', f.status);
-    try {
-        const res = await fetch(`/api/recalls?${params.toString()}`);
-        if (!res.ok) throw new Error('Failed to load recalls');
-        recallState.items = await res.json();
-
-        // Check if there's a ?note= parameter in the URL to auto-select a recall
-        const urlParams = new URLSearchParams(window.location.search);
-        const targetNoteId = parseInt(urlParams.get('note'), 10);
-        if (targetNoteId && !isNaN(targetNoteId)) {
-            // Check if this recall exists in the loaded items
-            const targetRecall = recallState.items.find(item => item.id === targetNoteId);
-            if (targetRecall) {
-                recallState.selectedId = targetNoteId;
-            }
-        }
-
-        renderRecallList();
-        initRecallFilters();
-    } catch (err) {
-        console.error(err);
-        if (listEl) listEl.innerHTML = '<div class=\"recall-empty\">Could not load recalls.</div>';
-    }
-}
-
-function renderRecallFilters() {
-    // Reduced UI: no-op placeholder to avoid errors if called
-}
-
-function renderRecallList() {
-    const container = document.getElementById('recall-list');
-    if (!container) return;
-    if (!recallState.items.length) {
-        container.innerHTML = '<div class=\"recall-empty\"><i class=\"fa-solid fa-inbox\"></i><p>No recalls yet. Add one to get started.</p></div>';
-        renderRecallDetail(null);
-        return;
-    }
-    container.innerHTML = '';
-    recallState.items.forEach(item => {
-        const row = document.createElement('div');
-        row.className = `recall-row ${item.pinned ? 'pinned' : ''} ${recallState.selectedId === item.id ? 'active' : ''} ${item.status === 'archived' ? 'archived' : ''}`;
-        row.dataset.id = item.id;
-
-        // Store category and tags in data attributes for filtering
-        row.dataset.category = item.category || '';
-        const tags = normalizeRecallTags(item.tags);
-        row.dataset.tags = tags.join(',');
-
-        const snippet = (item.summary || item.description || item.content || '').slice(0, 100);
-        const typeIcon = {
-            'link': 'fa-link',
-            'idea': 'fa-lightbulb',
-            'source': 'fa-book',
-            'note': 'fa-note-sticky',
-            'other': 'fa-circle'
-        }[item.type || 'note'] || 'fa-note-sticky';
-
-        // Build tags HTML
-        const tagsHTML = tags.length > 0
-            ? `<div class=\"recall-tags\">${tags.map(tag => `<span class=\"tag-chip\" data-tag=\"${recallEscape(tag)}\">${recallEscape(tag)}</span>`).join('')}</div>`
-            : '';
-
-        row.innerHTML = `
-            <div class=\"recall-row-top\">
-                <div class=\"recall-row-header\">
-                    <i class=\"fa-solid ${typeIcon} recall-type-icon\"></i>
-                    <div class=\"recall-row-title\">${recallEscape(item.title)}</div>
-                </div>
-                <div class=\"recall-pill\">${recallEscape(item.category || 'General')}</div>
-            </div>
-            ${snippet ? `<div class=\"recall-row-snippet\">${recallEscape(snippet)}${snippet.length >= 100 ? '...' : ''}</div>` : ''}
-            ${tagsHTML}
-        `;
-        row.addEventListener('click', () => selectRecall(item.id));
-        row.addEventListener('dblclick', (e) => {
-            e.stopPropagation();
-            recallState.selectedId = item.id;
-            editSelectedRecall();
-        });
-        container.appendChild(row);
-    });
-    if (recallState.selectedId) {
-        const selectedExists = recallState.items.some(i => i.id === recallState.selectedId);
-        if (!selectedExists) {
-            recallState.selectedId = null;
-        }
-    }
-    // Don't auto-select first recall - keep detail box empty until user clicks
-    renderRecallDetail(getSelectedRecall());
-    applyRecallFilters();
-}
-
-function normalizeRecallTags(tags) {
-    // Handle both string and array formats from backend
-    if (!tags) return [];
-    if (Array.isArray(tags)) return tags.filter(Boolean);
-    if (typeof tags === 'string') {
-        return tags.split(',').map(t => t.trim()).filter(Boolean);
-    }
-    return [];
-}
-
-function getAllRecallCategories() {
-    const categorySet = new Set();
-    recallState.items.forEach(item => {
-        if (item.category) categorySet.add(item.category);
-    });
-    return Array.from(categorySet).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-}
-
-function getAllRecallTags() {
-    const tagSet = new Set();
-    recallState.items.forEach(item => {
-        const tags = normalizeRecallTags(item.tags);
-        tags.forEach(tag => tagSet.add(tag));
-    });
-    return Array.from(tagSet).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-}
-
-function initRecallFilters() {
-    // Populate category submenu
-    const categorySubmenu = document.getElementById('recall-filter-submenu-category');
-    if (categorySubmenu) {
-        const categories = getAllRecallCategories();
-        categorySubmenu.innerHTML = categories.map(cat =>
-            `<button class="recall-filter-item recall-category-filter ${selectedRecallCategories.has(cat) ? 'active' : ''}" data-category="${recallEscape(cat)}" type="button">${recallEscape(cat)}</button>`
-        ).join('');
-
-        categorySubmenu.querySelectorAll('.recall-category-filter').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const category = btn.dataset.category;
-                if (selectedRecallCategories.has(category)) {
-                    selectedRecallCategories.delete(category);
-                } else {
-                    selectedRecallCategories.add(category);
-                }
-                syncRecallFilterUI();
-                applyRecallFilters();
-            });
-        });
-    }
-
-    // Populate tags submenu
-    const tagsSubmenu = document.getElementById('recall-filter-submenu-tags');
-    if (tagsSubmenu) {
-        const tags = getAllRecallTags();
-        tagsSubmenu.innerHTML = tags.map(tag =>
-            `<button class="recall-filter-item recall-tag-filter ${selectedRecallTags.has(tag) ? 'active' : ''}" data-tag="${recallEscape(tag)}" type="button">${recallEscape(tag)}</button>`
-        ).join('');
-
-        tagsSubmenu.querySelectorAll('.recall-tag-filter').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const tag = btn.dataset.tag;
-                if (selectedRecallTags.has(tag)) {
-                    selectedRecallTags.delete(tag);
-                } else {
-                    selectedRecallTags.add(tag);
-                }
-                syncRecallFilterUI();
-                applyRecallFilters();
-            });
-        });
-    }
-}
-
-function syncRecallFilterUI() {
-    // Update active state on category buttons
-    const categorySubmenu = document.getElementById('recall-filter-submenu-category');
-    if (categorySubmenu) {
-        categorySubmenu.querySelectorAll('.recall-category-filter').forEach(btn => {
-            btn.classList.toggle('active', selectedRecallCategories.has(btn.dataset.category));
-        });
-    }
-
-    // Update active state on tag buttons
-    const tagsSubmenu = document.getElementById('recall-filter-submenu-tags');
-    if (tagsSubmenu) {
-        tagsSubmenu.querySelectorAll('.recall-tag-filter').forEach(btn => {
-            btn.classList.toggle('active', selectedRecallTags.has(btn.dataset.tag));
-        });
-    }
-
-    updateRecallFilterLabel();
-    renderRecallFilterPills();
-}
-
-function updateRecallFilterLabel() {
-    const label = document.getElementById('recall-filter-label');
-    if (!label) return;
-
-    const totalFilters = selectedRecallCategories.size + selectedRecallTags.size;
-    if (totalFilters === 0) {
-        label.textContent = 'Filter';
-    } else {
-        label.textContent = `Filter (${totalFilters})`;
-    }
-}
-
-function renderRecallFilterPills() {
-    const container = document.getElementById('recall-filter-pills');
-    if (!container) return;
-
-    const pills = [];
-
-    // Category pills
-    selectedRecallCategories.forEach(category => {
-        pills.push(`
-            <div class="filter-pill">
-                <i class="fa-solid fa-folder"></i>
-                <span>${recallEscape(category)}</span>
-                <button class="filter-pill-remove" onclick="removeRecallCategoryFilter('${recallEscape(category).replace(/'/g, "\\'")}', event)" aria-label="Remove filter">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-        `);
-    });
-
-    // Tag pills
-    selectedRecallTags.forEach(tag => {
-        pills.push(`
-            <div class="filter-pill">
-                <i class="fa-solid fa-tag"></i>
-                <span>${recallEscape(tag)}</span>
-                <button class="filter-pill-remove" onclick="removeRecallTagFilter('${recallEscape(tag).replace(/'/g, "\\'")}', event)" aria-label="Remove filter">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-        `);
-    });
-
-    // Clear all button
-    if (pills.length > 0) {
-        pills.push(`
-            <button class="filter-pill-clear" onclick="clearRecallFilters(event)" type="button">
-                <i class="fa-solid fa-xmark"></i> Clear all
-            </button>
-        `);
-    }
-
-    container.innerHTML = pills.join('');
-}
-
-function removeRecallCategoryFilter(category, event) {
-    if (event) event.stopPropagation();
-    selectedRecallCategories.delete(category);
-    syncRecallFilterUI();
-    applyRecallFilters();
-}
-
-function removeRecallTagFilter(tag, event) {
-    if (event) event.stopPropagation();
-    selectedRecallTags.delete(tag);
-    syncRecallFilterUI();
-    applyRecallFilters();
-}
-
-function clearRecallFilters(event) {
-    if (event) event.stopPropagation();
-    selectedRecallCategories.clear();
-    selectedRecallTags.clear();
-    syncRecallFilterUI();
-    applyRecallFilters();
-}
-
-function toggleRecallFilterMenu(event) {
-    if (event) event.stopPropagation();
-    const menu = document.getElementById('recall-filter-menu');
-    if (!menu) return;
-    const shouldShow = !menu.classList.contains('show');
-
-    // Close all submenus
-    document.querySelectorAll('.recall-filter-submenu').forEach(sm => sm.classList.remove('show'));
-
-    if (shouldShow) {
-        menu.classList.add('show');
-    } else {
-        menu.classList.remove('show');
-    }
-}
-
-function toggleRecallFilterSubmenu(kind, event) {
-    if (event) event.stopPropagation();
-    const menu = document.getElementById('recall-filter-menu');
-    if (!menu) return;
-
-    const categoryMenu = document.getElementById('recall-filter-submenu-category');
-    const tagsMenu = document.getElementById('recall-filter-submenu-tags');
-    if (!categoryMenu || !tagsMenu) return;
-
-    const openCategory = categoryMenu.classList.contains('show');
-    const openTags = tagsMenu.classList.contains('show');
-
-    if (kind === 'category') {
-        categoryMenu.classList.toggle('show', !openCategory);
-        tagsMenu.classList.remove('show');
-    } else if (kind === 'tags') {
-        tagsMenu.classList.toggle('show', !openTags);
-        categoryMenu.classList.remove('show');
-    }
-}
-
-function applyRecallFilters() {
-    const rows = document.querySelectorAll('.recall-row');
-    rows.forEach(row => {
-        let matches = true;
-
-        // Check category filters (AND logic)
-        if (selectedRecallCategories.size > 0) {
-            const rowCategory = row.dataset.category || '';
-            matches = matches && selectedRecallCategories.has(rowCategory);
-        }
-
-        // Check tag filters (AND logic - must have ALL selected tags)
-        if (selectedRecallTags.size > 0) {
-            const rowTags = (row.dataset.tags || '').split(',').filter(Boolean);
-            const hasAllTags = Array.from(selectedRecallTags).every(selectedTag =>
-                rowTags.includes(selectedTag)
-            );
-            matches = matches && hasAllTags;
-        }
-
-        row.classList.toggle('hidden-by-filter', !matches);
-    });
-}
-
-function selectRecall(id) {
-    recallState.selectedId = id;
-    renderRecallList();
-
-    // On mobile, smooth scroll to the detail section
-    if (window.innerWidth <= 1100) {
-        // Small delay to ensure DOM is updated after renderRecallList()
-        setTimeout(() => {
-            const detailCard = document.getElementById('recall-detail-card');
-            if (detailCard) {
-                detailCard.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'start'
-                });
-            }
-        }, 50);
-    }
-}
-
-function getSelectedRecall() {
-    return recallState.items.find(i => i.id === recallState.selectedId) || null;
-}
-
-function editSelectedRecall() {
-    const selected = getSelectedRecall();
-    if (!selected) {
-        showToast('Select a recall to edit.', 'info');
-        return;
-    }
-    openRecallModal(selected);
-}
-
-function renderRecallDetail(item) {
-    const empty = document.getElementById('recall-detail-empty');
-    const body = document.getElementById('recall-detail-body');
-    if (!empty || !body) return;
-    if (!item) {
-        empty.style.display = 'flex';
-        body.style.display = 'none';
-        return;
-    }
-    empty.style.display = 'none';
-    body.style.display = 'block';
-
-    // Build the detail view HTML
-    const typeLabels = {
-        'link': 'Link',
-        'idea': 'Idea',
-        'source': 'Source',
-        'note': 'Note',
-        'other': 'Other'
-    };
-    const typeIcons = {
-        'link': 'fa-link',
-        'idea': 'fa-lightbulb',
-        'source': 'fa-book',
-        'note': 'fa-note-sticky',
-        'other': 'fa-circle'
-    };
-    const typeLabel = typeLabels[item.type] || 'Note';
-    const typeIcon = typeIcons[item.type] || 'fa-note-sticky';
-
-    let detailHTML = `
-        <div class=\"recall-detail-header\">
-            <div class=\"recall-detail-header-left\">
-                ${item.pinned ? '<i class=\"fa-solid fa-thumbtack recall-pin-icon\" title=\"Pinned\"></i>' : ''}
-                <h2>${recallEscape(item.title)}</h2>
-            </div>
-            <div class=\"recall-actions\">
-                <button class=\"btn btn-secondary btn-small recall-pin-btn\" id=\"recall-pin-btn\" title=\"${item.pinned ? 'Unpin' : 'Pin'}\">
-                    <i class=\"fa-solid fa-thumbtack\"></i><span class=\"btn-text\">${item.pinned ? 'Unpin' : 'Pin'}</span>
-                </button>
-                <button class=\"btn btn-small recall-edit-btn\" id=\"recall-edit-btn\" title=\"Edit\">
-                    <i class=\"fa-solid fa-pen\"></i><span class=\"btn-text\">Edit</span>
-                </button>
-                <button class=\"btn btn-danger btn-small recall-delete-btn\" id=\"recall-delete-btn\" title=\"Delete\">
-                    <i class=\"fa-solid fa-trash\"></i><span class=\"btn-text\">Delete</span>
-                </button>
-            </div>
-        </div>
-
-        <div class=\"recall-detail-meta\">
-            <span class=\"pill recall-category-pill\"><i class=\"fa-solid fa-folder\"></i> ${recallEscape(item.category || 'General')}</span>
-            ${(() => {
-                const tags = normalizeRecallTags(item.tags);
-                return tags.map(tag => `<span class=\"tag-chip\" data-tag=\"${recallEscape(tag)}\"><i class=\"fa-solid fa-tag\"></i> ${recallEscape(tag)}</span>`).join('');
-            })()}
-            ${item.priority && item.priority !== 'medium' ? `<span class=\"pill priority-${item.priority}\">${recallEscape(item.priority).toUpperCase()}</span>` : ''}
-            ${item.status && item.status !== 'active' ? `<span class=\"pill\">${recallEscape(item.status).toUpperCase()}</span>` : ''}
-        </div>
-
-        ${item.content ? `
-        <div class=\"recall-detail-section\">
-            <h3 class=\"recall-section-title\">Content</h3>
-            <div class=\"recall-detail-content\">${linkifyRecallContent(item.content)}</div>
-        </div>` : ''}
-
-        ${item.description ? `
-        <div class=\"recall-detail-section\">
-            <h3 class=\"recall-section-title\">Description</h3>
-            <div class=\"recall-detail-content\">${recallEscape(item.description)}</div>
-        </div>` : ''}
-
-        ${item.source_url ? `
-        <div class=\"recall-detail-section\">
-            <h3 class=\"recall-section-title\">Source</h3>
-            <a href=\"${recallEscape(item.source_url)}\" target=\"_blank\" rel=\"noopener\" class=\"recall-source-link\">
-                <i class=\"fa-solid fa-external-link-alt\"></i> ${recallEscape(item.source_url)}
-            </a>
-        </div>` : ''}
-
-        ${item.summary ? `
-        <div class=\"recall-summary-section\">
-            <h3 class=\"recall-section-title\"><i class=\"fa-solid fa-lightbulb\"></i> Summary</h3>
-            <div class=\"recall-summary\">${recallEscape(item.summary)}</div>
-        </div>` : ''}
-
-        ${item.reminder_at ? `
-        <div class=\"recall-detail-section\">
-            <h3 class=\"recall-section-title\">Reminder</h3>
-            <div class=\"recall-reminder-info\">
-                <i class=\"fa-solid fa-bell\"></i> ${formatRecallDate(item.reminder_at)}
-            </div>
-        </div>` : ''}
-
-        ${item.updated_at ? `
-        <div class=\"recall-detail-footer\">
-            <span class=\"recall-timestamp\">Last updated: ${formatRecallDate(item.updated_at)}</span>
-        </div>` : ''}
-    `;
-
-    body.innerHTML = detailHTML;
-
-    // Re-attach event listeners
-    const pinBtn = document.getElementById('recall-pin-btn');
-    const editBtn = document.getElementById('recall-edit-btn');
-    const deleteBtn = document.getElementById('recall-delete-btn');
-    if (pinBtn) pinBtn.addEventListener('click', toggleSelectedRecallPin);
-    if (editBtn) editBtn.addEventListener('click', editSelectedRecall);
-    if (deleteBtn) deleteBtn.addEventListener('click', deleteSelectedRecall);
-}
-
-function openRecallModal(item = null) {
-    const modal = document.getElementById('recall-modal');
-    if (!modal) return;
-    recallState.editingId = item ? item.id : null;
-    const title = document.getElementById('recall-modal-title');
-    const titleInput = document.getElementById('recall-title-input');
-    const categoryInput = document.getElementById('recall-category-input');
-    const typeInput = document.getElementById('recall-type-input');
-    const priorityInput = document.getElementById('recall-priority-input');
-    const statusInput = document.getElementById('recall-status-input');
-    const pinnedInput = document.getElementById('recall-pinned-input');
-    const contentInput = document.getElementById('recall-content-input');
-    const descriptionInput = document.getElementById('recall-description-input');
-    const summaryInput = document.getElementById('recall-summary-input');
-    const tagsInput = document.getElementById('recall-tags-input');
-    const sourceInput = document.getElementById('recall-source-input');
-    const reminderInput = document.getElementById('recall-reminder-input');
-
-    if (title) title.textContent = item ? 'Edit Recall' : 'New Recall';
-    if (titleInput) titleInput.value = item ? item.title : '';
-    if (categoryInput) categoryInput.value = item ? item.category : 'General';
-    if (typeInput) typeInput.value = item ? item.type : 'note';
-    if (priorityInput) priorityInput.value = item ? item.priority : 'medium';
-    if (statusInput) statusInput.value = item ? item.status : 'active';
-    if (pinnedInput) pinnedInput.checked = item ? !!item.pinned : false;
-    if (contentInput) contentInput.value = item ? (item.content || '') : '';
-    if (descriptionInput) descriptionInput.value = item ? (item.description || '') : '';
-    if (summaryInput) summaryInput.value = item ? (item.summary || '') : '';
-    if (tagsInput) tagsInput.value = item ? normalizeRecallTags(item.tags).join(', ') : '';
-    if (sourceInput) sourceInput.value = item ? (item.source_url || '') : '';
-    if (reminderInput) reminderInput.value = item && item.reminder_at ? item.reminder_at.slice(0, 16) : '';
-
-    modal.classList.add('active');
-    if (titleInput) titleInput.focus();
-}
-
-function closeRecallModal() {
-    const modal = document.getElementById('recall-modal');
-    if (modal) modal.classList.remove('active');
-    recallState.editingId = null;
-    // Hide category autocomplete when modal closes
-    hideCategoryAutocomplete();
-}
-
-// Category autocomplete functionality
-let categoryAutocompleteIndex = -1;
-
-function getUniqueCategories() {
-    const categories = new Set();
-    recallState.items.forEach(item => {
-        if (item.category && item.category.trim()) {
-            categories.add(item.category.trim());
-        }
-    });
-    // Add some default suggestions if no categories exist
-    if (categories.size === 0) {
-        ['General', 'Work', 'Personal', 'Research', 'Ideas'].forEach(c => categories.add(c));
-    }
-    return Array.from(categories).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-}
-
-function positionAutocompleteDropdown(input, dropdown) {
-    const rect = input.getBoundingClientRect();
-
-    // Move dropdown to body FIRST if not already there (escapes all container constraints)
-    if (dropdown.parentElement !== document.body) {
-        document.body.appendChild(dropdown);
-    }
-
-    // Apply positioning with inline styles to ensure they take precedence
-    dropdown.style.position = 'fixed';
-    dropdown.style.left = `${rect.left}px`;
-    dropdown.style.top = `${rect.bottom + 2}px`;
-    dropdown.style.width = `${rect.width}px`;
-    dropdown.style.zIndex = '2147483647';
-    dropdown.style.pointerEvents = 'auto';
-}
-
-function showCategoryAutocomplete(filter = '') {
-    const dropdown = document.getElementById('recall-category-autocomplete');
-    const input = document.getElementById('recall-category-input');
-    if (!dropdown || !input) return;
-
-    const allCategories = getUniqueCategories();
-    const filterLower = filter.toLowerCase();
-
-    // Filter categories that match the input
-    const matches = filter
-        ? allCategories.filter(cat => cat.toLowerCase().includes(filterLower))
-        : allCategories;
-
-    dropdown.innerHTML = '';
-    categoryAutocompleteIndex = -1;
-
-    if (matches.length === 0) {
-        if (filter) {
-            // Show "Create new" option when typing something not in list
-            const createItem = document.createElement('div');
-            createItem.className = 'autocomplete-item';
-            createItem.innerHTML = `<i class="fa-solid fa-plus"></i> Create "${recallEscape(filter)}"`;
-            createItem.addEventListener('mousedown', (e) => {
-                e.preventDefault(); // Prevent blur before click
-                document.getElementById('recall-category-input').value = filter;
-                hideCategoryAutocomplete();
-            });
-            dropdown.appendChild(createItem);
-        } else {
-            const empty = document.createElement('div');
-            empty.className = 'autocomplete-empty';
-            empty.textContent = 'No categories yet';
-            dropdown.appendChild(empty);
-        }
-    } else {
-        matches.forEach((cat, idx) => {
-            const item = document.createElement('div');
-            item.className = 'autocomplete-item';
-            item.dataset.index = idx;
-            item.innerHTML = `<i class="fa-solid fa-folder"></i> ${recallEscape(cat)}`;
-            item.addEventListener('mousedown', (e) => {
-                e.preventDefault(); // Prevent blur before click
-                document.getElementById('recall-category-input').value = cat;
-                hideCategoryAutocomplete();
-            });
-            dropdown.appendChild(item);
-        });
-    }
-
-    positionAutocompleteDropdown(input, dropdown);
-    dropdown.classList.add('show');
-}
-
-function hideCategoryAutocomplete() {
-    const dropdown = document.getElementById('recall-category-autocomplete');
-    if (dropdown) {
-        dropdown.classList.remove('show');
-        categoryAutocompleteIndex = -1;
-    }
-}
-
-function navigateCategoryAutocomplete(direction) {
-    const dropdown = document.getElementById('recall-category-autocomplete');
-    if (!dropdown || !dropdown.classList.contains('show')) return;
-
-    const items = dropdown.querySelectorAll('.autocomplete-item');
-    if (items.length === 0) return;
-
-    // Remove active class from current
-    if (categoryAutocompleteIndex >= 0 && categoryAutocompleteIndex < items.length) {
-        items[categoryAutocompleteIndex].classList.remove('active');
-    }
-
-    // Update index
-    if (direction === 'down') {
-        categoryAutocompleteIndex = (categoryAutocompleteIndex + 1) % items.length;
-    } else {
-        categoryAutocompleteIndex = categoryAutocompleteIndex <= 0 ? items.length - 1 : categoryAutocompleteIndex - 1;
-    }
-
-    // Add active class to new
-    items[categoryAutocompleteIndex].classList.add('active');
-    items[categoryAutocompleteIndex].scrollIntoView({ block: 'nearest' });
-}
-
-function selectCategoryAutocomplete() {
-    const dropdown = document.getElementById('recall-category-autocomplete');
-    if (!dropdown || !dropdown.classList.contains('show')) return false;
-
-    const items = dropdown.querySelectorAll('.autocomplete-item');
-    if (categoryAutocompleteIndex >= 0 && categoryAutocompleteIndex < items.length) {
-        items[categoryAutocompleteIndex].click();
-        return true;
-    }
-    return false;
-}
-
-function initCategoryAutocomplete() {
-    const input = document.getElementById('recall-category-input');
-    if (!input) return;
-
-    // Show dropdown on focus
-    input.addEventListener('focus', () => {
-        showCategoryAutocomplete(input.value);
-    });
-
-    // Filter on input
-    input.addEventListener('input', () => {
-        showCategoryAutocomplete(input.value);
-    });
-
-    // Keyboard navigation
-    input.addEventListener('keydown', (e) => {
-        const dropdown = document.getElementById('recall-category-autocomplete');
-        if (!dropdown || !dropdown.classList.contains('show')) return;
-
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            navigateCategoryAutocomplete('down');
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            navigateCategoryAutocomplete('up');
-        } else if (e.key === 'Enter') {
-            if (selectCategoryAutocomplete()) {
-                e.preventDefault();
-            }
-        } else if (e.key === 'Escape') {
-            hideCategoryAutocomplete();
-        }
-    });
-
-    // Hide on blur (with delay to allow click)
-    input.addEventListener('blur', () => {
-        setTimeout(hideCategoryAutocomplete, 150);
-    });
-}
-
-// Quick add inline category autocomplete
-let quickCategoryAutocompleteIndex = -1;
-let quickCategoryMatch = null; // Stores { start, end, text } of current #category match
-
-function getQuickCategoryMatch(input) {
-    const value = input.value;
-    const cursorPos = input.selectionStart;
-
-    // Look backwards from cursor to find a # that starts a category
-    let start = -1;
-    for (let i = cursorPos - 1; i >= 0; i--) {
-        const char = value[i];
-        if (char === '#') {
-            start = i;
-            break;
-        }
-        // Stop if we hit a space or other syntax markers before finding #
-        if (char === ' ' || char === '@' || char === '+' || char === '*' || char === ';') {
-            break;
-        }
-    }
-
-    if (start === -1) return null;
-
-    // Find where the category ends (space or end of string or another syntax marker)
-    let end = cursorPos;
-    for (let i = cursorPos; i < value.length; i++) {
-        const char = value[i];
-        if (char === ' ' || char === '@' || char === '+' || char === '*' || char === ';' || char === '#') {
-            break;
-        }
-        end = i + 1;
-    }
-
-    const text = value.substring(start + 1, end); // Text after #
-    return { start, end, text };
-}
-
-function showQuickCategoryAutocomplete(filter = '') {
-    const dropdown = document.getElementById('recall-quick-category-autocomplete');
-    const input = document.getElementById('recall-quick-input');
-    if (!dropdown || !input) return;
-
-    const allCategories = getUniqueCategories();
-    const filterLower = filter.toLowerCase();
-
-    // Filter categories that match the input
-    const matches = filter
-        ? allCategories.filter(cat => cat.toLowerCase().includes(filterLower))
-        : allCategories;
-
-    dropdown.innerHTML = '';
-    quickCategoryAutocompleteIndex = -1;
-
-    if (matches.length === 0 && filter) {
-        // Show "Create new" option when typing something not in list
-        const createItem = document.createElement('div');
-        createItem.className = 'autocomplete-item';
-        createItem.innerHTML = `<i class="fa-solid fa-plus"></i> Create "${recallEscape(filter)}"`;
-        createItem.dataset.value = filter;
-        createItem.addEventListener('mousedown', (e) => {
-            e.preventDefault(); // Prevent blur before selection
-            selectQuickCategory(filter);
-        });
-        dropdown.appendChild(createItem);
-    } else if (matches.length > 0) {
-        matches.slice(0, 8).forEach((cat, idx) => {
-            const item = document.createElement('div');
-            item.className = 'autocomplete-item';
-            item.dataset.index = idx;
-            item.dataset.value = cat;
-            item.innerHTML = `<i class="fa-solid fa-folder"></i> ${recallEscape(cat)}`;
-            item.addEventListener('mousedown', (e) => {
-                e.preventDefault(); // Prevent blur before selection
-                selectQuickCategory(cat);
-            });
-            dropdown.appendChild(item);
-        });
-    }
-
-    if (dropdown.children.length > 0) {
-        positionAutocompleteDropdown(input, dropdown);
-        dropdown.classList.add('show');
-    } else {
-        dropdown.classList.remove('show');
-    }
-}
-
-function hideQuickCategoryAutocomplete() {
-    const dropdown = document.getElementById('recall-quick-category-autocomplete');
-    if (dropdown) {
-        dropdown.classList.remove('show');
-        quickCategoryAutocompleteIndex = -1;
-        quickCategoryMatch = null;
-    }
-}
-
-function selectQuickCategory(category) {
-    const input = document.getElementById('recall-quick-input');
-    if (!input || !quickCategoryMatch) return;
-
-    const value = input.value;
-    const before = value.substring(0, quickCategoryMatch.start);
-    const after = value.substring(quickCategoryMatch.end);
-
-    // Replace #partial with #Category (add space after if needed)
-    const newValue = before + '#' + category + (after.startsWith(' ') ? '' : ' ') + after;
-    input.value = newValue;
-
-    // Position cursor after the inserted category
-    const newCursorPos = quickCategoryMatch.start + 1 + category.length + (after.startsWith(' ') ? 0 : 1);
-    input.setSelectionRange(newCursorPos, newCursorPos);
-    input.focus();
-
-    hideQuickCategoryAutocomplete();
-}
-
-function navigateQuickCategoryAutocomplete(direction) {
-    const dropdown = document.getElementById('recall-quick-category-autocomplete');
-    if (!dropdown || !dropdown.classList.contains('show')) return;
-
-    const items = dropdown.querySelectorAll('.autocomplete-item');
-    if (items.length === 0) return;
-
-    // Remove active class from current
-    if (quickCategoryAutocompleteIndex >= 0 && quickCategoryAutocompleteIndex < items.length) {
-        items[quickCategoryAutocompleteIndex].classList.remove('active');
-    }
-
-    // Update index
-    if (direction === 'down') {
-        quickCategoryAutocompleteIndex = (quickCategoryAutocompleteIndex + 1) % items.length;
-    } else {
-        quickCategoryAutocompleteIndex = quickCategoryAutocompleteIndex <= 0 ? items.length - 1 : quickCategoryAutocompleteIndex - 1;
-    }
-
-    // Add active class to new
-    items[quickCategoryAutocompleteIndex].classList.add('active');
-    items[quickCategoryAutocompleteIndex].scrollIntoView({ block: 'nearest' });
-}
-
-function selectQuickCategoryAutocomplete() {
-    const dropdown = document.getElementById('recall-quick-category-autocomplete');
-    if (!dropdown || !dropdown.classList.contains('show')) return false;
-
-    const items = dropdown.querySelectorAll('.autocomplete-item');
-    if (quickCategoryAutocompleteIndex >= 0 && quickCategoryAutocompleteIndex < items.length) {
-        const value = items[quickCategoryAutocompleteIndex].dataset.value;
-        if (value) {
-            selectQuickCategory(value);
-            return true;
-        }
-    }
-    return false;
-}
-
-function initQuickCategoryAutocomplete() {
-    const input = document.getElementById('recall-quick-input');
-    if (!input) return;
-
-    // Check for # on input
-    input.addEventListener('input', () => {
-        const match = getQuickCategoryMatch(input);
-        if (match) {
-            quickCategoryMatch = match;
-            showQuickCategoryAutocomplete(match.text);
-        } else {
-            hideQuickCategoryAutocomplete();
-        }
-    });
-
-    // Keyboard navigation
-    input.addEventListener('keydown', (e) => {
-        const dropdown = document.getElementById('recall-quick-category-autocomplete');
-        if (!dropdown || !dropdown.classList.contains('show')) return;
-
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            navigateQuickCategoryAutocomplete('down');
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            navigateQuickCategoryAutocomplete('up');
-        } else if (e.key === 'Tab' || e.key === 'Enter') {
-            if (selectQuickCategoryAutocomplete()) {
-                e.preventDefault();
-            }
-        } else if (e.key === 'Escape') {
-            hideQuickCategoryAutocomplete();
-        }
-    });
-
-    // Hide on blur (with delay to allow click)
-    input.addEventListener('blur', () => {
-        setTimeout(hideQuickCategoryAutocomplete, 150);
-    });
-}
-
-// Poll for updated recall summary (background AI generation)
-function startRecallSummaryPoller(recallId, initialSummary) {
-    // Stop any existing poller for this recall
-    if (recallSummaryPollers[recallId]) {
-        clearInterval(recallSummaryPollers[recallId]);
-    }
-
-    let pollCount = 0;
-    const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
-    const pollInterval = 2000; // 2 seconds
-
-    recallSummaryPollers[recallId] = setInterval(async () => {
-        pollCount++;
-
-        // Stop polling after max attempts
-        if (pollCount >= maxPolls) {
-            clearInterval(recallSummaryPollers[recallId]);
-            delete recallSummaryPollers[recallId];
-            return;
-        }
-
-        try {
-            const res = await fetch(`/api/recalls/${recallId}`);
-            if (!res.ok) {
-                clearInterval(recallSummaryPollers[recallId]);
-                delete recallSummaryPollers[recallId];
-                return;
-            }
-
-            const updated = await res.json();
-
-            // Check if summary has changed from initial (fallback) summary
-            if (updated.summary && updated.summary !== initialSummary) {
-                // Update the item in recallState
-                const idx = recallState.items.findIndex(item => item.id === recallId);
-                if (idx !== -1) {
-                    recallState.items[idx] = updated;
-                    // Re-render the list and detail if this recall is selected
-                    renderRecallList();
-                    if (recallState.selectedId === recallId) {
-                        renderRecallDetail(updated);
-                    }
-                }
-
-                // Stop polling - we got the updated summary
-                clearInterval(recallSummaryPollers[recallId]);
-                delete recallSummaryPollers[recallId];
-            }
-        } catch (err) {
-            console.error('Recall summary poll error:', err);
-        }
-    }, pollInterval);
-}
-
-async function saveRecall() {
-    const titleInput = document.getElementById('recall-title-input');
-    if (!titleInput || !titleInput.value.trim()) return;
-
-    const content = document.getElementById('recall-content-input')?.value || '';
-    let sourceUrl = document.getElementById('recall-source-input')?.value || '';
-
-    // Auto-detect URL from content if source_url is empty
-    if (!sourceUrl && content) {
-        const urlMatch = content.match(/https?:\/\/\S+/);
-        if (urlMatch) {
-            sourceUrl = urlMatch[0];
-        }
-    }
-
-    const payload = {
-        title: titleInput.value.trim(),
-        category: document.getElementById('recall-category-input')?.value || 'General',
-        type: document.getElementById('recall-type-input')?.value || 'note',
-        pinned: document.getElementById('recall-pinned-input')?.checked || false,
-        content: content,
-        description: document.getElementById('recall-description-input')?.value || '',
-        keywords: document.getElementById('recall-tags-input')?.value || '',
-        source_url: sourceUrl,
-        reminder_at: document.getElementById('recall-reminder-input')?.value || '',
-    };
-    const isEdit = !!recallState.editingId;
-    const url = isEdit ? `/api/recalls/${recallState.editingId}` : '/api/recalls';
-    try {
-        const res = await fetch(url, {
-            method: isEdit ? 'PUT' : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                title: parsed.title,
+                payload: parsed.content,
+                payload_type,
+                when_context: whenContext
+            })
         });
         if (!res.ok) throw new Error('Save failed');
         const saved = await res.json();
-        recallState.editingId = null;
-        closeRecallModal();
-        await loadRecalls();
-        recallState.selectedId = saved.id;
-        renderRecallList();
 
-        // Start polling for AI-generated summary (for new recalls or edits without user summary)
-        if (saved.summary) {
-            startRecallSummaryPoller(saved.id, saved.summary);
+        recallState.lastUsedWhen = whenContext;
+        recallState.items.unshift(saved);
+
+        // Start polling for this item if AI is pending
+        if (saved.ai_status === 'pending') {
+            startPollingForRecall(saved.id);
         }
+
+        const addInput = document.getElementById('recall-add-input');
+        if (addInput) addInput.value = '';
+
+        // Close the add form
+        const addForm = document.getElementById('recall-add-form');
+        const addBtn = document.getElementById('recall-add-btn');
+        if (addForm) addForm.classList.remove('open');
+        if (addBtn) {
+            addBtn.classList.remove('active');
+            addBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add';
+        }
+
+        renderWhenTabs();
+        renderWhenChipsForAdd();
+        renderRecallCards();
+        showToast('Recall saved', 'success');
     } catch (err) {
         console.error(err);
-        showToast('Could not save recall. Please try again.', 'error');
+        showToast('Could not save recall.', 'error');
     }
 }
 
-async function deleteSelectedRecall() {
-    const target = getSelectedRecall();
-    if (!target) return;
+function startPollingForRecall(id) {
+    if (!recallState.pollingIds.includes(id)) {
+        recallState.pollingIds.push(id);
+    }
+
+    if (!recallState.pollingInterval) {
+        recallState.pollingInterval = setInterval(pollPendingAI, 3000);
+    }
+}
+
+function startPollingPendingAI() {
+    // Find any items that are still pending
+    const pendingIds = recallState.items
+        .filter(item => item.ai_status === 'pending' || item.ai_status === 'processing')
+        .map(item => item.id);
+
+    if (pendingIds.length > 0) {
+        recallState.pollingIds = pendingIds;
+        recallState.pollingInterval = setInterval(pollPendingAI, 3000);
+    }
+}
+
+async function pollPendingAI() {
+    if (recallState.pollingIds.length === 0) {
+        if (recallState.pollingInterval) {
+            clearInterval(recallState.pollingInterval);
+            recallState.pollingInterval = null;
+        }
+        return;
+    }
+
+    const idsToCheck = [...recallState.pollingIds];
+
+    for (const id of idsToCheck) {
+        try {
+            const res = await fetch(`/api/recalls/${id}`);
+            if (!res.ok) continue;
+            const recall = await res.json();
+
+            if (recall.ai_status === 'done' || recall.ai_status === 'failed') {
+                // Update local state
+                const idx = recallState.items.findIndex(r => r.id === id);
+                if (idx !== -1) {
+                    recallState.items[idx] = recall;
+                }
+
+                // Remove from polling
+                recallState.pollingIds = recallState.pollingIds.filter(i => i !== id);
+
+                // Re-render
+                renderRecallCards();
+
+                // Update modal if it's open for this item
+                if (recallState.modalRecallId === id) {
+                    renderModalContent(recall);
+                }
+            }
+        } catch (err) {
+            console.error('Poll error for recall', id, err);
+        }
+    }
+}
+
+function deleteRecall(id) {
     openConfirmModal('Delete this recall?', async () => {
         try {
-            const res = await fetch(`/api/recalls/${target.id}`, { method: 'DELETE' });
+            const res = await fetch(`/api/recalls/${id}`, { method: 'DELETE' });
             if (!res.ok) throw new Error('Delete failed');
-            recallState.selectedId = null;
-            await loadRecalls();
+            recallState.items = recallState.items.filter(item => item.id !== id);
+            recallState.pollingIds = recallState.pollingIds.filter(i => i !== id);
+            renderWhenTabs();
+            renderRecallCards();
             closeConfirmModal();
+            showToast('Recall deleted', 'success');
         } catch (err) {
             console.error(err);
             showToast('Could not delete recall.', 'error');
@@ -10094,103 +9705,16 @@ async function deleteSelectedRecall() {
     });
 }
 
-async function toggleSelectedRecallPin() {
-    const target = getSelectedRecall();
-    if (!target) return;
-    try {
-        const res = await fetch(`/api/recalls/${target.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pinned: !target.pinned })
-        });
-        if (!res.ok) throw new Error('Failed to update pin');
-        await loadRecalls();
-        recallState.selectedId = target.id;
-    } catch (err) {
-        console.error(err);
-    }
-}
-
-async function runRecallAISearch() {
-    const input = document.getElementById('recall-ai-input');
-    const text = input ? (input.value || '').trim() : '';
-    if (!text) return;
-    await runRecallAISearchWithQuery(text);
-}
-
-function promptRecallAISearch() {
-    // Open AI panel with a pre-filled recall search prompt
-    const panel = document.getElementById('ai-panel');
-    const input = document.getElementById('ai-input');
-    if (!panel || !input) return;
-
-    // Pre-fill the input with a recall search prompt
-    input.value = 'Find recalls about ';
-
-    // Open the panel
-    if (!panel.classList.contains('open')) {
-        toggleAIPanel();
-    }
-
-    // Focus and position cursor at the end
-    setTimeout(() => {
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
-    }, 100);
-}
-
-async function runRecallAISearchWithQuery(query) {
-    try {
-        const res = await fetch('/api/recalls/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, limit: 6 })
-        });
-        if (!res.ok) throw new Error('Search failed');
-        const data = await res.json();
-        recallState.aiResults = data.results || [];
-        if (recallState.aiResults.length) {
-            recallState.selectedId = recallState.aiResults[0].id;
-            renderRecallList();
-        } else {
-            showToast('No matching recalls found.', 'info');
-        }
-    } catch (err) {
-        console.error(err);
-        showToast('Recall AI search failed.', 'error');
-    }
-}
-
-function renderRecallAIResults() {
-    // AI results list removed from UI on simplified recall page
-}
-
-function formatRecallDate(val) {
-    try {
-        return new Date(val).toLocaleString();
-    } catch (e) {
-        return val;
-    }
-}
-
 function recallEscape(str) {
     if (str === undefined || str === null) return '';
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/\"/g, '&quot;')
+        .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 }
 
-function linkifyRecallContent(str) {
-    if (!str) return '';
-    // First escape HTML
-    const escaped = recallEscape(str);
-    // Then convert URLs to clickable links
-    const urlPattern = /(https?:\/\/[^\s<]+)/g;
-    return escaped.replace(urlPattern, '<a href="$1" target="_blank" rel="noopener" class="recall-content-link">$1</a>');
-}
 
 // --- AI Assistant ---
 let aiMessages = [];

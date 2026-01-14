@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from openai import OpenAI
 from flask import current_app
 from models import db, TodoList, TodoItem, CalendarEvent, RecallItem
+from ai_context import get_all_ai_context
 
 
 ALLOWED_STATUSES = {"not_started", "in_progress", "done"}
@@ -114,7 +115,16 @@ def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
 
 
 def _recall_dict(item: RecallItem, similarity: Optional[float] = None) -> Dict[str, Any]:
-    data = item.to_dict()
+    data = {
+        "id": item.id,
+        "title": item.title,
+        "why": item.why,
+        "payload_type": item.payload_type,
+        "payload": item.payload,
+        "when_context": item.when_context,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
     if similarity is not None:
         data["similarity"] = similarity
     return data
@@ -123,33 +133,22 @@ def _recall_dict(item: RecallItem, similarity: Optional[float] = None) -> Dict[s
 def _list_recalls(
     user_id: int,
     search: Optional[str] = None,
-    category: Optional[str] = None,
-    type_name: Optional[str] = None,
-    tag: Optional[str] = None,
-    status: Optional[str] = "active",
+    when_context: Optional[str] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     query = RecallItem.query.filter(RecallItem.user_id == user_id)
-    if status:
-        query = query.filter(RecallItem.status == status)
-    if category:
-        query = query.filter(RecallItem.category.ilike(category))
-    if type_name:
-        query = query.filter(RecallItem.type.ilike(type_name))
-    if tag:
-        query = query.filter(RecallItem.tags.ilike(f"%{tag}%"))
+    if when_context:
+        query = query.filter(RecallItem.when_context == when_context)
     if search:
         like_expr = f"%{search}%"
         query = query.filter(
             db.or_(
                 RecallItem.title.ilike(like_expr),
-                RecallItem.content.ilike(like_expr),
-                RecallItem.tags.ilike(like_expr),
-                RecallItem.category.ilike(like_expr),
-                RecallItem.summary.ilike(like_expr),
+                RecallItem.why.ilike(like_expr),
+                RecallItem.payload.ilike(like_expr),
             )
         )
-    query = query.order_by(RecallItem.pinned.desc(), RecallItem.reminder_at.is_(None), RecallItem.reminder_at.asc(), RecallItem.created_at.desc())
+    query = query.order_by(RecallItem.updated_at.desc(), RecallItem.created_at.desc())
     items = query.limit(max(1, min(limit, 200))).all()
     return [_recall_dict(i) for i in items]
 
@@ -157,45 +156,27 @@ def _list_recalls(
 def _create_recall(
     user_id: int,
     title: str,
-    content: Optional[str] = None,
-    category: Optional[str] = None,
-    type_name: Optional[str] = None,
-    tags: Optional[List[str]] = None,
-    priority: Optional[str] = None,
-    pinned: Optional[bool] = None,
-    source_url: Optional[str] = None,
-    summary: Optional[str] = None,
+    why: str,
+    payload_type: str,
+    payload: str,
+    when_context: str,
 ) -> Dict[str, Any]:
-    cat_val = (category or "General").strip() or "General"
-    type_val = (type_name or "note").strip() or "note"
-    priority_val = (priority or "medium").lower()
-    if priority_val not in ALLOWED_PRIORITIES:
-        priority_val = "medium"
-    blob = " ".join(
-        [
-            title or "",
-            content or "",
-            cat_val,
-            type_val,
-            " ".join(tags or []),
-            source_url or "",
-            summary or "",
-        ]
-    ).strip()
-    embedding = embed_text(blob)
+    safe_title = (title or "").strip()
+    safe_why = (why or "").strip()
+    safe_payload = (payload or "").strip()
+    safe_when = (when_context or "").strip()
+    safe_payload_type = (payload_type or "").strip().lower()
+    if not safe_title or not safe_why or not safe_payload or not safe_when:
+        raise ValueError("title, why, payload, and when_context are required")
+    if safe_payload_type not in {"url", "text"}:
+        raise ValueError("payload_type must be url or text")
     recall = RecallItem(
         user_id=user_id,
-        title=title.strip(),
-        content=(content or "").strip(),
-        category=cat_val,
-        type=type_val,
-        tags=",".join(tags or []),
-        priority=priority_val,
-        pinned=bool(pinned),
-        source_url=(source_url or "").strip() or None,
-        summary=(summary or "").strip() or None,
-        search_blob=blob,
-        embedding=json.dumps(embedding) if embedding else None,
+        title=safe_title,
+        why=safe_why,
+        payload_type=safe_payload_type,
+        payload=safe_payload,
+        when_context=safe_when,
     )
     db.session.add(recall)
     db.session.commit()
@@ -205,22 +186,15 @@ def _create_recall(
 def _search_recalls_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
     if not query:
         return []
-    items = RecallItem.query.filter(RecallItem.user_id == user_id, RecallItem.status != "archived").all()
-    query_embedding = embed_text(query)
-    query_lower = query.lower()
+    items = RecallItem.query.filter(RecallItem.user_id == user_id).all()
+    needle = query.lower()
     results = []
     for item in items:
-        emb = None
-        if item.embedding:
-            try:
-                emb = json.loads(item.embedding)
-            except Exception:
-                emb = None
-        similarity = _cosine_similarity(query_embedding, emb) if query_embedding and emb else 0.0
-        blob = (item.search_blob or "").lower()
-        if query_lower in blob:
-            similarity = max(similarity, 0.35)
-        results.append((similarity, item))
+        haystack = " ".join([item.title or "", item.why or "", item.payload or ""]).lower()
+        score = 0.0
+        if needle in haystack:
+            score = 0.3 + min(haystack.count(needle) * 0.1, 0.7)
+        results.append((score, item))
     results.sort(key=lambda tup: tup[0], reverse=True)
     trimmed = results[: max(1, min(limit, 15))]
     return [_recall_dict(item, similarity=score) for score, item in trimmed]
@@ -811,15 +785,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_recalls",
-            "description": "List recall items (links/ideas/sources) with filters",
+            "description": "List recall items with optional search or when_context filter",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "search": {"type": "string"},
-                    "category": {"type": "string"},
-                    "type_name": {"type": "string", "description": "link, idea, source, note, other"},
-                    "tag": {"type": "string"},
-                    "status": {"type": "string", "default": "active"},
+                    "when_context": {"type": "string"},
                     "limit": {"type": "integer", "default": 20},
                 },
             },
@@ -829,21 +800,17 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_recall",
-            "description": "Create a recall item with category/type/content/tags",
+            "description": "Create a recall item with title, why, payload, and when_context",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "content": {"type": "string"},
-                    "category": {"type": "string"},
-                    "type_name": {"type": "string", "description": "link, idea, source, note, other"},
-                    "tags": {"type": "array", "items": {"type": "string"}},
-                    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "pinned": {"type": "boolean"},
-                    "source_url": {"type": "string"},
-                    "summary": {"type": "string"},
+                    "why": {"type": "string"},
+                    "payload_type": {"type": "string", "description": "url or text"},
+                    "payload": {"type": "string"},
+                    "when_context": {"type": "string"},
                 },
-                "required": ["title"],
+                "required": ["title", "why", "payload_type", "payload", "when_context"],
             },
         },
     },
@@ -851,7 +818,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_recalls_semantic",
-            "description": "Semantic + keyword search across recall items to find fuzzy matches",
+            "description": "Search across recall items to find fuzzy matches",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -865,28 +832,24 @@ TOOLS = [
 ]
 
 
-def _build_system_prompt(today_iso: str, timezone: str) -> str:
-    return f"""You are a task, project, and recall assistant. Follow these rules:
+def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
+    base_prompt = f"""You are a task, project, and recall assistant. Follow these rules:
 - Today's date is {today_iso} (timezone: {timezone}). When the user says things like "today", "tomorrow", "next Monday", convert them to an explicit YYYY-MM-DD in that timezone before calling tools. If ambiguous, ask a short clarifying question.
-- Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content; add/find recall items (links/ideas/sources/notes) with fuzzy matching.
+- Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content; add/find recall items with fuzzy matching.
 - You can also manage the calendar: list calendar entries by day/range and create new entries (tasks/events/phases/groups). Always set day (YYYY-MM-DD) and use precise fields (start_time/end_time HH:MM 24h, status, priority, flags is_event/is_phase/is_group, phase_id/group_id when nesting, reminder_minutes_before, description).
-- For recall capture: when the user wants to remember something, call create_recall with title, category, type_name (link/idea/source/other), tags, summary, source_url (if link), and pinned flag. Default category "General" and type_name based on content (URL -> link, otherwise idea/note).
-- For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with category/type/tag/status filters.
+- For recall capture: when the user wants to remember something, call create_recall with title, why, payload_type (url or text), payload, and when_context.
+- For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with when_context filters.
 - Recall response format (concise markdown with clickable links):
   * Header: "**Recall matches**" (only when showing results)
-  * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) · <category> · <type> · tags: <tag1, tag2>; summary or first 120 chars of content"
+  * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) - <when_context> - <payload_type> - <why>"
   * CRITICAL RULES FOR RECALL LINKS:
     - The markdown link href MUST ALWAYS be: /recalls?note=<id>
     - The <id> is the "id" field from the search_recalls_semantic result
-    - NEVER EVER use source_url, content, or any external URL as the link href
+    - NEVER EVER use any external URL as the link href
     - NEVER use https:// or http:// URLs in the recall title link
-    - The source_url belongs in the summary text ONLY, not in the markdown link
-  * Example 1: recall with id=42, title="ML Research", source_url="https://example.com"
-    - CORRECT: "- [ML Research](/recalls?note=42) · Tech · link · summary: https://example.com - Research about..."
-    - WRONG: "- [ML Research](https://example.com) · Tech · link"
-  * Example 2: recall with id=15, title="Funny video", source_url="https://youtube.com/watch"
-    - CORRECT: "- [Funny video](/recalls?note=15) · General · link · summary: YouTube video at https://youtube.com/watch"
-    - WRONG: "- [Funny video](https://youtube.com/watch) · General · link"
+  * Example: recall with id=42, title="ML Research", when_context="work"
+    - CORRECT: "- [ML Research](/recalls?note=42) - work - url - Might help with future ML reading."
+    - WRONG: "- [ML Research](https://example.com) - work - url - Might help with future ML reading."
 - Always use tools to fetch ids before mutating. Do not guess ids.
 - When user refers to names, search then pick the closest; if multiple matches, ask a short clarifying question.
 - If user says "first/second/third/last phase", choose that phase by order_index (1-based; last = final phase).
@@ -896,17 +859,18 @@ def _build_system_prompt(today_iso: str, timezone: str) -> str:
 - For creation: default status not_started; phases use is_phase=true; projects use is_project=true and project_type=list unless specified. Prefer create_task_by_names when the user provides project/phase names.
 - When listing tasks for a hub, use list_hub_tasks so you return tasks grouped by child project (and phases when requested).
 - Listing format (use markdown for clear visual hierarchy):
-  * Project headers: "**📋 Project: <name>** (<type>)" - bold with project emoji
-  * Phase headers (kind == phase): "**▶ Phase: <name>**" - bold with arrow emoji, then list only its tasks beneath
-  * Regular tasks (kind == task): "• [status] <task>" - bullet point with styled status badge
+  * Project headers: "**Project: <name>** (<type>)"
+  * Phase headers (kind == phase): "**Phase: <name>**" then list only its tasks beneath
+  * Regular tasks (kind == task): "- [status] <task>"
   * If tasks are not assigned to a phase, list them after all phases under the project
   * Status badges (use these exact formats for visual styling):
-    - not_started: "• [○] <task>" - empty circle
-    - in_progress: "• [◐] <task>" - half-filled circle
-    - done: "• [✓] <task>" - checkmark
+    - not_started: "- [not_started] <task>"
+    - in_progress: "- [in_progress] <task>"
+    - done: "- [done] <task>"
   * Add blank lines between projects and between phases for readability
 - Keep responses concise; report what you changed. When you add or update, just confirm success and what was added/changed (no need to list all tasks)."""
-
+    user_context = get_all_ai_context(user_id)
+    return f"{base_prompt}\n\n{user_context}"
 
 def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
     if name == "list_lists":
@@ -999,24 +963,17 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
         return _list_recalls(
             user_id=user_id,
             search=args.get("search"),
-            category=args.get("category"),
-            type_name=args.get("type_name"),
-            tag=args.get("tag"),
-            status=args.get("status", "active"),
+            when_context=args.get("when_context"),
             limit=args.get("limit", 20),
         )
     if name == "create_recall":
         return _create_recall(
             user_id=user_id,
             title=args.get("title", ""),
-            content=args.get("content"),
-            category=args.get("category"),
-            type_name=args.get("type_name"),
-            tags=args.get("tags") or [],
-            priority=args.get("priority"),
-            pinned=args.get("pinned"),
-            source_url=args.get("source_url"),
-            summary=args.get("summary"),
+            why=args.get("why", ""),
+            payload_type=args.get("payload_type", ""),
+            payload=args.get("payload", ""),
+            when_context=args.get("when_context", ""),
         )
     if name == "search_recalls_semantic":
         return _search_recalls_semantic(
@@ -1034,7 +991,7 @@ def run_ai_chat(user_id: int, messages: List[Dict[str, Any]], model: Optional[st
     # Build message list with system prompt
     today_iso = date.today().isoformat()
     timezone = os.environ.get("DEFAULT_TIMEZONE", "UTC")
-    convo = [{"role": "system", "content": _build_system_prompt(today_iso, timezone)}]
+    convo = [{"role": "system", "content": _build_system_prompt(today_iso, timezone, user_id)}]
     for m in messages:
         role = m.get("role")
         content = m.get("content")

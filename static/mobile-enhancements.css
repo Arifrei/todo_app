@@ -205,41 +205,54 @@ textarea,
 
     /* ===== ADD TASK MODAL - KEYBOARD-SAFE LAYOUT ===== */
 
-    /* Pin modal to top so keyboard doesn't push content off-screen */
+    /* CRITICAL: Disable backdrop-filter on modals - causes WebView repaint bugs */
+    .modal {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        background: rgba(30, 41, 59, 0.7) !important; /* Darker to compensate for no blur */
+    }
+
+    /* Pin modal to top - absolutely NO transforms to avoid Android WebView rendering bugs */
     #add-item-modal {
-        align-items: flex-start;
-        padding-top: env(safe-area-inset-top, 0);
-        height: 100%;
-        height: 100dvh;
+        align-items: flex-start !important;
+        justify-content: flex-start !important;
+        padding: 0 !important;
         overflow: hidden;
     }
 
     #add-item-modal .modal-content {
         padding: 1rem;
-        max-height: calc(100dvh - 1rem);
-        max-height: calc(100svh - 1rem); /* Small viewport - excludes keyboard */
-        margin: 0.5rem;
-        margin-top: 0.5rem;
-        transform: none !important;
-        transition: none;
+        margin: 10px;
+        margin-top: env(safe-area-inset-top, 10px);
+        width: calc(100% - 20px);
+        max-width: none;
+        max-height: calc(100vh - 20px);
+        overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         overscroll-behavior: contain;
+        /* CRITICAL: Disable ALL transforms - causes cursor rendering bugs in Android WebView */
+        transform: none !important;
+        transition: none !important;
+        animation: none !important;
+        /* Prevent GPU compositing issues */
+        -webkit-backface-visibility: visible;
+        backface-visibility: visible;
+        -webkit-perspective: none;
+        perspective: none;
+        /* Force software rendering */
+        -webkit-transform: none !important;
         will-change: auto;
-        position: relative;
     }
 
     #add-item-modal.active .modal-content {
         transform: none !important;
+        -webkit-transform: none !important;
     }
 
     #add-item-modal h2 {
-        font-size: 1.15rem;
+        font-size: 1.1rem;
         margin-bottom: 0.4rem;
-        position: sticky;
-        top: 0;
-        background: var(--white);
         padding-bottom: 0.3rem;
-        z-index: 1;
     }
 
     #add-item-modal br {
@@ -247,50 +260,38 @@ textarea,
     }
 
     #add-item-modal .form-group {
-        margin-bottom: 0.6rem;
+        margin-bottom: 0.5rem;
     }
 
     #add-item-modal .form-group label {
-        margin-bottom: 0.35rem;
+        margin-bottom: 0.3rem;
         font-size: 0.8rem;
     }
 
     #add-item-modal .form-control {
-        padding: 0.55rem;
+        padding: 0.5rem;
         font-size: 16px; /* Prevents iOS zoom on focus */
+        /* Ensure text renders properly */
+        -webkit-text-fill-color: initial;
+        opacity: 1;
     }
 
-    /* Make textareas more compact but still usable */
+    /* Make textareas compact */
     #add-item-modal textarea.form-control {
-        min-height: 50px;
-        max-height: 80px;
+        min-height: 44px;
+        max-height: 60px;
         resize: none;
     }
 
     #add-item-modal .modal-actions {
-        margin-top: 0.7rem;
+        margin-top: 0.6rem;
         gap: 0.5rem;
-        position: sticky;
-        bottom: 0;
-        background: var(--white);
-        padding-top: 0.5rem;
         padding-bottom: env(safe-area-inset-bottom, 0);
     }
 
     #add-item-modal .modal-actions .btn {
-        padding: 0.55rem 0.9rem;
+        padding: 0.5rem 0.85rem;
         font-size: 0.85rem;
-    }
-
-    /* When keyboard is open, the body gets this class via JS */
-    body.keyboard-open #add-item-modal .modal-content {
-        max-height: calc(100dvh - 0.5rem);
-    }
-
-    /* Ensure focused inputs are always visible */
-    #add-item-modal .form-control:focus {
-        position: relative;
-        z-index: 2;
     }
 }
 

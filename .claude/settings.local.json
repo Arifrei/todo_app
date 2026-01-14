@@ -30,7 +30,8 @@
       "Bash(.gradlew assembleRelease:*)",
       "Bash(gradlew.bat assembleRelease:*)",
       "Bash(cmd /c \"cd /d c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android && gradlew.bat assembleRelease\")",
-      "Bash(\"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\gradlew.bat\" assembleRelease -p \"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\")"
+      "Bash(\"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\gradlew.bat\" assembleRelease -p \"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\")",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

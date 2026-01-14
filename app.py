@@ -2,9 +2,9 @@ import os
 import re
 import json
 import logging
-import math
 import pytz
 import secrets
+import threading
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
@@ -14,7 +14,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
 from sqlalchemy import or_
-from bs4 import BeautifulSoup
 from markupsafe import Markup, escape
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -112,50 +111,6 @@ def _parse_reminder(dt_str):
         return None
 
 
-def _build_recall_blob(title, content, description, category, type_name, tags, source_url=None, summary=None):
-    fields = [
-        title or '',
-        category or '',
-        type_name or '',
-        description or '',
-        content or '',
-        summary or '',
-        ' '.join(_normalize_tags(tags)),
-        source_url or '',
-    ]
-    return ' '.join([f.strip() for f in fields if f]).strip()
-
-
-def _fetch_url_content(url, max_length=3000):
-    """Fetch and extract text content from a URL. Returns None on failure."""
-    try:
-        response = requests.get(url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        response.raise_for_status()
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        # Remove script and style elements
-        for script in soup(['script', 'style', 'nav', 'footer', 'header']):
-            script.decompose()
-
-        # Get text content
-        text = soup.get_text()
-
-        # Clean up whitespace
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        text = ' '.join(chunk for chunk in chunks if chunk)
-
-        # Truncate if too long
-        if len(text) > max_length:
-            text = text[:max_length] + '...'
-
-        return text if text else None
-    except Exception as exc:
-        app.logger.warning(f"URL fetch failed for {url}: {exc}")
-        return None
 
 
 def _sanitize_sidebar_order(order):
@@ -237,201 +192,47 @@ def _save_homepage_order(user, order):
     user.homepage_order = json.dumps(_sanitize_homepage_order(order))
 
 
-def _generate_fallback_summary(title, content, category, type_name, source_url=None):
-    """Generate a simple fallback summary when AI is not available."""
-    # Try to create a meaningful summary from available content
-
-    # Check if content is just a URL - don't use it for summary
-    import re
-    content_is_url = False
-    if content:
-        content_clean = content.strip()
-        # Check if content is just a URL (with minimal text around it)
-        url_pattern = re.compile(r'^https?://\S+$')
-        if url_pattern.match(content_clean):
-            content_is_url = True
-
-    # Prefer content over title if available and not just a URL
-    if content and len(content.strip()) > 10 and not content_is_url:
-        content_clean = content.strip()
-        # Use first sentence or first 80 chars
-        first_sentence = content_clean.split('.')[0].strip()
-        if 10 < len(first_sentence) <= 100:
-            return first_sentence if first_sentence.endswith('.') else first_sentence + '.'
-        elif len(content_clean) <= 80:
-            return content_clean
-        else:
-            return content_clean[:77] + "..."
-
-    # If we have a URL, try to extract domain info
-    if source_url:
-        try:
-            from urllib.parse import urlparse
-            domain = urlparse(source_url).netloc.replace('www.', '')
-            # Make it more descriptive with title
-            if len(title) <= 50:
-                return f"{title} - Resource from {domain}"
-            else:
-                return f"Link from {domain}: {title[:40]}..."
-        except:
-            return f"Saved {type_name} with external link"
-
-    # Fall back to title with category context
-    if len(title) > 100:
-        return title[:97] + "..."
-    else:
-        return f"{title} ({category})"
-
-
-def _generate_recall_summary(title, content, category, type_name, source_url=None, description=None):
-    """Generate an intelligent summary. Returns fallback if AI unavailable or fails."""
-    # Try AI summary if OpenAI is configured
-    if app.config.get('OPENAI_API_KEY'):
-        # If it's a link, try to fetch the actual content
-        url_content = None
-        if source_url:
-            app.logger.info(f"Attempting to fetch URL content: {source_url}")
-            url_content = _fetch_url_content(source_url)
-            if url_content:
-                app.logger.info(f"Successfully fetched {len(url_content)} chars from URL")
-            else:
-                app.logger.warning(f"Failed to fetch URL content from: {source_url}")
-
-        # Determine what to summarize - combine available text
-        if url_content:
-            # URL content available - summarize that (this is the most important)
-            main_content = url_content[:2500]
-            context_info = f"Title: {title}\n\n{main_content}"
-            app.logger.info(f"Using fetched URL content for summary ({len(main_content)} chars)")
-        else:
-            # Combine title, description, and content for best summary
-            parts = []
-            if title:
-                parts.append(f"Title: {title}")
-            if description and len(description.strip()) > 0:
-                parts.append(f"Description: {description}")
-            if content and len(content.strip()) > 0:
-                parts.append(f"Content: {content}")
-
-            if parts:
-                main_content = '\n'.join(parts)
-            else:
-                main_content = f"{title} in {category}"
-            context_info = main_content
-
-        # Build the prompt focusing on CONTENT, not title
-        if url_content:
-            prompt = f"""Read this webpage content and write a brief, informative summary (max 20 words) describing what it's about.
-
-{context_info}
-
-Write a concise summary of the main topic or purpose:"""
-        else:
-            prompt = f"""Read this note/item and write a brief, informative summary (max 20 words) describing what it's about.
-
-{context_info}
-
-Write a concise summary of the main topic or purpose:"""
-
-        try:
-            client = get_openai_client()
-            model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You write brief, informative summaries (max 20 words) that capture the essence of what content is about. Focus on substance and key information."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=60,
-                temperature=0.3
-            )
-            summary = (resp.choices[0].message.content or '').strip()
-            app.logger.info(f"AI generated summary ({len(summary)} chars): {summary[:100]}")
-
-            # Quality checks - be more lenient
-            if len(summary) < 5:
-                app.logger.warning(f"Summary too short ({len(summary)} chars), using fallback")
-                return _generate_fallback_summary(title, content, category, type_name, source_url)
-
-            # Check if summary is just rephrasing the title (only if very similar)
-            title_lower = title.lower()
-            summary_lower = summary.lower()
-            # Only reject if summary is essentially identical to title
-            if summary_lower == title_lower or (len(summary_lower) < 30 and title_lower in summary_lower and len(summary_lower) < len(title_lower) + 5):
-                app.logger.warning(f"Summary too similar to title, using fallback")
-                return _generate_fallback_summary(title, content, category, type_name, source_url)
-
-            app.logger.info(f"Using AI-generated summary")
-            return summary
-        except Exception as exc:
-            app.logger.warning(f"Recall summary failed: {exc}")
-            # Return fallback instead of None
-            return _generate_fallback_summary(title, content, category, type_name, source_url)
-
-    # No API key, use fallback
-    return _generate_fallback_summary(title, content, category, type_name, source_url)
-
-
-def _generate_recall_embedding(text):
-    """Create an embedding vector for recall search; returns list or None on failure."""
-    cleaned = (text or '').strip()
-    if not cleaned:
-        return None
+def _call_openai(system_prompt, payload):
     if not app.config.get('OPENAI_API_KEY'):
-        return None
+        return ''
     try:
         client = get_openai_client()
-        model_name = os.environ.get('OPENAI_EMBED_MODEL', 'text-embedding-3-small')
-        resp = client.embeddings.create(model=model_name, input=cleaned[:7000])
-        return resp.data[0].embedding
+        model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload}
+            ],
+            max_tokens=120,
+            temperature=0.4
+        )
+        return (resp.choices[0].message.content or '').strip()
     except Exception as exc:
-        app.logger.warning(f"Embedding generation failed: {exc}")
-        return None
+        app.logger.warning(f"Recall metadata generation failed: {exc}")
+        return ''
 
 
-def _cosine_similarity(vec_a, vec_b):
-    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-        return 0.0
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
-    mag_a = math.sqrt(sum(a * a for a in vec_a))
-    mag_b = math.sqrt(sum(b * b for b in vec_b))
-    if mag_a == 0 or mag_b == 0:
-        return 0.0
-    return dot / (mag_a * mag_b)
+def try_parse_json(response):
+    try:
+        return json.loads(response)
+    except Exception:
+        pass
+
+    match = re.search(r'\{[^{}]*\}', response or '')
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+    return None
 
 
-def _semantic_search_recalls(user_id, query_text, limit=6, include_archived=False):
-    """Rank recalls by semantic similarity with keyword fallback."""
-    if not query_text:
-        return []
-
-    base_q = RecallItem.query.filter(RecallItem.user_id == user_id)
-    if not include_archived:
-        base_q = base_q.filter(RecallItem.status != 'archived')
-    recalls = base_q.all()
-
-    query_embedding = _generate_recall_embedding(query_text)
-    normalized_query = query_text.lower()
-    results = []
-
-    for r in recalls:
-        emb = None
-        if r.embedding:
-            try:
-                emb = json.loads(r.embedding)
-            except Exception:
-                emb = None
-        similarity = _cosine_similarity(query_embedding, emb) if query_embedding and emb else 0.0
-
-        # Keyword bonus if embedding is unavailable or ties are close
-        blob = (r.search_blob or '').lower()
-        if normalized_query and normalized_query in blob:
-            similarity = max(similarity, 0.35)
-        results.append((similarity, r))
-
-    results.sort(key=lambda x: x[0], reverse=True)
-    top = results[:limit]
-    return [r.to_dict(include_similarity=True, similarity=score) for score, r in top]
+def start_recall_processing(recall_id):
+    """Start background processing for a recall item."""
+    from recall_processor import process_recall
+    thread = threading.Thread(target=process_recall, args=(recall_id,), daemon=True)
+    thread.start()
 
 
 def parse_outline(outline_text, list_type='list'):
@@ -734,6 +535,47 @@ def _parse_time_str(val):
         return time(hour=hour, minute=minute)
     except Exception:
         return None
+
+
+def _time_to_minutes(t):
+    return (t.hour * 60) + t.minute
+
+
+def _event_end_minutes(start_minutes, end_time):
+    if end_time:
+        end_minutes = _time_to_minutes(end_time)
+        if end_minutes > start_minutes:
+            return end_minutes
+    return min(start_minutes + 30, 24 * 60)
+
+
+def _task_conflicts_with_event(user_id, day_obj, task_start, task_end, exclude_event_id=None):
+    if not task_start:
+        return None
+    task_start_minutes = _time_to_minutes(task_start)
+    task_end_minutes = _time_to_minutes(task_end) if task_end else None
+    if task_end_minutes is not None and task_end_minutes < task_start_minutes:
+        task_end_minutes = task_start_minutes
+
+    events = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user_id,
+        CalendarEvent.day == day_obj,
+        CalendarEvent.is_event == True,
+        CalendarEvent.start_time.isnot(None)
+    ).all()
+
+    for ev in events:
+        if exclude_event_id and ev.id == exclude_event_id:
+            continue
+        ev_start_minutes = _time_to_minutes(ev.start_time)
+        ev_end_minutes = _event_end_minutes(ev_start_minutes, ev.end_time)
+        if task_end_minutes is None:
+            if ev_start_minutes <= task_start_minutes < ev_end_minutes:
+                return ev
+        else:
+            if not (task_end_minutes <= ev_start_minutes or task_start_minutes >= ev_end_minutes):
+                return ev
+    return None
 
 
 def _next_calendar_order(day_value, user_id):
@@ -1157,13 +999,18 @@ def _send_daily_email_digest(target_day=None):
     if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '1') != '1':
         return
     with app.app_context():
+        tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
+        now_local = datetime.now(tz)
+        is_manual = target_day is not None
         if target_day is None:
-            tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
-            target_day = datetime.now(tz).date()
-        users = User.query.filter(User.email != None).all()  # noqa: E711
+            target_day = now_local.date()
+        users = User.query.all()
+        fallback_email = os.environ.get('CONTACT_TO_EMAIL')
         for user_obj in users:
             prefs = _get_or_create_notification_settings(user_obj.id)
             if not prefs.email_enabled or not prefs.digest_enabled:
+                continue
+            if not is_manual and prefs.digest_hour != now_local.hour:
                 continue
             events = CalendarEvent.query.filter(
                 CalendarEvent.user_id == user_obj.id,
@@ -1180,7 +1027,9 @@ def _send_daily_email_digest(target_day=None):
                 continue
             body = _build_daily_digest_body(events, tasks_due)
             try:
-                _send_email(user_obj.email, f"Your tasks for {target_day.isoformat()}", body)
+                recipient = user_obj.email or fallback_email
+                if recipient:
+                    _send_email(recipient, f"Your tasks for {target_day.isoformat()}", body)
             except Exception:
                 continue
 
@@ -1429,11 +1278,11 @@ def _start_scheduler():
         id='cleanup_completed_tasks',
         replace_existing=True
     )
-    # Daily digest at 7:00 AM in the app's default timezone (EST/EDT by default).
+    # Daily digest runs hourly; per-user digest_hour gates delivery.
     scheduler.add_job(
         _send_daily_email_digest,
         'cron',
-        hour=7,
+        hour='*',
         minute=0,
         id='daily_email_digest',
         replace_existing=True
@@ -1956,58 +1805,9 @@ def reorder_notes():
     return jsonify({'pinned': order_val - 1})
 
 
-def _generate_recall_summary_background(recall_id):
-    """Background task to generate summary and embedding for a recall item."""
-    import threading
-    with app.app_context():
-        try:
-            recall = RecallItem.query.get(recall_id)
-            if not recall:
-                return
-
-            # Generate summary
-            summary = _generate_recall_summary(
-                recall.title,
-                recall.content,
-                recall.category,
-                recall.type,
-                recall.source_url,
-                recall.description
-            )
-
-            # Update recall with summary
-            if summary:
-                recall.summary = summary
-
-            # Rebuild search blob with summary
-            blob = _build_recall_blob(
-                recall.title,
-                recall.content,
-                recall.description,
-                recall.category,
-                recall.type,
-                _normalize_tags(recall.tags),
-                recall.source_url,
-                summary
-            )
-            recall.search_blob = blob
-
-            # Generate embedding
-            embedding = _generate_recall_embedding(blob)
-            if embedding:
-                recall.embedding = json.dumps(embedding)
-
-            db.session.commit()
-            app.logger.info(f"Background summary generated for recall {recall_id}: {summary[:50] if summary else 'None'}...")
-        except Exception as exc:
-            app.logger.warning(f"Background summary generation failed for recall {recall_id}: {exc}")
-
-
 @app.route('/api/recalls', methods=['GET', 'POST'])
 def handle_recalls():
     """List or create recall items."""
-    import threading
-
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
@@ -2015,119 +1815,42 @@ def handle_recalls():
     if request.method == 'POST':
         data = request.json or request.form or {}
         title = (data.get('title') or '').strip()
-        if not title:
-            return jsonify({'error': 'Title is required'}), 400
+        payload_type = (data.get('payload_type') or '').strip().lower()
+        payload = (data.get('payload') or '').strip()
+        when_context = (data.get('when_context') or '').strip()
 
-        category = (data.get('category') or 'General').strip() or 'General'
-        type_name = (data.get('type') or 'note').strip() or 'note'
-        content = (data.get('content') or '').strip()
-        description = (data.get('description') or '').strip()
-        keywords = data.get('keywords') or data.get('tags')
-        tags = _normalize_tags(keywords)
-        pinned = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
-        reminder_at = _parse_reminder(data.get('reminder_at'))
-        status = (data.get('status') or 'active').strip()
-        source_url = (data.get('source_url') or '').strip() or None
-
-        # Auto-detect URL from content if source_url is empty
-        if not source_url and content:
-            import re
-            url_match = re.search(r'https?://\S+', content)
-            if url_match:
-                source_url = url_match.group(0)
-
-        # User-provided summary takes priority
-        summary = (data.get('summary') or '').strip() or None
-
-        # Create a temporary fallback summary for immediate display
-        temp_summary = None
-        if not summary:
-            temp_summary = _generate_fallback_summary(title, content, category, type_name, source_url)
-
-        # Build initial search blob (without AI summary)
-        blob = _build_recall_blob(title, content, description, category, type_name, tags, source_url, temp_summary)
+        if not title or not payload or not when_context:
+            return jsonify({'error': 'title, payload, and when_context are required'}), 400
+        if payload_type not in ['url', 'text']:
+            return jsonify({'error': 'payload_type must be url or text'}), 400
 
         recall = RecallItem(
             user_id=user.id,
             title=title,
-            category=category,
-            type=type_name,
-            content=content,
-            description=description,
-            tags=_tags_to_string(tags),
-            priority='medium',
-            pinned=pinned,
-            reminder_at=reminder_at,
-            status=status if status in ['active', 'archived'] else 'active',
-            source_url=source_url,
-            summary=temp_summary,  # Use fallback initially
-            search_blob=blob,
-            embedding=None,  # Will be generated in background
+            payload_type=payload_type,
+            payload=payload,
+            when_context=when_context,
+            why='',  # Default empty, AI will populate
+            ai_status='pending'
         )
         db.session.add(recall)
         db.session.commit()
 
-        # Start background thread to generate AI summary and embedding
-        if not summary:  # Only if user didn't provide a summary
-            thread = threading.Thread(
-                target=_generate_recall_summary_background,
-                args=(recall.id,),
-                daemon=True
-            )
-            thread.start()
+        # Start background AI processing
+        start_recall_processing(recall.id)
 
         return jsonify(recall.to_dict()), 201
 
-    # GET
-    query = RecallItem.query.filter_by(user_id=user.id)
-    status_filter = request.args.get('status', 'active')
-    if status_filter:
-        query = query.filter(RecallItem.status == status_filter)
-    category = request.args.get('category')
-    if category and category.lower() != 'all':
-        query = query.filter(RecallItem.category.ilike(category))
-    type_filter = request.args.get('type')
-    if type_filter and type_filter.lower() != 'all':
-        query = query.filter(RecallItem.type.ilike(type_filter))
-    tag_filter = request.args.get('tag')
-    if tag_filter:
-        query = query.filter(RecallItem.tags.ilike(f"%{tag_filter}%"))
-    pinned_only = request.args.get('pinned') in ['1', 'true', 'yes', 'on']
-    if pinned_only:
-        query = query.filter(RecallItem.pinned.is_(True))
-
-    search_q = (request.args.get('q') or '').strip()
-    if search_q:
-        like_expr = f"%{search_q}%"
-        query = query.filter(db.or_(
-            RecallItem.title.ilike(like_expr),
-            RecallItem.content.ilike(like_expr),
-            RecallItem.description.ilike(like_expr),
-            RecallItem.category.ilike(like_expr),
-            RecallItem.tags.ilike(like_expr),
-            RecallItem.summary.ilike(like_expr),
-        ))
-
-    sort = request.args.get('sort', 'smart')
-    if sort == 'newest':
-        query = query.order_by(RecallItem.created_at.desc())
-    elif sort == 'oldest':
-        query = query.order_by(RecallItem.created_at.asc())
-    elif sort == 'reminder':
-        query = query.order_by(RecallItem.reminder_at.is_(None), RecallItem.reminder_at.asc())
-    else:
-        # smart: pinned desc, reminder asc, created desc
-        query = query.order_by(RecallItem.pinned.desc(), RecallItem.reminder_at.is_(None), RecallItem.reminder_at.asc(), RecallItem.created_at.desc())
-
-    recalls = query.all()
+    recalls = RecallItem.query.filter_by(user_id=user.id).order_by(
+        RecallItem.updated_at.desc(),
+        RecallItem.created_at.desc()
+    ).all()
     return jsonify([r.to_dict() for r in recalls])
 
 
 @app.route('/api/recalls/<int:recall_id>', methods=['GET', 'PUT', 'DELETE'])
 def recall_detail(recall_id):
     """Get, update, or delete a single recall item."""
-    import threading
-
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
@@ -2145,121 +1868,52 @@ def recall_detail(recall_id):
         return jsonify({'deleted': True})
 
     data = request.json or request.form or {}
-
-    # Track if content changed (need to regenerate summary)
-    content_changed = False
-    user_provided_summary = 'summary' in data and (data.get('summary') or '').strip()
-
     if 'title' in data:
         title_val = (data.get('title') or '').strip()
-        if title_val and title_val != recall.title:
+        if title_val:
             recall.title = title_val
-            content_changed = True
-    if 'category' in data:
-        category_val = (data.get('category') or '').strip()
-        if category_val and category_val != recall.category:
-            recall.category = category_val
-            content_changed = True
-    if 'type' in data:
-        type_val = (data.get('type') or '').strip()
-        if type_val and type_val != recall.type:
-            recall.type = type_val
-            content_changed = True
-    if 'content' in data:
-        new_content = (data.get('content') or '').strip()
-        if new_content != recall.content:
-            recall.content = new_content
-            content_changed = True
-    if 'description' in data:
-        new_desc = (data.get('description') or '').strip()
-        if new_desc != recall.description:
-            recall.description = new_desc
-            content_changed = True
-    if 'tags' in data or 'keywords' in data:
-        recall.tags = _tags_to_string(data.get('keywords') or data.get('tags'))
-    if 'pinned' in data:
-        recall.pinned = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
-    if 'reminder_at' in data:
-        recall.reminder_at = _parse_reminder(data.get('reminder_at'))
-    if 'status' in data:
-        status_val = (data.get('status') or '').strip()
-        if status_val in ['active', 'archived']:
-            recall.status = status_val
-    if 'source_url' in data:
-        new_url = (data.get('source_url') or '').strip() or None
-        if new_url != recall.source_url:
-            recall.source_url = new_url
-            content_changed = True
-    if user_provided_summary:
-        recall.summary = data.get('summary').strip()
+    if 'why' in data:
+        why_val = (data.get('why') or '').strip()
+        recall.why = why_val if why_val else recall.why
+    if 'summary' in data:
+        summary_val = (data.get('summary') or '').strip()
+        recall.summary = summary_val if summary_val else recall.summary
+    if 'payload_type' in data:
+        payload_type = (data.get('payload_type') or '').strip().lower()
+        if payload_type in ['url', 'text']:
+            recall.payload_type = payload_type
+    if 'payload' in data:
+        payload_val = (data.get('payload') or '').strip()
+        if payload_val:
+            recall.payload = payload_val
+    if 'when_context' in data:
+        when_val = (data.get('when_context') or '').strip()
+        if when_val:
+            recall.when_context = when_val
 
-    # Auto-detect URL from content if source_url is empty
-    if not recall.source_url and recall.content:
-        import re
-        url_match = re.search(r'https?://\S+', recall.content)
-        if url_match:
-            recall.source_url = url_match.group(0)
-            content_changed = True
-
-    # Use fallback summary if missing (don't block for AI summary)
-    needs_background_summary = False
-    if not recall.summary:
-        recall.summary = _generate_fallback_summary(
-            recall.title,
-            recall.content,
-            recall.category,
-            recall.type,
-            recall.source_url
-        )
-        needs_background_summary = True
-    elif content_changed and not user_provided_summary:
-        # Content changed, regenerate summary in background
-        needs_background_summary = True
-
-    # Refresh search blob (without waiting for AI embedding)
-    recall.search_blob = _build_recall_blob(
-        recall.title,
-        recall.content,
-        recall.description,
-        recall.category,
-        recall.type,
-        _normalize_tags(recall.tags),
-        recall.source_url,
-        recall.summary
-    )
     recall.updated_at = datetime.utcnow()
     db.session.commit()
-
-    # Start background thread for AI summary and embedding if needed
-    if needs_background_summary:
-        thread = threading.Thread(
-            target=_generate_recall_summary_background,
-            args=(recall.id,),
-            daemon=True
-        )
-        thread.start()
-
     return jsonify(recall.to_dict())
 
 
-@app.route('/api/recalls/search', methods=['POST'])
-def search_recalls():
-    """Semantic + keyword recall search for the AI helper and UI."""
+@app.route('/api/recalls/<int:recall_id>/regenerate', methods=['POST'])
+def regenerate_recall(recall_id):
+    """Re-trigger AI processing for a recall item."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    data = request.json or {}
-    query_text = (data.get('query') or '').strip()
-    if not query_text:
-        return jsonify({'error': 'Query is required'}), 400
-    limit = data.get('limit', 6)
-    try:
-        limit = int(limit)
-    except Exception:
-        limit = 6
-    limit = max(1, min(limit, 15))
-    matches = _semantic_search_recalls(user.id, query_text, limit=limit, include_archived=False)
-    return jsonify({'query': query_text, 'results': matches})
+
+    recall = RecallItem.query.filter_by(id=recall_id, user_id=user.id).first()
+    if not recall:
+        return jsonify({'error': 'Recall not found'}), 404
+
+    recall.ai_status = 'pending'
+    recall.why = None
+    recall.summary = None
+    db.session.commit()
+
+    start_recall_processing(recall.id)
+    return jsonify(recall.to_dict())
 
 
 @app.route('/api/notes/<int:note_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -2714,6 +2368,15 @@ def calendar_events():
         if existing:
             return jsonify(existing.to_dict()), 200
 
+    if (not is_event) and (not is_phase) and (not is_group) and start_time:
+        conflict = _task_conflicts_with_event(user.id, day_obj, start_time, end_time)
+        if conflict:
+            return jsonify({
+                'error': f'Cannot add a task during "{conflict.title}" because an event is already scheduled.',
+                'conflict_event_id': conflict.id,
+                'conflict_event_title': conflict.title
+            }), 409
+
     default_rollover = (not is_event) and (not is_group) and (not is_phase)
     new_event = CalendarEvent(
         user_id=user.id,
@@ -3080,6 +2743,16 @@ def calendar_event_detail(event_id):
             if not group_obj:
                 return jsonify({'error': 'Group not found for that day'}), 404
             event.group_id = gid
+
+    if (not event.is_event) and (not event.is_phase) and (not event.is_group) and event.start_time:
+        conflict = _task_conflicts_with_event(user.id, event.day, event.start_time, event.end_time, exclude_event_id=event.id)
+        if conflict:
+            db.session.rollback()
+            return jsonify({
+                'error': f'Cannot add a task during "{conflict.title}" because an event is already scheduled.',
+                'conflict_event_id': conflict.id,
+                'conflict_event_title': conflict.title
+            }), 409
 
     if status_changed:
         if event.status == 'done':
