@@ -499,6 +499,32 @@ class PushSubscription(db.Model):
         }
 
 
+class BookmarkItem(db.Model):
+    """User's saved bookmarks for quick reference."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    value = db.Column(db.Text, nullable=False)
+    pinned = db.Column(db.Boolean, default=False)
+    pin_order = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'description': self.description,
+            'value': self.value,
+            'pinned': bool(self.pinned),
+            'pin_order': self.pin_order or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class QuickAccessItem(db.Model):
     """User's quick access pinned items."""
     id = db.Column(db.Integer, primary_key=True)

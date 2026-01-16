@@ -12879,7 +12879,7 @@ function renderAIMessages(context = 'panel') {
         placeholder.innerHTML = `
             <i class="fa-solid fa-robot"></i>
             <p>Start a conversation</p>
-            <span>Ask me to manage tasks, calendar events, or recalls</span>
+            <span>Ask me to manage tasks, calendar events, recalls, or bookmarks</span>
         `;
         container.appendChild(placeholder);
         return;

@@ -10,7 +10,7 @@ from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from ai_service import run_ai_chat, get_openai_client
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -41,8 +41,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
@@ -1751,6 +1751,14 @@ def quick_access_page():
         return redirect(url_for('select_user'))
     return render_template('quick_access.html')
 
+
+@app.route('/bookmarks')
+def bookmarks_page():
+    """Bookmarks module page."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('bookmarks.html')
+
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
     user = get_current_user()
@@ -2584,6 +2592,101 @@ def update_quick_access_order():
 
     db.session.commit()
     return jsonify({'message': 'Order updated'})
+
+
+# Bookmarks API
+@app.route('/api/bookmarks', methods=['GET', 'POST'])
+def handle_bookmarks():
+    """List or create bookmark items."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        items = BookmarkItem.query.filter_by(user_id=user.id).order_by(
+            BookmarkItem.pinned.desc(),
+            BookmarkItem.pin_order.desc(),
+            BookmarkItem.updated_at.desc(),
+            BookmarkItem.created_at.desc()
+        ).all()
+        return jsonify([item.to_dict() for item in items])
+
+    data = request.json or {}
+    title = (data.get('title') or '').strip()
+    value = (data.get('value') or '').strip()
+    description = (data.get('description') or '').strip() or None
+    pinned = bool(data.get('pinned', False))
+    if not title or not value:
+        return jsonify({'error': 'Title and value are required'}), 400
+
+    pin_order = 0
+    if pinned:
+        pin_order = (
+            db.session.query(db.func.coalesce(db.func.max(BookmarkItem.pin_order), 0))
+            .filter_by(user_id=user.id)
+            .scalar()
+        ) + 1
+
+    new_item = BookmarkItem(
+        user_id=user.id,
+        title=title,
+        description=description,
+        value=value,
+        pinned=pinned,
+        pin_order=pin_order
+    )
+    db.session.add(new_item)
+    db.session.commit()
+    return jsonify(new_item.to_dict()), 201
+
+
+@app.route('/api/bookmarks/<int:item_id>', methods=['GET', 'PUT', 'DELETE'])
+def bookmark_detail(item_id):
+    """Get, update, or delete a bookmark item."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    item = BookmarkItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+
+    if request.method == 'GET':
+        return jsonify(item.to_dict())
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        if 'title' in data:
+            title = (data.get('title') or '').strip()
+            if not title:
+                return jsonify({'error': 'Title is required'}), 400
+            item.title = title
+        if 'value' in data:
+            value = (data.get('value') or '').strip()
+            if not value:
+                return jsonify({'error': 'Value is required'}), 400
+            item.value = value
+        if 'description' in data:
+            description = (data.get('description') or '').strip()
+            item.description = description or None
+
+        if 'pinned' in data:
+            pinned = bool(data.get('pinned'))
+            if pinned and not item.pinned:
+                max_pin = (
+                    db.session.query(db.func.coalesce(db.func.max(BookmarkItem.pin_order), 0))
+                    .filter_by(user_id=user.id)
+                    .scalar()
+                )
+                item.pin_order = (max_pin or 0) + 1
+            elif not pinned:
+                item.pin_order = 0
+            item.pinned = pinned
+
+        db.session.commit()
+        return jsonify(item.to_dict())
+
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({'message': 'Deleted'})
 
 
 # Calendar API

@@ -1,0 +1,397 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="bookmarks-page">
+    <header class="header-row">
+        <div>
+            <h1>Bookmarks</h1>
+            <p style="color: var(--text-muted);">Quick-reference snippets, links, and commands in one place.</p>
+        </div>
+        <button class="btn btn-primary" type="button" onclick="openAddBookmarkModal()">
+            <i class="fa-solid fa-plus"></i> Add Bookmark
+        </button>
+    </header>
+
+    <div class="bookmarks-toolbar">
+        <div class="bookmarks-search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" id="bookmark-search" placeholder="Search bookmarks...">
+        </div>
+    </div>
+
+    <div class="bookmark-grid" id="bookmark-grid"></div>
+</div>
+
+<div class="bookmark-modal-overlay" id="bookmark-modal-overlay">
+    <div class="bookmark-modal">
+        <div class="bookmark-modal-header">
+            <h2 id="bookmark-modal-title">Bookmark</h2>
+            <button class="bookmark-modal-close" type="button" onclick="closeBookmarkModal()">&times;</button>
+        </div>
+        <div class="bookmark-modal-body" id="bookmark-modal-body"></div>
+    </div>
+</div>
+
+<script>
+const bookmarkState = {
+    items: [],
+    activeId: null,
+    mode: 'view',
+    search: ''
+};
+
+function extractBookmarkUrl(value) {
+    if (!value) return null;
+    const match = value.match(/https?:\/\/[^\s]+/i);
+    if (match) return match[0];
+    const trimmed = value.trim();
+    if (trimmed.startsWith('www.')) return `https://${trimmed}`;
+    return null;
+}
+
+function formatBookmarkValuePreview(value) {
+    return (value || '').trim();
+}
+
+function openUrlSafely(url) {
+    if (!url) return;
+    window.open(url, '_blank', 'noopener');
+}
+
+function openBookmarkUrlById(id) {
+    const item = bookmarkState.items.find(i => i.id === id);
+    if (!item) return;
+    openUrlSafely(extractBookmarkUrl(item.value));
+}
+
+function copyBookmarkValueById(id) {
+    const item = bookmarkState.items.find(i => i.id === id);
+    if (!item) return;
+    copyBookmarkValue(item.value);
+}
+
+async function copyBookmarkValue(value) {
+    const text = value || '';
+    if (!text) return;
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast('Copied to clipboard', 'success');
+    } catch (err) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Copied to clipboard', 'success');
+    }
+}
+
+function renderBookmarkGrid() {
+    const grid = document.getElementById('bookmark-grid');
+    if (!grid) return;
+
+    const searchTerm = bookmarkState.search.toLowerCase();
+    const items = bookmarkState.items.filter(item => {
+        if (!searchTerm) return true;
+        const haystack = `${item.title || ''} ${item.description || ''} ${item.value || ''}`.toLowerCase();
+        return haystack.includes(searchTerm);
+    });
+
+    if (!items.length) {
+        grid.innerHTML = '<div class="bookmark-empty">No bookmarks found yet.</div>';
+        return;
+    }
+
+    grid.innerHTML = '';
+    items.forEach(item => {
+        const url = extractBookmarkUrl(item.value);
+        const card = document.createElement('div');
+        card.className = `bookmark-card ${item.pinned ? 'is-pinned' : ''}`;
+        card.dataset.id = item.id;
+        card.addEventListener('click', () => openBookmarkModal(item.id));
+
+        card.innerHTML = `
+            ${item.pinned ? '<div class="bookmark-pin-badge">Pinned</div>' : ''}
+            <div>
+                <div class="bookmark-card-title">${escapeHtml(item.title)}</div>
+                <div class="bookmark-card-value">${escapeHtml(formatBookmarkValuePreview(item.value))}</div>
+            </div>
+            <div class="bookmark-card-actions">
+                ${url ? `<button class="bookmark-action-btn" type="button" onclick="handleBookmarkAction(event, 'open', ${item.id})" title="Open link"><i class="fa-solid fa-link"></i></button>` : ''}
+                <button class="bookmark-action-btn" type="button" onclick="handleBookmarkAction(event, 'copy', ${item.id})" title="Copy"><i class="fa-solid fa-copy"></i></button>
+                <button class="bookmark-action-btn" type="button" onclick="handleBookmarkAction(event, 'pin', ${item.id})" title="${item.pinned ? 'Unpin' : 'Pin'}"><i class="fa-solid fa-thumbtack"></i></button>
+            </div>
+        `;
+
+        grid.appendChild(card);
+    });
+}
+
+function handleBookmarkAction(event, action, id) {
+    event.stopPropagation();
+    const item = bookmarkState.items.find(i => i.id === id);
+    if (!item) return;
+    if (action === 'open') {
+        openUrlSafely(extractBookmarkUrl(item.value));
+    } else if (action === 'copy') {
+        copyBookmarkValue(item.value);
+    } else if (action === 'pin') {
+        toggleBookmarkPin(id);
+    }
+}
+
+async function loadBookmarks() {
+    const grid = document.getElementById('bookmark-grid');
+    if (grid) grid.innerHTML = '<div class="bookmark-empty">Loading...</div>';
+    try {
+        const res = await fetch('/api/bookmarks');
+        if (!res.ok) throw new Error('Failed to load bookmarks');
+        bookmarkState.items = await res.json();
+        renderBookmarkGrid();
+        openBookmarkFromQuery();
+    } catch (err) {
+        console.error(err);
+        if (grid) grid.innerHTML = '<div class="bookmark-empty">Could not load bookmarks.</div>';
+    }
+}
+
+function openBookmarkModal(id) {
+    const item = bookmarkState.items.find(i => i.id === id);
+    if (!item) return;
+    bookmarkState.activeId = id;
+    bookmarkState.mode = 'view';
+    renderBookmarkModalView(item);
+    const overlay = document.getElementById('bookmark-modal-overlay');
+    if (overlay) overlay.classList.add('open');
+}
+
+function openAddBookmarkModal() {
+    bookmarkState.activeId = null;
+    bookmarkState.mode = 'add';
+    renderBookmarkModalEdit({
+        title: '',
+        description: '',
+        value: '',
+        pinned: false
+    });
+    const overlay = document.getElementById('bookmark-modal-overlay');
+    if (overlay) overlay.classList.add('open');
+}
+
+function closeBookmarkModal() {
+    const overlay = document.getElementById('bookmark-modal-overlay');
+    if (overlay) overlay.classList.remove('open');
+    bookmarkState.activeId = null;
+    bookmarkState.mode = 'view';
+}
+
+function renderBookmarkModalView(item) {
+    const body = document.getElementById('bookmark-modal-body');
+    const title = document.getElementById('bookmark-modal-title');
+    const modal = document.querySelector('.bookmark-modal');
+    if (!body || !title) return;
+    if (modal) modal.classList.remove('editing');
+    title.textContent = item.title || 'Bookmark';
+    const url = extractBookmarkUrl(item.value);
+
+    body.innerHTML = `
+        ${item.description ? `
+        <div class="bookmark-view-block">
+            <div class="bookmark-view-label">Description</div>
+            <div class="bookmark-view-box">${escapeHtml(item.description)}</div>
+        </div>
+        ` : ''}
+        <div class="bookmark-view-block">
+            <div class="bookmark-view-label">Value</div>
+            <div class="bookmark-view-box">${escapeHtml(item.value).replace(/\\n/g, '<br>')}</div>
+        </div>
+        <div class="bookmark-modal-actions">
+            <button class="btn btn-ghost" type="button" onclick="toggleBookmarkPin(${item.id})" title="${item.pinned ? 'Unpin' : 'Pin'}">
+                <i class="fa-solid fa-thumbtack"></i><span>${item.pinned ? 'Unpin' : 'Pin'}</span>
+            </button>
+            ${url ? `<button class="btn btn-ghost" type="button" onclick="openBookmarkUrlById(${item.id})" title="Open"><i class="fa-solid fa-link"></i><span>Open</span></button>` : ''}
+            <button class="btn btn-ghost" type="button" onclick="copyBookmarkValueById(${item.id})" title="Copy">
+                <i class="fa-solid fa-copy"></i><span>Copy</span>
+            </button>
+            <button class="btn btn-secondary" type="button" onclick="renderBookmarkModalEdit(${item.id})" title="Edit">
+                <i class="fa-solid fa-pen"></i><span>Edit</span>
+            </button>
+            <button class="btn btn-danger" type="button" onclick="confirmDeleteBookmark(${item.id})" title="Delete">
+                <i class="fa-solid fa-trash"></i><span>Delete</span>
+            </button>
+        </div>
+    `;
+}
+
+function renderBookmarkModalEdit(itemOrId) {
+    const body = document.getElementById('bookmark-modal-body');
+    const title = document.getElementById('bookmark-modal-title');
+    const modal = document.querySelector('.bookmark-modal');
+    if (!body || !title) return;
+    if (modal) modal.classList.add('editing');
+
+    const item = typeof itemOrId === 'number'
+        ? bookmarkState.items.find(i => i.id === itemOrId)
+        : itemOrId;
+    if (!item) return;
+
+    bookmarkState.mode = bookmarkState.activeId ? 'edit' : 'add';
+    title.textContent = bookmarkState.mode === 'add' ? 'Add Bookmark' : 'Edit Bookmark';
+
+    body.innerHTML = `
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="bookmark-title-input" class="form-control" value="${escapeHtml(item.title || '')}" placeholder="Title">
+        </div>
+        <div class="form-group">
+            <label>Description (optional)</label>
+            <textarea id="bookmark-desc-input" class="form-control" rows="2" placeholder="Short context...">${escapeHtml(item.description || '')}</textarea>
+        </div>
+        <div class="form-group">
+            <label>Value</label>
+            <textarea id="bookmark-value-input" class="form-control" rows="4" placeholder="Command, URL, account info...">${escapeHtml(item.value || '')}</textarea>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="bookmark-pin-input" ${item.pinned ? 'checked' : ''}> Pin to top</label>
+        </div>
+        <div class="bookmark-modal-actions">
+            <button class="btn" type="button" onclick="cancelBookmarkEdit()">Cancel</button>
+            <button class="btn btn-primary" type="button" onclick="saveBookmarkFromModal()">
+                ${bookmarkState.mode === 'add' ? 'Add' : 'Save'}
+            </button>
+        </div>
+    `;
+}
+
+function cancelBookmarkEdit() {
+    if (!bookmarkState.activeId) {
+        closeBookmarkModal();
+        return;
+    }
+    const item = bookmarkState.items.find(i => i.id === bookmarkState.activeId);
+    if (item) renderBookmarkModalView(item);
+}
+
+async function saveBookmarkFromModal() {
+    const titleEl = document.getElementById('bookmark-title-input');
+    const descEl = document.getElementById('bookmark-desc-input');
+    const valueEl = document.getElementById('bookmark-value-input');
+    const pinEl = document.getElementById('bookmark-pin-input');
+    if (!titleEl || !valueEl) return;
+
+    const payload = {
+        title: titleEl.value.trim(),
+        description: descEl ? descEl.value.trim() : '',
+        value: valueEl.value.trim(),
+        pinned: !!(pinEl && pinEl.checked)
+    };
+
+    if (!payload.title || !payload.value) {
+        showToast('Title and value are required', 'error');
+        return;
+    }
+
+    try {
+        let res;
+        if (bookmarkState.mode === 'add') {
+            res = await fetch('/api/bookmarks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } else {
+            res = await fetch(`/api/bookmarks/${bookmarkState.activeId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        }
+        if (!res.ok) throw new Error('Save failed');
+        const saved = await res.json();
+
+        if (bookmarkState.mode === 'add') {
+            bookmarkState.items.unshift(saved);
+            bookmarkState.activeId = saved.id;
+        } else {
+            const idx = bookmarkState.items.findIndex(i => i.id === saved.id);
+            if (idx !== -1) bookmarkState.items[idx] = saved;
+        }
+
+        renderBookmarkGrid();
+        renderBookmarkModalView(saved);
+        showToast('Bookmark saved', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not save bookmark', 'error');
+    }
+}
+
+function confirmDeleteBookmark(id) {
+    openConfirmModal('Delete this bookmark?', async () => {
+        try {
+            const res = await fetch(`/api/bookmarks/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            bookmarkState.items = bookmarkState.items.filter(item => item.id !== id);
+            renderBookmarkGrid();
+            closeBookmarkModal();
+            showToast('Bookmark deleted', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not delete bookmark', 'error');
+        }
+    });
+}
+
+async function toggleBookmarkPin(id) {
+    const item = bookmarkState.items.find(i => i.id === id);
+    if (!item) return;
+    try {
+        const res = await fetch(`/api/bookmarks/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned: !item.pinned })
+        });
+        if (!res.ok) throw new Error('Pin update failed');
+        const updated = await res.json();
+        const idx = bookmarkState.items.findIndex(i => i.id === updated.id);
+        if (idx !== -1) bookmarkState.items[idx] = updated;
+        renderBookmarkGrid();
+        if (bookmarkState.activeId === id) {
+            renderBookmarkModalView(updated);
+        }
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update pin', 'error');
+    }
+}
+
+function openBookmarkFromQuery() {
+    const params = new URLSearchParams(window.location.search);
+    const rawId = params.get('item');
+    if (!rawId) return;
+    const id = parseInt(rawId, 10);
+    if (Number.isNaN(id)) return;
+    const item = bookmarkState.items.find(i => i.id === id);
+    if (item) openBookmarkModal(item.id);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadBookmarks();
+    const searchInput = document.getElementById('bookmark-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            bookmarkState.search = e.target.value || '';
+            renderBookmarkGrid();
+        });
+    }
+    const overlay = document.getElementById('bookmark-modal-overlay');
+    if (overlay) {
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeBookmarkModal();
+        });
+    }
+});
+</script>
+{% endblock %}

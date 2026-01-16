@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 from flask import current_app
-from models import db, TodoList, TodoItem, CalendarEvent, RecallItem
+from models import db, TodoList, TodoItem, CalendarEvent, RecallItem, BookmarkItem
 from ai_context import get_all_ai_context
 
 
@@ -198,6 +198,99 @@ def _search_recalls_semantic(user_id: int, query: str, limit: int = 6) -> List[D
     results.sort(key=lambda tup: tup[0], reverse=True)
     trimmed = results[: max(1, min(limit, 15))]
     return [_recall_dict(item, similarity=score) for score, item in trimmed]
+
+
+def _bookmark_dict(item: BookmarkItem, similarity: Optional[float] = None) -> Dict[str, Any]:
+    data = {
+        "id": item.id,
+        "title": item.title,
+        "description": item.description,
+        "value": item.value,
+        "pinned": bool(item.pinned),
+        "pin_order": item.pin_order or 0,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+    if similarity is not None:
+        data["similarity"] = similarity
+    return data
+
+
+def _list_bookmarks(
+    user_id: int,
+    search: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    query = BookmarkItem.query.filter(BookmarkItem.user_id == user_id)
+    if pinned is not None:
+        query = query.filter(BookmarkItem.pinned == bool(pinned))
+    if search:
+        like_expr = f"%{search}%"
+        query = query.filter(
+            db.or_(
+                BookmarkItem.title.ilike(like_expr),
+                BookmarkItem.description.ilike(like_expr),
+                BookmarkItem.value.ilike(like_expr),
+            )
+        )
+    query = query.order_by(
+        BookmarkItem.pinned.desc(),
+        BookmarkItem.pin_order.desc(),
+        BookmarkItem.updated_at.desc(),
+        BookmarkItem.created_at.desc(),
+    )
+    items = query.limit(max(1, min(limit, 200))).all()
+    return [_bookmark_dict(i) for i in items]
+
+
+def _create_bookmark(
+    user_id: int,
+    title: str,
+    value: str,
+    description: Optional[str] = None,
+    pinned: bool = False,
+) -> Dict[str, Any]:
+    safe_title = (title or "").strip()
+    safe_value = (value or "").strip()
+    safe_description = (description or "").strip() or None
+    if not safe_title or not safe_value:
+        raise ValueError("title and value are required")
+    pin_order = 0
+    if pinned:
+        pin_order = (
+            db.session.query(db.func.coalesce(db.func.max(BookmarkItem.pin_order), 0))
+            .filter_by(user_id=user_id)
+            .scalar()
+        ) + 1
+    bookmark = BookmarkItem(
+        user_id=user_id,
+        title=safe_title,
+        description=safe_description,
+        value=safe_value,
+        pinned=bool(pinned),
+        pin_order=pin_order,
+    )
+    db.session.add(bookmark)
+    db.session.commit()
+    return _bookmark_dict(bookmark)
+
+
+def _search_bookmarks_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    items = BookmarkItem.query.filter(BookmarkItem.user_id == user_id).all()
+    needle = query.lower()
+    results = []
+    for item in items:
+        haystack = " ".join([item.title or "", item.description or "", item.value or ""]).lower()
+        score = 0.0
+        if needle in haystack:
+            score = 0.3 + min(haystack.count(needle) * 0.1, 0.7)
+        results.append((score, item))
+    results.sort(key=lambda tup: tup[0], reverse=True)
+    trimmed = results[: max(1, min(limit, 15))]
+    return [_bookmark_dict(item, similarity=score) for score, item in trimmed]
 
 
 def _list_hub_tasks(
@@ -829,16 +922,65 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_bookmarks",
+            "description": "List bookmark items with optional search or pinned filter",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search": {"type": "string"},
+                    "pinned": {"type": "boolean"},
+                    "limit": {"type": "integer", "default": 100},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_bookmark",
+            "description": "Create a bookmark item with title, value, and optional description/pinned",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "value": {"type": "string"},
+                    "description": {"type": "string"},
+                    "pinned": {"type": "boolean"},
+                },
+                "required": ["title", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_bookmarks_semantic",
+            "description": "Search across bookmark items to find fuzzy matches",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 6},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
 def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
-    base_prompt = f"""You are a task, project, and recall assistant. Follow these rules:
+    base_prompt = f"""You are a task, project, recall, and bookmark assistant. Follow these rules:
 - Today's date is {today_iso} (timezone: {timezone}). When the user says things like "today", "tomorrow", "next Monday", convert them to an explicit YYYY-MM-DD in that timezone before calling tools. If ambiguous, ask a short clarifying question.
 - Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content; add/find recall items with fuzzy matching.
 - You can also manage the calendar: list calendar entries by day/range and create new entries (tasks/events/phases/groups). Always set day (YYYY-MM-DD) and use precise fields (start_time/end_time HH:MM 24h, status, priority, flags is_event/is_phase/is_group, phase_id/group_id when nesting, reminder_minutes_before, description).
 - For recall capture: when the user wants to remember something, call create_recall with title, why, payload_type (url or text), payload, and when_context.
 - For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with when_context filters.
+- For bookmark capture: when the user wants to save quick-reference info, call create_bookmark with title, value, and optional description/pinned.
+- For bookmark retrieval: start with search_bookmarks_semantic(query); if user asks for lists or pinned-only, use list_bookmarks with pinned filter.
 - Recall response format (concise markdown with clickable links):
   * Header: "**Recall matches**" (only when showing results)
   * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) - <when_context> - <payload_type> - <why>"
@@ -850,6 +992,10 @@ def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
   * Example: recall with id=42, title="ML Research", when_context="work"
     - CORRECT: "- [ML Research](/recalls?note=42) - work - url - Might help with future ML reading."
     - WRONG: "- [ML Research](https://example.com) - work - url - Might help with future ML reading."
+- Bookmark response format (concise markdown with clickable links):
+  * Header: "**Bookmark matches**" (only when showing results)
+  * Each match MUST use this EXACT format: "- [<title>](/bookmarks?item=<id>) - <pinned|unpinned> - <value>"
+  * The markdown link href MUST ALWAYS be: /bookmarks?item=<id>
 - Always use tools to fetch ids before mutating. Do not guess ids.
 - When user refers to names, search then pick the closest; if multiple matches, ask a short clarifying question.
 - If user says "first/second/third/last phase", choose that phase by order_index (1-based; last = final phase).
@@ -1000,6 +1146,27 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
         )
     if name == "search_recalls_semantic":
         return _search_recalls_semantic(
+            user_id=user_id,
+            query=args.get("query", ""),
+            limit=args.get("limit", 6),
+        )
+    if name == "list_bookmarks":
+        return _list_bookmarks(
+            user_id=user_id,
+            search=args.get("search"),
+            pinned=args.get("pinned"),
+            limit=args.get("limit", 100),
+        )
+    if name == "create_bookmark":
+        return _create_bookmark(
+            user_id=user_id,
+            title=args.get("title", ""),
+            value=args.get("value", ""),
+            description=args.get("description"),
+            pinned=bool(args.get("pinned", False)),
+        )
+    if name == "search_bookmarks_semantic":
+        return _search_bookmarks_semantic(
             user_id=user_id,
             query=args.get("query", ""),
             limit=args.get("limit", 6),

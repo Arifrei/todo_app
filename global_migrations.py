@@ -410,6 +410,35 @@ def ensure_quick_access(cur):
     add_column(cur, "quick_access_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_bookmark_item(cur):
+    if not table_exists(cur, "bookmark_item"):
+        cur.execute(
+            """
+            CREATE TABLE bookmark_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                description TEXT,
+                value TEXT NOT NULL,
+                pinned BOOLEAN DEFAULT 0,
+                pin_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] bookmark_item table created")
+        return
+    add_column(cur, "bookmark_item", "user_id", "INTEGER")
+    add_column(cur, "bookmark_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "bookmark_item", "description", "TEXT")
+    add_column(cur, "bookmark_item", "value", "TEXT NOT NULL DEFAULT ''")
+    add_column(cur, "bookmark_item", "pinned", "BOOLEAN DEFAULT 0")
+    add_column(cur, "bookmark_item", "pin_order", "INTEGER DEFAULT 0")
+    add_column(cur, "bookmark_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "bookmark_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
 def main():
     if not DB_PATH.exists():
         print("Database not found. Run baseline migrate.py first.")
@@ -429,6 +458,7 @@ def main():
         ensure_recalls(cur)
         ensure_notifications(cur)
         ensure_quick_access(cur)
+        ensure_bookmark_item(cur)
         conn.commit()
         print("Global migrations complete.")
     finally:

@@ -33,7 +33,9 @@
       "Bash(\"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\gradlew.bat\" assembleRelease -p \"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\")",
       "Bash(wc:*)",
       "Bash(xargs file:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(del \"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\app\\\\src\\\\main\\\\res\\\\mipmap-anydpi-v26\\\\ic_launcher_foreground.png\")",
+      "Bash(del \"c:\\\\Users\\\\Aron\\\\PycharmProjects\\\\PythonProject\\\\todo_app\\\\android\\\\app\\\\src\\\\main\\\\res\\\\mipmap-anydpi-v26\\\\ic_launcher_background.png\")"
     ],
     "deny": [],
     "ask": []

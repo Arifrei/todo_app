@@ -153,6 +153,12 @@
                             <span class="nav-label">Recalls</span>
                         </a>
                     </li>
+                    <li data-nav-id="bookmarks">
+                        <a href="/bookmarks" class="{{ 'active' if request.path.startswith('/bookmarks') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-bookmark"></i></span>
+                            <span class="nav-label">Bookmarks</span>
+                        </a>
+                    </li>
                     <li data-nav-id="quick-access">
                         <a href="/quick-access" class="{{ 'active' if request.path.startswith('/quick-access') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-star"></i></span>
@@ -221,7 +227,7 @@
         <div class="ai-panel-header">
             <div>
                 <strong>AI Assistant</strong>
-                <div class="ai-subtitle">Manage tasks, calendar & recalls</div>
+                <div class="ai-subtitle">Manage tasks, calendar, recalls & bookmarks</div>
             </div>
             <button class="btn-icon" onclick="toggleAIPanel()" aria-label="Close AI panel">
                 <i class="fa-solid fa-xmark"></i>

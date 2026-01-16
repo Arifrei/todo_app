@@ -44,6 +44,7 @@ def ensure_user_table(cur):
     if table_exists(cur, "user"):
         add_column(cur, "user", "pin_hash", "VARCHAR(200)")
         add_column(cur, "user", "sidebar_order", "TEXT")
+        add_column(cur, "user", "homepage_order", "TEXT")
         print("[ok] user table exists")
         return
     cur.execute(
@@ -55,6 +56,7 @@ def ensure_user_table(cur):
             password_hash VARCHAR(200) NOT NULL,
             pin_hash VARCHAR(200),
             sidebar_order TEXT,
+            homepage_order TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -386,6 +388,36 @@ def ensure_recall_table(cur):
     add_column(cur, "recall_items", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_bookmark_table(cur):
+    """Create or align the bookmarks table used for the Bookmarks module."""
+    if not table_exists(cur, "bookmark_item"):
+        cur.execute(
+            """
+            CREATE TABLE bookmark_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                description TEXT,
+                value TEXT NOT NULL,
+                pinned BOOLEAN DEFAULT 0,
+                pin_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] bookmark_item table created")
+        return
+    add_column(cur, "bookmark_item", "user_id", "INTEGER")
+    add_column(cur, "bookmark_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "bookmark_item", "description", "TEXT")
+    add_column(cur, "bookmark_item", "value", "TEXT NOT NULL DEFAULT ''")
+    add_column(cur, "bookmark_item", "pinned", "BOOLEAN DEFAULT 0")
+    add_column(cur, "bookmark_item", "pin_order", "INTEGER DEFAULT 0")
+    add_column(cur, "bookmark_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "bookmark_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
 def ensure_notification_tables(cur):
     if not table_exists(cur, "notification"):
         cur.execute(
@@ -498,6 +530,7 @@ def main():
         ensure_recurring_event_table(cur)
         ensure_recurrence_exception_table(cur)
         ensure_recall_table(cur)
+        ensure_bookmark_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)
         conn.commit()
