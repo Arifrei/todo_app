@@ -170,7 +170,7 @@
                                 <i class="fa-solid fa-calendar-day"></i> Move day
                             </button>
                             <button class="bulk-menu-item" id="calendar-bulk-note" type="button">
-                                <i class="fa-solid fa-note-sticky"></i> Link note
+                                <i class="fa-solid fa-note-sticky"></i> Add note
                             </button>
                         </div>
                     </div>
@@ -365,9 +365,43 @@
                 <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
             </div>
             <div class="modal-actions">
-                <button class="btn" onclick="closeLinkNoteModal()">Cancel</button>
-                <button class="btn btn-secondary" onclick="createAndLinkNote()">Create & Link</button>
-                <button class="btn btn-primary" onclick="saveLinkedNote()">Attach Selected</button>
+                <button class="btn" onclick="closeLinkNoteModal()">
+                    <i class="fa-solid fa-xmark note-action-icon"></i>
+                    <span class="note-action-text">Cancel</span>
+                </button>
+                <button class="btn btn-secondary" onclick="createAndLinkNote()">
+                    <i class="fa-solid fa-plus note-action-icon"></i>
+                    <span class="note-action-text">Create & Link</span>
+                </button>
+                <button class="btn btn-primary" onclick="saveLinkedNote()">
+                    <i class="fa-solid fa-link note-action-icon"></i>
+                    <span class="note-action-text">Attach Selected</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Calendar Item Note Modal -->
+    <div class="modal" id="calendar-item-note-modal">
+        <div class="modal-content">
+            <h2 id="calendar-item-note-title">Item Note</h2>
+            <p id="calendar-item-note-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+            <div id="calendar-item-note-view" class="calendar-item-note-view"></div>
+            <div id="calendar-item-note-editor" class="form-group is-hidden">
+                <label for="calendar-item-note-input">Note</label>
+                <textarea id="calendar-item-note-input" class="form-control" rows="6" maxlength="{{ item_note_max_chars }}"></textarea>
+                <div class="calendar-item-note-counter" id="calendar-item-note-counter"></div>
+            </div>
+            <div class="modal-actions" id="calendar-item-note-view-actions">
+                <button class="btn" id="calendar-item-note-close">Close</button>
+                <button class="btn btn-secondary" id="calendar-item-note-edit">Edit</button>
+                <button class="btn btn-secondary" id="calendar-item-note-convert">Convert to note</button>
+                <button class="btn btn-danger" id="calendar-item-note-delete">Delete</button>
+            </div>
+            <div class="modal-actions is-hidden" id="calendar-item-note-edit-actions">
+                <button class="btn" id="calendar-item-note-cancel">Cancel</button>
+                <button class="btn btn-primary" id="calendar-item-note-save">Save</button>
             </div>
         </div>
     </div>
@@ -375,5 +409,6 @@
 
 <script>
     window.USER_TIMEZONE = '{{ default_timezone or "America/New_York" }}';
+    window.CALENDAR_ITEM_NOTE_MAX_CHARS = {{ item_note_max_chars or 0 }};
 </script>
 {% endblock %}

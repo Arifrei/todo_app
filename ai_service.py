@@ -868,6 +868,29 @@ def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
     - in_progress: "- [in_progress] <task>"
     - done: "- [done] <task>"
   * Add blank lines between projects and between phases for readability
+- Calendar listing format (use markdown with visual hierarchy and indentation):
+  * Day header: "**📅 <Day, Month Date, Year>**" (e.g., "**📅 Wednesday, January 15, 2026**")
+  * For each event, use this exact format on a single line:
+    - With times: "  ⏰ <HH:MM-HH:MM> | [status] **<title>** [priority]"
+    - Without times: "  📌 [status] **<title>** [priority]"
+  * Status symbols (use these exact symbols):
+    - not_started: "○"
+    - in_progress: "◐"
+    - done: "✓"
+  * Priority badges (only show if not low):
+    - high: "🔴"
+    - medium: "🟡"
+  * Group header (is_group=true): "  **📁 <group_name>**" then indent its events with 4 spaces
+  * Phase header (is_phase=true): "  **▶ <phase_name>**" then indent its events with 4 spaces
+  * Add a blank line between different days
+  * Example output for a day:
+    **📅 Wednesday, January 15, 2026**
+      ⏰ 09:00-10:00 | ○ **Team standup**
+      ⏰ 14:00-15:30 | ◐ **Review PR** 🔴
+      📌 ✓ **Submit report**
+      **📁 Evening Tasks**
+        📌 ○ **Grocery shopping** 🟡
+        📌 ○ **Call mom**
 - Keep responses concise; report what you changed. When you add or update, just confirm success and what was added/changed (no need to list all tasks)."""
     user_context = get_all_ai_context(user_id)
     return f"{base_prompt}\n\n{user_context}"

@@ -438,7 +438,7 @@ function highlightSelectedQAList() {
 
 async function loadNotesForQuickAccess(selectedNoteId = '') {
     try {
-        const response = await fetch('/api/notes');
+        const response = await fetch('/api/notes?all=1');
         const notes = await response.json();
         const select = document.getElementById('qa-note-select');
         select.innerHTML = '<option value="">-- Select a note --</option>';
@@ -530,7 +530,7 @@ async function saveQuickAccessItem() {
             alert('Please select a note');
             return;
         }
-        url = `/notes?note=${noteId}`;
+        url = `/notes/${noteId}`;
         referenceId = parseInt(noteId);
     } else if (type === 'calendar') {
         const dateValue = document.getElementById('qa-date').value;

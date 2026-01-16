@@ -42,9 +42,8 @@
             <i class="fa-solid fa-arrow-left"></i>
         </a>
         {% endif %}
-        <a href="/tasks" class="btn btn-home">
-            <i class="fa-solid fa-house"></i>
-            <span class="home-label">Home</span>
+        <a href="/tasks" class="btn btn-home" aria-label="Tasks home">
+            <i class="fa-solid fa-list-check"></i>
         </a>
     </div>
 
@@ -244,7 +243,7 @@
                     {% endif %}
                     {% if item.linked_notes|length %}
                         {% for note in item.linked_notes %}
-                        <a class="meta-chip note linked-note-chip" href="/notes?note={{ note.id }}" title="Open note {{ note.title or ('#' ~ note.id) }}">
+                        <a class="meta-chip note linked-note-chip" href="/notes/{{ note.id }}" title="Open note {{ note.title or ('#' ~ note.id) }}">
                             <i class="fa-solid fa-note-sticky"></i>
                             {{ note.title or ('Note #' ~ note.id) }}
                         </a>
@@ -325,7 +324,7 @@
                         <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-calendar-day"></i> Set Date
                         </button>
-                        <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, {{ item.linked_notes|map(attribute='id')|list|tojson }}); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-note-sticky"></i> Link Note
                         </button>
                         <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
@@ -524,9 +523,18 @@
             <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeLinkNoteModal()">Cancel</button>
-            <button class="btn btn-secondary" onclick="createAndLinkNote()">Create & Link</button>
-            <button class="btn btn-primary" onclick="saveLinkedNote()">Attach Selected</button>
+            <button class="btn" onclick="closeLinkNoteModal()">
+                <i class="fa-solid fa-xmark note-action-icon"></i>
+                <span class="note-action-text">Cancel</span>
+            </button>
+            <button class="btn btn-secondary" onclick="createAndLinkNote()">
+                <i class="fa-solid fa-plus note-action-icon"></i>
+                <span class="note-action-text">Create & Link</span>
+            </button>
+            <button class="btn btn-primary" onclick="saveLinkedNote()">
+                <i class="fa-solid fa-link note-action-icon"></i>
+                <span class="note-action-text">Attach Selected</span>
+            </button>
         </div>
     </div>
 </div>

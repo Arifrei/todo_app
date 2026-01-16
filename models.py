@@ -212,28 +212,85 @@ class Note(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     calendar_event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    folder_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
     title = db.Column(db.String(150), nullable=False, default='Untitled Note')
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
+    note_type = db.Column(db.String(20), nullable=False, default='note')  # note | list
+    checkbox_mode = db.Column(db.Boolean, default=False)
     pinned = db.Column(db.Boolean, default=False)
     pin_order = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     share_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
     is_public = db.Column(db.Boolean, default=False, nullable=False)
+    list_items = db.relationship('NoteListItem', backref='parent_note', lazy=True, cascade="all, delete-orphan", order_by="NoteListItem.order_index")
 
     def to_dict(self):
+        note_type = self.note_type or 'note'
         return {
             'id': self.id,
             'title': self.title,
             'content': self.content or '',
             'todo_item_id': self.todo_item_id,
             'calendar_event_id': self.calendar_event_id,
+            'folder_id': self.folder_id,
+            'note_type': note_type,
+            'checkbox_mode': bool(self.checkbox_mode) if note_type == 'list' else False,
             'pinned': bool(self.pinned),
             'pin_order': self.pin_order or 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_public': self.is_public,
             'share_token': self.share_token,
+        }
+
+
+class NoteListItem(db.Model):
+    """List item for a Notes list."""
+    __tablename__ = 'note_list_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
+    text = db.Column(db.String(300), nullable=False)
+    note = db.Column(db.Text, nullable=True)
+    link_text = db.Column(db.String(200), nullable=True)
+    link_url = db.Column(db.String(500), nullable=True)
+    checked = db.Column(db.Boolean, default=False)
+    order_index = db.Column(db.Integer, default=0)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'note_id': self.note_id,
+            'text': self.text,
+            'note': self.note,
+            'link_text': self.link_text,
+            'link_url': self.link_url,
+            'checked': bool(self.checked),
+            'order_index': self.order_index or 0,
+        }
+
+
+class NoteFolder(db.Model):
+    """Folder for organizing notes (can be nested)."""
+    __tablename__ = 'note_folder'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
+    name = db.Column(db.String(120), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'parent_id': self.parent_id,
+            'name': self.name,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
@@ -303,6 +360,7 @@ class CalendarEvent(db.Model):
     recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=True)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
+    item_note = db.Column(db.Text, nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -332,6 +390,7 @@ class CalendarEvent(db.Model):
             'rolled_from_id': self.rolled_from_id,
             'recurrence_id': self.recurrence_id,
             'todo_item_id': self.todo_item_id,
+            'item_note': self.item_note,
             'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
         }
 

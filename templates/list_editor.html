@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="notes-layout notes-editor-only" id="list-editor-page" data-note-id="{{ note_id or '' }}">
+    <header class="notes-header">
+        <div>
+            <h1>List</h1>
+        </div>
+        <div class="notes-header-actions">
+            <button class="btn btn-icon-only" id="list-back-btn" aria-label="Back" title="Back">
+                <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <button class="btn btn-icon-only" id="list-notes-btn" aria-label="Notes" title="Notes">
+                <i class="fa-solid fa-note-sticky"></i>
+            </button>
+            <button class="btn btn-primary btn-secondary" id="list-save-btn">
+                <i class="fa-solid fa-floppy-disk"></i> Save
+            </button>
+            <div class="dropdown notes-actions-dropdown">
+                <button class="btn btn-ghost btn-icon-only" id="list-actions-toggle" aria-label="More actions" title="More actions">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
+                <div class="dropdown-menu notes-actions-menu" id="list-actions-menu">
+                    <button class="dropdown-item" id="list-share-btn">
+                        <i class="fa-solid fa-share-nodes"></i> Share
+                    </button>
+                    <button class="dropdown-item danger" id="list-delete-btn">
+                        <i class="fa-solid fa-trash"></i> Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section class="notes-editor card list-editor-card">
+        <div class="note-meta list-meta">
+            <input id="list-title" type="text" placeholder="Untitled list" autocomplete="off" />
+            <div class="note-meta-right list-meta-right">
+                <label class="list-toggle">
+                    <input type="checkbox" id="list-checkbox-toggle" />
+                    <span>Checkboxes</span>
+                </label>
+                <span class="note-updated" id="list-updated-label">New list</span>
+            </div>
+        </div>
+
+        <div class="list-editor-surface" id="list-editor-surface">
+            <div class="list-pill-stack" id="list-pill-stack"></div>
+        </div>
+    </section>
+</div>
+{% endblock %}

@@ -83,12 +83,66 @@ def ensure_note(cur):
         return
     add_column(cur, "note", "todo_item_id", "INTEGER")
     add_column(cur, "note", "calendar_event_id", "INTEGER")
+    add_column(cur, "note", "folder_id", "INTEGER")
     add_column(cur, "note", "title", "VARCHAR(150) NOT NULL DEFAULT 'Untitled Note'")
     add_column(cur, "note", "content", "TEXT")
+    add_column(cur, "note", "note_type", "VARCHAR(20) NOT NULL DEFAULT 'note'", default_sql="'note'")
+    add_column(cur, "note", "checkbox_mode", "BOOLEAN DEFAULT 0", default_sql="0")
     add_column(cur, "note", "pinned", "BOOLEAN DEFAULT 0")
     add_column(cur, "note", "pin_order", "INTEGER DEFAULT 0")
     add_column(cur, "note", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_note_folder(cur):
+    if not table_exists(cur, "note_folder"):
+        cur.execute(
+            """
+            CREATE TABLE note_folder (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                parent_id INTEGER,
+                name VARCHAR(120) NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] note_folder table created")
+        return
+    add_column(cur, "note_folder", "parent_id", "INTEGER")
+    add_column(cur, "note_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
+    add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "note_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "note_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_note_list_item(cur):
+    if not table_exists(cur, "note_list_item"):
+        cur.execute(
+            """
+            CREATE TABLE note_list_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_id INTEGER NOT NULL,
+                text VARCHAR(300) NOT NULL,
+                note TEXT,
+                link_text VARCHAR(200),
+                link_url VARCHAR(500),
+                checked BOOLEAN DEFAULT 0,
+                order_index INTEGER DEFAULT 0
+            )
+            """
+        )
+        print("[add] note_list_item table created")
+        return
+    add_column(cur, "note_list_item", "note_id", "INTEGER")
+    add_column(cur, "note_list_item", "text", "VARCHAR(300) NOT NULL DEFAULT ''")
+    add_column(cur, "note_list_item", "note", "TEXT")
+    add_column(cur, "note_list_item", "link_text", "VARCHAR(200)")
+    add_column(cur, "note_list_item", "link_url", "VARCHAR(500)")
+    add_column(cur, "note_list_item", "checked", "BOOLEAN DEFAULT 0")
+    add_column(cur, "note_list_item", "order_index", "INTEGER DEFAULT 0")
 
 
 def ensure_calendar_event(cur):
@@ -138,6 +192,7 @@ def ensure_calendar_event(cur):
     add_column(cur, "calendar_event", "rolled_from_id", "INTEGER")
     add_column(cur, "calendar_event", "recurrence_id", "INTEGER")
     add_column(cur, "calendar_event", "todo_item_id", "INTEGER")
+    add_column(cur, "calendar_event", "item_note", "TEXT")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
     add_column(cur, "calendar_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
@@ -366,6 +421,8 @@ def main():
         ensure_todo_list(cur)
         ensure_todo_item(cur)
         ensure_note(cur)
+        ensure_note_list_item(cur)
+        ensure_note_folder(cur)
         ensure_calendar_event(cur)
         ensure_recurring_event(cur)
         ensure_recurrence_exception(cur)

@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import html
 import logging
 import pytz
 import secrets
@@ -9,7 +10,7 @@ from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from ai_service import run_ai_chat, get_openai_client
-from models import db, User, TodoList, TodoItem, Note, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -42,6 +43,12 @@ if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
 
 DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'ai', 'settings']
 DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'quick-access', 'ai', 'settings', 'download']
+CALENDAR_ITEM_NOTE_MAX_CHARS = 300
+NOTE_LIST_CONVERSION_MIN_LINES = 2
+NOTE_LIST_CONVERSION_MAX_LINES = 100
+NOTE_LIST_CONVERSION_MAX_CHARS = 80
+NOTE_LIST_CONVERSION_MAX_WORDS = 12
+NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT = 8
 
 LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
 
@@ -65,6 +72,71 @@ def linkify_text(text):
 
 
 app.jinja_env.filters['linkify_text'] = linkify_text
+
+
+def _normalize_note_type(raw):
+    if str(raw or '').lower() == 'list':
+        return 'list'
+    return 'note'
+
+def _extract_note_list_lines(raw_html):
+    if not raw_html:
+        return None, 'Note is empty.'
+    text = str(raw_html)
+    text = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', text)
+    text = re.sub(r'(?i)</\s*(p|div|li|h[1-6]|blockquote|pre|tr)\s*>', '\n', text)
+    text = re.sub(r'(?i)</\s*(ul|ol|table)\s*>', '\n', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = html.unescape(text)
+    text = text.replace('\r', '\n').replace('\xa0', ' ')
+    raw_lines = [line.strip() for line in text.split('\n')]
+
+    cleaned_lines = []
+    for line in raw_lines:
+        if not line:
+            continue
+        line = re.sub(r'^\s*\[[xX ]\]\s+', '', line)
+        line = re.sub(r'^\s*(?:[-*+]|\d+[.)]|\d+\s*[-:]|[A-Za-z][.)])\s+', '', line)
+        line = re.sub(r'\s+', ' ', line).strip()
+        if line:
+            cleaned_lines.append(line)
+
+    if len(cleaned_lines) < NOTE_LIST_CONVERSION_MIN_LINES:
+        return None, f'Need at least {NOTE_LIST_CONVERSION_MIN_LINES} non-empty lines.'
+    if len(cleaned_lines) > NOTE_LIST_CONVERSION_MAX_LINES:
+        return None, f'Too many lines to convert (max {NOTE_LIST_CONVERSION_MAX_LINES}).'
+
+    for line in cleaned_lines:
+        if len(line) > NOTE_LIST_CONVERSION_MAX_CHARS:
+            return None, f'Lines must be {NOTE_LIST_CONVERSION_MAX_CHARS} characters or fewer.'
+        words = re.findall(r"[A-Za-z0-9']+", line)
+        if len(words) > NOTE_LIST_CONVERSION_MAX_WORDS:
+            return None, f'Lines must be {NOTE_LIST_CONVERSION_MAX_WORDS} words or fewer.'
+        sentence_marks = re.findall(r'[.!?]', line)
+        if len(sentence_marks) > 1:
+            return None, 'Lines must be single phrases, not multiple sentences.'
+        if len(sentence_marks) == 1 and len(words) > NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT:
+            return None, f'Lines must be short phrases (max {NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT} words if punctuated).'
+    return cleaned_lines, None
+
+def _normalize_calendar_item_note(raw):
+    if raw is None:
+        return None
+    text = str(raw)
+    if len(text) > CALENDAR_ITEM_NOTE_MAX_CHARS:
+        raise ValueError('Item note exceeds character limit')
+    text = text.strip()
+    return text or None
+
+
+def _build_list_preview_text(item):
+    base = (item.text or '').strip()
+    link_label = (item.link_text or '').strip()
+    if base and link_label:
+        if base == link_label:
+            return base
+        return f"{base} {link_label}".strip()
+    return base or link_label
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -109,6 +181,11 @@ def _parse_reminder(dt_str):
         return datetime.fromisoformat(dt_str)
     except Exception:
         return None
+
+
+def _now_local():
+    tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'America/New_York'))
+    return datetime.now(tz).replace(tzinfo=None)
 
 
 
@@ -735,7 +812,7 @@ def _rollover_incomplete_events():
             from models import JobLock
             from sqlalchemy.exc import IntegrityError
 
-            now = datetime.utcnow()
+            now = _now_local()
             if db.engine.dialect.name == 'sqlite':
                 # SQLite doesn't support FOR UPDATE; use insert + fallback update for stale locks.
                 try:
@@ -852,6 +929,7 @@ def _rollover_incomplete_events():
                                     is_phase=True,
                                     status='not_started',
                                     priority=orig_phase.priority,
+                                    item_note=orig_phase.item_note,
                                     order_index=_next_calendar_order(today, uid),
                                     reminder_minutes_before=None,
                                     rollover_enabled=orig_phase.rollover_enabled,
@@ -889,7 +967,8 @@ def _rollover_incomplete_events():
                         rollover_enabled=ev.rollover_enabled,
                         rolled_from_id=ev.id,
                         todo_item_id=ev.todo_item_id,
-                        recurrence_id=None
+                        recurrence_id=None,
+                        item_note=ev.item_note
                     )
                     db.session.add(copy_event)
                     created_events += 1
@@ -1258,6 +1337,9 @@ def _schedule_existing_reminders():
             app.logger.error(f"Error in _schedule_existing_reminders: {e}")
 
 
+_jobs_bootstrapped = False
+
+
 def _start_scheduler():
     """Start background scheduler for rollover and optional digest."""
     global scheduler
@@ -1304,15 +1386,21 @@ def _start_scheduler():
     # Schedule existing reminders on startup
     _schedule_existing_reminders()
 
-_jobs_bootstrapped = False
-
 @app.before_request
 def _bootstrap_background_jobs():
     global _jobs_bootstrapped
-    if _jobs_bootstrapped:
+    if _jobs_bootstrapped and scheduler and scheduler.running:
         return
     _start_scheduler()
     _jobs_bootstrapped = True
+
+
+# Start scheduler on process startup (not request-dependent).
+try:
+    _start_scheduler()
+    _jobs_bootstrapped = bool(scheduler and scheduler.running)
+except Exception as e:
+    app.logger.error(f"Error starting scheduler on startup: {e}")
 
 # User Selection Routes
 @app.route('/select-user')
@@ -1527,10 +1615,44 @@ def download_app():
 
 @app.route('/notes')
 def notes_page():
-    """Dedicated notes workspace with rich text editor."""
+    """Dedicated notes workspace with list-only view."""
     if not get_current_user():
         return redirect(url_for('select_user'))
-    return render_template('notes.html')
+    note_id = request.args.get('note') or request.args.get('note_id')
+    if note_id and str(note_id).isdigit():
+        return redirect(url_for('note_editor_page', note_id=int(note_id)))
+    return render_template('notes.html', current_folder=None)
+
+
+@app.route('/notes/new')
+def new_note_page():
+    """New note editor page."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('select_user'))
+    return render_template('note_editor.html', note_id=None, body_class='notes-editor-page')
+
+
+@app.route('/notes/<int:note_id>')
+def note_editor_page(note_id):
+    """Editor page for a single note/list."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('select_user'))
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.note_type == 'list':
+        return render_template('list_editor.html', note_id=note_id)
+    return render_template('note_editor.html', note_id=note_id, body_class='notes-editor-page')
+
+
+@app.route('/notes/folder/<int:folder_id>')
+def notes_folder_page(folder_id):
+    """Notes list scoped to a folder."""
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('select_user'))
+    folder = NoteFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+    return render_template('notes.html', current_folder=folder)
 
 
 @app.route('/recalls')
@@ -1616,7 +1738,11 @@ def calendar_page():
     """Calendar day-first UI."""
     if not get_current_user():
         return redirect(url_for('select_user'))
-    return render_template('calendar.html', default_timezone=app.config.get('DEFAULT_TIMEZONE'))
+    return render_template(
+        'calendar.html',
+        default_timezone=app.config.get('DEFAULT_TIMEZONE'),
+        item_note_max_chars=CALENDAR_ITEM_NOTE_MAX_CHARS
+    )
 
 @app.route('/quick-access')
 def quick_access_page():
@@ -1719,17 +1845,27 @@ def reorder_lists():
 
 @app.route('/api/notes', methods=['GET', 'POST'])
 def handle_notes():
-    """List or create rich-text notes for the current user."""
+    """List or create notes/lists for the current user."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
+    folder_id = request.args.get('folder_id')
+    folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
+    include_all = str(request.args.get('all') or '').lower() in ['1', 'true', 'yes', 'on']
 
     if request.method == 'POST':
         data = request.json or {}
-        title = (data.get('title') or '').strip() or 'Untitled Note'
+        raw_title = (data.get('title') or '').strip()
         content = data.get('content') or ''
+        note_type = _normalize_note_type(data.get('note_type') or data.get('type'))
+        title = raw_title or ('Untitled List' if note_type == 'list' else 'Untitled Note')
+        checkbox_mode = str(data.get('checkbox_mode') or '').lower() in ['1', 'true', 'yes', 'on']
         todo_item_id = data.get('todo_item_id')
         calendar_event_id = data.get('calendar_event_id')
+        folder_id_value = data.get('folder_id')
+        folder_id_value = int(folder_id_value) if folder_id_value and str(folder_id_value).isdigit() else None
+        if folder_id_value is not None:
+            NoteFolder.query.filter_by(id=folder_id_value, user_id=user.id).first_or_404()
         if todo_item_id and calendar_event_id:
             return jsonify({'error': 'Provide either todo_item_id or calendar_event_id, not both'}), 400
         linked_item = None
@@ -1757,21 +1893,49 @@ def handle_notes():
 
         note = Note(
             title=title,
-            content=content,
+            content=content if note_type == 'note' else '',
             user_id=user.id,
             todo_item_id=linked_item.id if linked_item else None,
-            calendar_event_id=linked_event.id if linked_event else None
+            calendar_event_id=linked_event.id if linked_event else None,
+            folder_id=folder_id_value,
+            note_type=note_type,
+            checkbox_mode=checkbox_mode if note_type == 'list' else False
         )
         db.session.add(note)
         db.session.commit()
         return jsonify(note.to_dict()), 201
 
-    notes = Note.query.filter_by(user_id=user.id).order_by(
+    notes_query = Note.query.filter_by(user_id=user.id)
+    if not include_all:
+        if folder_id_int is None:
+            notes_query = notes_query.filter(Note.folder_id.is_(None))
+        else:
+            notes_query = notes_query.filter_by(folder_id=folder_id_int)
+    notes = notes_query.order_by(
         Note.pinned.desc(),
         Note.pin_order.asc(),
         Note.updated_at.desc()
     ).all()
-    return jsonify([n.to_dict() for n in notes])
+    note_payload = [n.to_dict() for n in notes]
+    list_ids = [n.id for n in notes if n.note_type == 'list']
+    if list_ids:
+        items = NoteListItem.query.filter(NoteListItem.note_id.in_(list_ids)).order_by(
+            NoteListItem.note_id.asc(),
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
+        ).all()
+        preview_map = {lid: [] for lid in list_ids}
+        for item in items:
+            previews = preview_map.get(item.note_id)
+            if previews is None or len(previews) >= 3:
+                continue
+            label = _build_list_preview_text(item)
+            if label:
+                previews.append(label)
+        for payload in note_payload:
+            if payload.get('note_type') == 'list':
+                payload['list_preview'] = preview_map.get(payload['id'], [])
+    return jsonify(note_payload)
 
 
 @app.route('/api/notes/reorder', methods=['POST'])
@@ -1803,6 +1967,117 @@ def reorder_notes():
             order_val += 1
     db.session.commit()
     return jsonify({'pinned': order_val - 1})
+
+
+@app.route('/api/note-folders', methods=['GET', 'POST'])
+def note_folders():
+    """List or create note folders for the current user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'Folder name required'}), 400
+        parent_id = data.get('parent_id')
+        parent_id_int = int(parent_id) if parent_id and str(parent_id).isdigit() else None
+        if parent_id_int is not None:
+            NoteFolder.query.filter_by(id=parent_id_int, user_id=user.id).first_or_404()
+        max_order = db.session.query(db.func.coalesce(db.func.max(NoteFolder.order_index), 0)).filter(
+            NoteFolder.user_id == user.id,
+            NoteFolder.parent_id == parent_id_int
+        ).scalar()
+        folder = NoteFolder(
+            user_id=user.id,
+            parent_id=parent_id_int,
+            name=name,
+            order_index=(max_order or 0) + 1
+        )
+        db.session.add(folder)
+        db.session.commit()
+        return jsonify(folder.to_dict()), 201
+
+    folders = NoteFolder.query.filter_by(user_id=user.id).order_by(
+        NoteFolder.parent_id.asc(),
+        NoteFolder.order_index.asc(),
+        NoteFolder.name.asc()
+    ).all()
+    return jsonify([f.to_dict() for f in folders])
+
+
+@app.route('/api/note-folders/<int:folder_id>', methods=['GET', 'PUT', 'DELETE'])
+def note_folder_detail(folder_id):
+    """Get, update, or delete a note folder."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    folder = NoteFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+
+    if request.method == 'GET':
+        return jsonify(folder.to_dict())
+
+    if request.method == 'DELETE':
+        parent_id = folder.parent_id
+        NoteFolder.query.filter_by(user_id=user.id, parent_id=folder.id).update(
+            {'parent_id': parent_id}
+        )
+        Note.query.filter_by(user_id=user.id, folder_id=folder.id).update(
+            {'folder_id': parent_id}
+        )
+        db.session.delete(folder)
+        db.session.commit()
+        return jsonify({'deleted': True})
+
+    data = request.json or {}
+    if 'name' in data:
+        name_val = (data.get('name') or '').strip()
+        if name_val:
+            folder.name = name_val
+    if 'parent_id' in data:
+        parent_id = data.get('parent_id')
+        parent_id_int = int(parent_id) if parent_id and str(parent_id).isdigit() else None
+        if parent_id_int is not None:
+            parent = NoteFolder.query.filter_by(id=parent_id_int, user_id=user.id).first()
+            if not parent:
+                return jsonify({'error': 'Parent folder not found'}), 404
+        folder.parent_id = parent_id_int
+    folder.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(folder.to_dict())
+
+
+@app.route('/api/notes/move', methods=['POST'])
+def move_notes():
+    """Move one or more notes into a folder (or to root)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    ids = data.get('ids')
+    folder_id = data.get('folder_id')
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'ids array required'}), 400
+    folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
+    if folder_id_int is not None:
+        NoteFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+
+    notes = Note.query.filter(Note.user_id == user.id, Note.id.in_(ids)).all()
+    note_map = {n.id: n for n in notes}
+    updated = 0
+    for raw_id in ids:
+        try:
+            nid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        note = note_map.get(nid)
+        if note:
+            note.folder_id = folder_id_int
+            updated += 1
+    db.session.commit()
+    return jsonify({'updated': updated, 'folder_id': folder_id_int})
 
 
 @app.route('/api/recalls', methods=['GET', 'POST'])
@@ -1891,7 +2166,7 @@ def recall_detail(recall_id):
         if when_val:
             recall.when_context = when_val
 
-    recall.updated_at = datetime.utcnow()
+    recall.updated_at = _now_local()
     db.session.commit()
     return jsonify(recall.to_dict())
 
@@ -1918,7 +2193,7 @@ def regenerate_recall(recall_id):
 
 @app.route('/api/notes/<int:note_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_note(note_id):
-    """CRUD operations for a single note."""
+    """CRUD operations for a single note/list."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
@@ -1933,9 +2208,12 @@ def handle_note(note_id):
     if request.method == 'PUT':
         data = request.json or {}
         if 'title' in data:
-            note.title = (data.get('title') or '').strip() or 'Untitled Note'
-        if 'content' in data:
+            fallback = 'Untitled List' if note.note_type == 'list' else 'Untitled Note'
+            note.title = (data.get('title') or '').strip() or fallback
+        if 'content' in data and note.note_type == 'note':
             note.content = data.get('content', note.content)
+        if 'checkbox_mode' in data and note.note_type == 'list':
+            note.checkbox_mode = str(data.get('checkbox_mode') or '').lower() in ['1', 'true', 'yes', 'on']
         note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
         if 'pinned' in data:
             is_pin = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
@@ -1979,10 +2257,180 @@ def handle_note(note_id):
                     return jsonify({'error': 'Calendar event not found for this user'}), 404
                 note.calendar_event_id = calendar_event_id_int
                 note.todo_item_id = None  # keep note linked to a single target
+        if 'folder_id' in data:
+            folder_id = data.get('folder_id')
+            if folder_id is None or folder_id == '':
+                note.folder_id = None
+            else:
+                try:
+                    folder_id_int = int(folder_id)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'Invalid folder_id'}), 400
+                folder = NoteFolder.query.filter_by(id=folder_id_int, user_id=user.id).first()
+                if not folder:
+                    return jsonify({'error': 'Folder not found for this user'}), 404
+                note.folder_id = folder_id_int
         db.session.commit()
-        return jsonify(note.to_dict())
+        payload = note.to_dict()
+        if note.note_type == 'list':
+            payload['items'] = [item.to_dict() for item in note.list_items]
+        return jsonify(payload)
 
-    return jsonify(note.to_dict())
+    payload = note.to_dict()
+    if note.note_type == 'list':
+        payload['items'] = [item.to_dict() for item in note.list_items]
+    return jsonify(payload)
+
+
+@app.route('/api/notes/<int:note_id>/convert-to-list', methods=['POST'])
+def convert_note_to_list(note_id):
+    """Convert a note into a list with strict line-based rules."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.note_type != 'note':
+        return jsonify({'error': 'Only notes can be converted to lists'}), 400
+
+    lines, error = _extract_note_list_lines(note.content or '')
+    if error:
+        return jsonify({'error': 'Note does not qualify for list conversion', 'details': error}), 400
+
+    NoteListItem.query.filter_by(note_id=note.id).delete(synchronize_session=False)
+    note.note_type = 'list'
+    note.checkbox_mode = False
+    note.content = ''
+    note.updated_at = _now_local()
+
+    for idx, line in enumerate(lines, start=1):
+        item = NoteListItem(
+            note_id=note.id,
+            text=line,
+            note=None,
+            link_text=None,
+            link_url=None,
+            checked=False,
+            order_index=idx
+        )
+        db.session.add(item)
+
+    db.session.commit()
+    payload = note.to_dict()
+    payload['items'] = [item.to_dict() for item in note.list_items]
+    return jsonify(payload)
+
+
+def _reindex_note_list_items(note_id):
+    items = NoteListItem.query.filter_by(note_id=note_id).order_by(
+        NoteListItem.order_index.asc(),
+        NoteListItem.id.asc()
+    ).all()
+    for idx, item in enumerate(items, start=1):
+        item.order_index = idx
+
+
+@app.route('/api/notes/<int:note_id>/list-items', methods=['GET', 'POST'])
+def note_list_items(note_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.note_type != 'list':
+        return jsonify({'error': 'Not a list note'}), 400
+
+    if request.method == 'GET':
+        items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
+        ).all()
+        return jsonify([item.to_dict() for item in items])
+
+    data = request.json or {}
+    text = (data.get('text') or '').strip()
+    if not text:
+        return jsonify({'error': 'Item text required'}), 400
+    note_text = (data.get('note') or '').strip() or None
+    link_text = (data.get('link_text') or '').strip() or None
+    link_url = (data.get('link_url') or '').strip() or None
+    checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
+
+    insert_index = data.get('insert_index')
+    max_order = db.session.query(db.func.coalesce(db.func.max(NoteListItem.order_index), 0)).filter_by(
+        note_id=note.id
+    ).scalar() or 0
+    if insert_index is None:
+        order_index = max_order + 1
+    else:
+        try:
+            insert_index_int = int(insert_index)
+        except (TypeError, ValueError):
+            insert_index_int = max_order
+        insert_index_int = max(0, insert_index_int)
+        order_index = min(insert_index_int, max_order) + 1
+        db.session.query(NoteListItem).filter(
+            NoteListItem.note_id == note.id,
+            NoteListItem.order_index >= order_index
+        ).update(
+            {NoteListItem.order_index: NoteListItem.order_index + 1},
+            synchronize_session=False
+        )
+
+    item = NoteListItem(
+        note_id=note.id,
+        text=text,
+        note=note_text,
+        link_text=link_text,
+        link_url=link_url,
+        checked=checked,
+        order_index=order_index
+    )
+    note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+    db.session.add(item)
+    db.session.commit()
+    return jsonify(item.to_dict()), 201
+
+
+@app.route('/api/notes/<int:note_id>/list-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def note_list_item_detail(note_id, item_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    item = NoteListItem.query.join(Note, NoteListItem.note_id == Note.id).filter(
+        NoteListItem.id == item_id,
+        NoteListItem.note_id == note_id,
+        Note.user_id == user.id
+    ).first_or_404()
+    note = item.parent_note
+    if note.note_type != 'list':
+        return jsonify({'error': 'Not a list note'}), 400
+
+    if request.method == 'DELETE':
+        db.session.delete(item)
+        _reindex_note_list_items(note.id)
+        note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+        db.session.commit()
+        return '', 204
+
+    data = request.json or {}
+    if 'text' in data:
+        text = (data.get('text') or '').strip()
+        if not text:
+            return jsonify({'error': 'Item text required'}), 400
+        item.text = text
+    if 'note' in data:
+        item.note = (data.get('note') or '').strip() or None
+    if 'link_text' in data:
+        item.link_text = (data.get('link_text') or '').strip() or None
+    if 'link_url' in data:
+        item.link_url = (data.get('link_url') or '').strip() or None
+    if 'checked' in data:
+        item.checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
+    note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+    db.session.commit()
+    return jsonify(item.to_dict())
 
 
 @app.route('/api/notes/<int:note_id>/share', methods=['POST', 'DELETE'])
@@ -2227,6 +2675,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'priority': linked_event.priority if linked_event else 'medium',
+                'item_note': linked_event.item_note if linked_event else None,
                 'day': day_key,
                 'order_index': 100000 + idx
             })
@@ -2280,6 +2729,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'priority': linked_event.priority if linked_event else 'medium',
+                'item_note': linked_event.item_note if linked_event else None,
                 'day': day_obj.isoformat(),
                 'order_index': 100000 + idx
             })
@@ -2325,6 +2775,13 @@ def calendar_events():
         status = 'not_started'
     if linked_item:
         status = linked_item.status
+
+    item_note = None
+    if 'item_note' in data:
+        try:
+            item_note = _normalize_calendar_item_note(data.get('item_note'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
     reminder_minutes = data.get('reminder_minutes_before')
     try:
@@ -2395,6 +2852,7 @@ def calendar_events():
         reminder_minutes_before=reminder_minutes if not is_phase and not is_group else None,
         rollover_enabled=bool(data.get('rollover_enabled', default_rollover) if not is_group else False),
         todo_item_id=linked_item.id if linked_item else None,
+        item_note=item_note,
         order_index=_next_calendar_order(day_obj, user.id)
     )
     db.session.add(new_event)
@@ -2668,6 +3126,11 @@ def calendar_event_detail(event_id):
             event.title = title
     if 'description' in data:
         event.description = (data.get('description') or '').strip() or None
+    if 'item_note' in data:
+        try:
+            event.item_note = _normalize_calendar_item_note(data.get('item_note'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
     if 'priority' in data:
         priority = (data.get('priority') or '').lower()
         if priority in ALLOWED_PRIORITIES:

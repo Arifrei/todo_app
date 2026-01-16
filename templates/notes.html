@@ -1,137 +1,105 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="notes-layout">
-    <header class="notes-header">
-        <div>
+<div class="notes-page" data-folder-id="{{ current_folder.id if current_folder else '' }}">
+    <header class="notes-page-header">
+        <div class="notes-page-title">
             <h1>Notes</h1>
+            {% if current_folder %}
+            <div class="notes-folder-breadcrumb">
+                <a class="notes-folder-link" href="/notes"><i class="fa-solid fa-arrow-left"></i> Back</a>
+                <span class="notes-folder-name">{{ current_folder.name }}</span>
+            </div>
+            {% endif %}
         </div>
-        <div class="notes-header-actions">
-            <button class="btn btn-secondary" id="note-new-btn">
-                <i class="fa-solid fa-plus"></i> New Note
+        <!-- FAB Button -->
+        <div class="notes-fab-container notes-fab-header" id="notes-fab">
+            <button class="notes-fab-main" id="notes-fab-main">
+                <i class="fa-solid fa-plus"></i>
             </button>
-            <button class="btn" id="note-share-btn">
-                <i class="fa-solid fa-share-nodes"></i> Share
-            </button>
-            <button class="btn" id="note-delete-btn">
-                <i class="fa-solid fa-trash"></i> Delete
-            </button>
-            <button class="btn btn-primary btn-secondary" id="note-save-btn">
-                <i class="fa-solid fa-floppy-disk"></i> Save
-            </button>
+            <div class="notes-fab-options" id="notes-fab-options">
+                <button class="notes-fab-option" data-action="new-note">
+                    <i class="fa-solid fa-note-sticky"></i>
+                    <span>Note</span>
+                </button>
+                <button class="notes-fab-option" data-action="new-list">
+                    <i class="fa-solid fa-list"></i>
+                    <span>List</span>
+                </button>
+                <button class="notes-fab-option" data-action="new-folder">
+                    <i class="fa-solid fa-folder-plus"></i>
+                    <span>Folder</span>
+                </button>
+            </div>
         </div>
     </header>
 
-    <aside class="notes-sidebar card">
-        <div class="bulk-actions" id="notes-bulk-actions" style="display: none;">
-            <div class="bulk-left">
-                <input type="checkbox" id="notes-select-all" onchange="toggleNotesSelectAll(this)">
-                <label for="notes-select-all" style="cursor: pointer;">Select all</label>
-                <span id="notes-bulk-count" style="color: var(--text-muted); margin-left: 0.5rem;"></span>
-                <button class="btn btn-secondary btn-small" type="button" onclick="resetNoteSelection()" style="margin-left: 0.5rem;">Clear</button>
-            </div>
-            <div class="bulk-buttons">
-                <button class="btn btn-secondary" onclick="bulkPinNotes()"><i class="fa-solid fa-thumbtack"></i> Pin</button>
-                <button class="btn btn-secondary" onclick="bulkUnpinNotes()"><i class="fa-solid fa-thumbtack"></i> Unpin</button>
-                <button class="btn-icon delete" onclick="bulkDeleteNotes()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>
-        <div class="notes-sidebar-header">
-            <div>
-                <h3>Pinned</h3>
-                <p class="notes-subtitle">Drag to reorder. Click to open.</p>
-            </div>
-            <div class="notes-sidebar-actions">
-                <button class="btn btn-secondary btn-small" id="note-new-top-btn" title="New note">
-                    <i class="fa-solid fa-plus"></i> New
-                </button>
-                <button class="btn-icon" id="note-refresh-btn" title="Refresh">
-                    <i class="fa-solid fa-arrows-rotate"></i>
-                </button>
-            </div>
-        </div>
-        <div class="notes-list pinned" id="notes-list-pinned"></div>
-        <div class="notes-list-divider">All Notes</div>
-        <div class="notes-list unpinned" id="notes-list"></div>
-    </aside>
-
-    <section class="notes-editor card">
-        <div class="note-meta">
-            <input id="note-title" type="text" placeholder="Untitled note" autocomplete="off" />
-            <div class="note-meta-right">
-                <span class="note-updated" id="note-updated-label">No note selected</span>
-            </div>
-        </div>
-
-        <div class="note-toolbar" id="note-toolbar">
-            <select id="note-font-size" class="note-tool note-font-size" title="Font size">
-                <option value="12">12</option>
-                <option value="14">14</option>
-                <option value="16" selected>16</option>
-                <option value="18">18</option>
-                <option value="20">20</option>
-                <option value="24">24</option>
-            </select>
-            <span class="note-tool-divider"></span>
-            <button class="note-tool" data-command="bold" title="Bold (Ctrl/Cmd+B)"><i class="fa-solid fa-bold"></i></button>
-            <button class="note-tool" data-command="italic" title="Italic (Ctrl/Cmd+I)"><i class="fa-solid fa-italic"></i></button>
-            <button class="note-tool" data-command="underline" title="Underline (Ctrl/Cmd+U)"><i class="fa-solid fa-underline"></i></button>
-            <button class="note-tool" data-command="strikeThrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
-            <span class="note-tool-divider"></span>
-            <button class="note-tool" data-command="insertUnorderedList" title="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
-            <button class="note-tool" data-command="insertOrderedList" title="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
-            <button class="note-tool" data-command="checkbox" title="Checkbox"><i class="fa-regular fa-square-check"></i></button>
-            <span class="note-tool-divider"></span>
-            <button class="note-tool" data-command="quote" title="Quote block"><i class="fa-solid fa-quote-left"></i></button>
-            <button class="note-tool" data-command="code" title="Code"><i class="fa-solid fa-code"></i></button>
-            <button class="note-tool" data-command="removeFormat" title="Clear formatting"><i class="fa-solid fa-eraser"></i></button>
-        </div>
-
-        <div id="note-editor" class="note-editor-surface" contenteditable="true" data-placeholder="Start typing your note..."></div>
-    </section>
+    <div class="notes-unified-list" id="notes-unified-list">
+        <!-- Rendered dynamically by JS -->
+    </div>
+    <div class="notes-empty-state" id="notes-empty-state" style="display: none;">
+        <i class="fa-solid fa-note-sticky"></i>
+        <p>No notes yet</p>
+        <span>Tap + to create one</span>
+    </div>
 </div>
 
-<!-- Share Note Modal -->
-<div class="modal" id="share-note-modal">
-    <div class="modal-content" style="max-width: 500px;">
-        <h2>Share Note</h2>
-        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Choose how to share this note</p>
-
-        <div id="share-note-status"></div>
-
-        <!-- Share Options -->
-        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
-            <button class="btn btn-primary" id="share-note-content-btn" style="width: 100%; justify-content: center;">
-                <i class="fa-solid fa-copy"></i> Copy Note Content
-            </button>
-            <button class="btn btn-secondary" id="share-note-email-btn" style="width: 100%; justify-content: center;">
-                <i class="fa-solid fa-envelope"></i> Share via Email
-            </button>
+<!-- List Create Modal -->
+<div class="modal" id="note-list-modal">
+    <div class="modal-content">
+        <h2>New List</h2>
+        <br>
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="note-list-title" class="form-control" placeholder="List title">
         </div>
-
-        <div style="border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
-            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Or create a shareable link that anyone can view:</p>
-
-            <div id="share-note-link-section" style="display: none;">
-                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Shareable Link</label>
-                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-                    <input type="text" id="share-note-url" readonly style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); font-size: 0.9rem;">
-                    <button class="btn btn-secondary" id="share-note-copy-btn">
-                        <i class="fa-solid fa-copy"></i> Copy
-                    </button>
-                </div>
-                <button class="btn" id="share-note-revoke-btn" style="width: 100%;">
-                    <i class="fa-solid fa-xmark"></i> Revoke Access
-                </button>
-            </div>
-
-            <button class="btn" id="share-note-generate-btn" style="width: 100%;">
-                <i class="fa-solid fa-link"></i> Generate Link
-            </button>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 0.6rem;">
+                <input type="checkbox" id="note-list-checkbox-toggle">
+                <span>Enable checkboxes</span>
+            </label>
         </div>
+        <div class="form-group">
+            <label>Folder (optional)</label>
+            <select id="note-list-folder" class="form-control">
+                <option value="">No folder</option>
+            </select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeListCreateModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createListFromModal()">Create</button>
+        </div>
+    </div>
+</div>
 
-        <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
-            <button class="btn" id="share-note-close-btn">Close</button>
+<!-- Note Folder Modal -->
+<div class="modal" id="note-folder-modal">
+    <div class="modal-content">
+        <h2 id="note-folder-modal-title">New Folder</h2>
+        <br>
+        <div class="form-group">
+            <label>Folder name</label>
+            <input type="text" id="note-folder-name" class="form-control" placeholder="Folder name">
+        </div>
+        <input type="hidden" id="note-folder-id">
+        <div class="modal-actions">
+            <button class="btn" onclick="closeNoteFolderModal()">Cancel</button>
+            <button class="btn btn-primary" id="note-folder-save-btn" onclick="saveNoteFolder()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Note Move Modal -->
+<div class="modal" id="note-move-modal">
+    <div class="modal-content">
+        <h2 id="note-move-title">Move Note</h2>
+        <br>
+        <div class="move-nav-header">
+            <button class="btn btn-secondary" id="note-move-back-button" style="display:none;" onclick="noteMoveNavBack()">Back</button>
+        </div>
+        <div id="note-move-step-container" class="move-step-container"></div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeNoteMoveModal()">Cancel</button>
         </div>
     </div>
 </div>

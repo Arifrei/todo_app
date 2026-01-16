@@ -15,15 +15,84 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
 
-    <!-- Capacitor Core (for native app) -->
-    <!-- <script type="module" src="/capacitor.js"></script> -->
-
+    <!-- Capacitor Core (for native app) - auto-injected by native shell -->
     <script>
         window.VAPID_PUBLIC_KEY = "{{ config.get('VAPID_PUBLIC_KEY', '') }}";
         window.USER_TIMEZONE = "{{ config.get('DEFAULT_TIMEZONE', 'America/New_York') }}";
+
+        // Universal share function that works on APK, mobile browsers, and desktop
+        window.universalShare = async function(data) {
+            const { title, text, url } = data;
+            const shareText = text || '';
+            const fullText = url ? `${shareText}\n\n${url}` : shareText;
+
+            // Method 1: Try Capacitor Share (APK) - wait briefly for bridge only in native app
+            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+            const isNativeApp = typeof window.isNativeApp === 'function'
+                ? window.isNativeApp()
+                : !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+
+            if (isMobile && isNativeApp && !window.Capacitor) {
+                // Wait up to 500ms for Capacitor bridge to be injected
+                await new Promise(resolve => {
+                    let attempts = 0;
+                    const check = () => {
+                        if (window.Capacitor || attempts++ > 5) resolve();
+                        else setTimeout(check, 100);
+                    };
+                    check();
+                });
+            }
+
+            if (window.Capacitor?.Plugins?.Share) {
+                try {
+                    await window.Capacitor.Plugins.Share.share({ title, text: fullText, url });
+                    return { success: true, method: 'capacitor' };
+                } catch (e) {
+                    if (e?.name === 'AbortError') return { success: false, cancelled: true };
+                    console.log('Capacitor share failed:', e);
+                }
+            }
+
+            // Method 2: Try Web Share API (mobile browsers, some desktop)
+            if (navigator.share) {
+                try {
+                    const payload = { title, text: fullText };
+                    if (url) payload.url = url;
+                    await navigator.share(payload);
+                    return { success: true, method: 'webshare' };
+                } catch (e) {
+                    if (e?.name === 'AbortError') return { success: false, cancelled: true };
+                    console.log('Web share failed:', e);
+                }
+            }
+
+            // Method 3: Clipboard fallback
+            const clipboardText = `${title}\n\n${fullText}`.trim();
+            try {
+                await navigator.clipboard.writeText(clipboardText);
+                return { success: true, method: 'clipboard' };
+            } catch (e) {
+                // Try execCommand fallback
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = clipboardText;
+                    ta.style.cssText = 'position:fixed;opacity:0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    return { success: true, method: 'clipboard' };
+                } catch (e2) {
+                    console.log('Clipboard failed:', e2);
+                }
+            }
+
+            return { success: false, method: 'none' };
+        };
     </script>
 </head>
-<body>
+<body class="{{ body_class|default('') }}">
     <div class="gradient-bg"></div>
     <div class="background-blobs">
         <div class="blob blob-1"></div>

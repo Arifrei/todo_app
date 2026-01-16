@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="notes-layout notes-editor-only" id="note-editor-page" data-note-id="{{ note_id or '' }}">
+    <header class="notes-header">
+        <div>
+            <h1>Note</h1>
+        </div>
+        <div class="notes-header-actions">
+            <button class="btn mobile-icon-only" id="note-back-btn">
+                <i class="fa-solid fa-arrow-left"></i>
+                <span class="btn-text">Back</span>
+            </button>
+            <button class="btn mobile-icon-only" id="note-notes-btn">
+                <i class="fa-solid fa-note-sticky"></i>
+                <span class="btn-text">Notes</span>
+            </button>
+            <button class="btn btn-primary btn-secondary" id="note-save-btn">
+                <i class="fa-solid fa-floppy-disk"></i> Save
+            </button>
+            <div class="dropdown notes-actions-dropdown">
+                <button class="btn btn-ghost btn-icon-only" id="note-actions-toggle" aria-label="More actions" title="More actions">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
+                <div class="dropdown-menu notes-actions-menu" id="note-actions-menu">
+                    <button class="dropdown-item" id="note-share-btn">
+                        <i class="fa-solid fa-share-nodes"></i> Share
+                    </button>
+                    <button class="dropdown-item" id="note-convert-btn">
+                        <i class="fa-solid fa-list-check"></i> Convert to list
+                    </button>
+                    <button class="dropdown-item danger" id="note-delete-btn">
+                        <i class="fa-solid fa-trash"></i> Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section class="notes-editor card">
+        <div class="note-meta">
+            <input id="note-title" type="text" placeholder="Untitled note" autocomplete="off" />
+            <div class="note-meta-right">
+                <span class="note-updated" id="note-updated-label">New note</span>
+            </div>
+        </div>
+
+        <div class="note-toolbar" id="note-toolbar">
+            <select id="note-font-size" class="note-tool note-font-size" title="Font size">
+                <option value="12">12</option>
+                <option value="14">14</option>
+                <option value="16" selected>16</option>
+                <option value="18">18</option>
+                <option value="20">20</option>
+                <option value="24">24</option>
+            </select>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" data-command="bold" title="Bold (Ctrl/Cmd+B)"><i class="fa-solid fa-bold"></i></button>
+            <button class="note-tool" data-command="italic" title="Italic (Ctrl/Cmd+I)"><i class="fa-solid fa-italic"></i></button>
+            <button class="note-tool" data-command="underline" title="Underline (Ctrl/Cmd+U)"><i class="fa-solid fa-underline"></i></button>
+            <button class="note-tool" data-command="strikeThrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" data-command="insertUnorderedList" title="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
+            <button class="note-tool" data-command="insertOrderedList" title="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
+            <button class="note-tool" data-command="checkbox" title="Checkbox"><i class="fa-regular fa-square-check"></i></button>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" data-command="quote" title="Quote block"><i class="fa-solid fa-quote-left"></i></button>
+            <button class="note-tool" data-command="code" title="Code"><i class="fa-solid fa-code"></i></button>
+            <button class="note-tool" data-command="removeFormat" title="Clear formatting"><i class="fa-solid fa-eraser"></i></button>
+        </div>
+
+        <div id="note-editor" class="note-editor-surface" contenteditable="true" data-placeholder="Start typing your note..."></div>
+    </section>
+</div>
+
+<!-- Share Note Modal -->
+<div class="modal" id="share-note-modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <h2>Share Note</h2>
+        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Choose how to share this note</p>
+
+        <div id="share-note-status"></div>
+
+        <!-- Share Options -->
+        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
+            <button class="btn btn-primary" id="share-note-content-btn" style="width: 100%; justify-content: center;">
+                <i class="fa-solid fa-copy"></i> Copy Note Content
+            </button>
+            <button class="btn btn-secondary" id="share-note-email-btn" style="width: 100%; justify-content: center;">
+                <i class="fa-solid fa-envelope"></i> Share via Email
+            </button>
+        </div>
+
+        <div style="border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Or create a shareable link that anyone can view:</p>
+
+            <div id="share-note-link-section" style="display: none;">
+                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Shareable Link</label>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                    <input type="text" id="share-note-url" readonly style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); font-size: 0.9rem;">
+                    <button class="btn btn-secondary" id="share-note-copy-btn">
+                        <i class="fa-solid fa-copy"></i> Copy
+                    </button>
+                </div>
+                <button class="btn" id="share-note-revoke-btn" style="width: 100%;">
+                    <i class="fa-solid fa-xmark"></i> Revoke Access
+                </button>
+            </div>
+
+            <button class="btn" id="share-note-generate-btn" style="width: 100%;">
+                <i class="fa-solid fa-link"></i> Generate Link
+            </button>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+            <button class="btn" id="share-note-close-btn">Close</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

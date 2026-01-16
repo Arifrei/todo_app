@@ -85,9 +85,15 @@ let touchDragId = null;
 let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
-let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false };
+let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null };
+let listAutoSaveTimer = null;
+let listAutoSaveInFlight = false;
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
+let noteExitInProgress = false;
+let noteFolderState = { folders: [], currentFolderId: null };
+let noteMoveState = { ids: [], destinationFolderId: null, navStack: [] };
 let recallState = {
     items: [],
     selectedWhen: null,
@@ -106,6 +112,9 @@ let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
 let datePickerState = { itemId: null };
 let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
+let calendarNoteChoiceState = { event: null };
+let calendarItemNoteState = { event: null, mode: 'view', isNew: false };
+const CALENDAR_ITEM_NOTE_MAX_CHARS = window.CALENDAR_ITEM_NOTE_MAX_CHARS || 500;
 const USER_TIMEZONE = window.USER_TIMEZONE || 'America/New_York'; // EST/EDT
 let notificationsState = { items: [], unread: 0, open: false };
 let timeModalState = { eventId: null };
@@ -525,7 +534,7 @@ async function openLinkNoteModal(targetType, targetId, targetTitle, existingNote
     modal.classList.add('active');
 
     try {
-        const res = await fetch('/api/notes');
+        const res = await fetch('/api/notes?all=1');
         if (!res.ok) throw new Error('Failed to fetch notes');
         const notes = await res.json();
         linkNoteModalState.notes = notes;
@@ -621,6 +630,239 @@ async function createAndLinkNote() {
         console.error('Error creating note:', e);
         alert('Could not create note. Please try again.');
     }
+}
+
+
+function showCalendarNoteChoiceInDropdown(dropdown, ev) {
+    if (!dropdown || !ev) return;
+    if (!dropdown._originalNodes) {
+        dropdown._originalNodes = Array.from(dropdown.childNodes);
+    }
+    dropdown.dataset.noteChoice = '1';
+    dropdown.classList.add('note-choice-compact');
+    dropdown.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'calendar-note-choice-header';
+    header.textContent = 'Add Note';
+    dropdown.appendChild(header);
+
+    if (ev.title) {
+        const label = document.createElement('div');
+        label.className = 'calendar-note-choice-label';
+        label.textContent = `For "${ev.title}"`;
+        dropdown.appendChild(label);
+    }
+
+    const makeOption = (icon, text, onClick, disabled = false) => {
+        const btn = document.createElement('button');
+        btn.className = 'calendar-item-menu-option';
+        btn.innerHTML = `<i class="${icon}"></i><span class="note-choice-text">${text}</span>`;
+        if (disabled) {
+            btn.disabled = true;
+        } else {
+            btn.onclick = onClick;
+        }
+        return btn;
+    };
+
+    const notes = ev.linked_notes || [];
+    dropdown.appendChild(makeOption('fa-solid fa-note-sticky', 'Notes note', () => {
+        restoreCalendarNoteChoiceDropdown(dropdown);
+        dropdown.classList.remove('active');
+        openLinkNoteModal('calendar', ev.id, ev.title, notes.map(n => n.id));
+    }));
+    dropdown.appendChild(makeOption('fa-solid fa-pen', 'Item note', () => {
+        restoreCalendarNoteChoiceDropdown(dropdown);
+        dropdown.classList.remove('active');
+        openCalendarItemNoteModal(ev, 'edit');
+    }));
+    dropdown.appendChild(makeOption('fa-solid fa-link-slash', notes.length > 1 ? `Unlink ${notes.length} notes` : 'Unlink note', () => {
+        const label = notes.length > 1 ? `Unlink ${notes.length} notes from this item?` : 'Unlink this note?';
+        openConfirmModal(label, async () => {
+            try {
+                await Promise.all(notes.map(note =>
+                    fetch(`/api/notes/${note.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ calendar_event_id: null })
+                    })
+                ));
+                restoreCalendarNoteChoiceDropdown(dropdown);
+                dropdown.classList.remove('active');
+                window.location.reload();
+            } catch (e) {
+                console.error('Error unlinking notes:', e);
+                alert('Could not unlink note(s). Please try again.');
+            }
+        });
+    }, notes.length === 0));
+}
+
+function restoreCalendarNoteChoiceDropdown(dropdown) {
+    if (!dropdown || !dropdown.dataset.noteChoice) return;
+    if (dropdown._originalNodes) {
+        dropdown.innerHTML = '';
+        dropdown._originalNodes.forEach(node => dropdown.appendChild(node));
+    }
+    delete dropdown.dataset.noteChoice;
+    dropdown.classList.remove('note-choice-compact');
+}
+
+async function unlinkNotesFromChoice() {
+    const ev = calendarNoteChoiceState.event;
+    if (!ev) return;
+    const notes = ev.linked_notes || [];
+    if (!notes.length) return;
+    const label = notes.length > 1 ? `Unlink ${notes.length} notes from this item?` : 'Unlink this note?';
+    openConfirmModal(label, async () => {
+        try {
+            await Promise.all(notes.map(note =>
+                fetch(`/api/notes/${note.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ calendar_event_id: null })
+                })
+            ));
+            closeCalendarNoteChoice();
+            window.location.reload();
+        } catch (e) {
+            console.error('Error unlinking notes:', e);
+            alert('Could not unlink note(s). Please try again.');
+        }
+    });
+}
+
+async function resolveCalendarEventId(ev) {
+    if (!ev) return null;
+    if (ev.is_task_link) {
+        const linked = await ensureLinkedTaskEvent(ev);
+        if (!linked || !linked.calendar_event_id) return null;
+        return { ...ev, ...linked, id: linked.calendar_event_id };
+    }
+    return ev;
+}
+
+function updateCalendarItemNoteCounter() {
+    const input = document.getElementById('calendar-item-note-input');
+    const counter = document.getElementById('calendar-item-note-counter');
+    if (!input || !counter) return;
+    const count = input.value.length;
+    counter.textContent = `${count}/${CALENDAR_ITEM_NOTE_MAX_CHARS} characters`;
+}
+
+function setCalendarItemNoteMode(mode) {
+    const view = document.getElementById('calendar-item-note-view');
+    const editor = document.getElementById('calendar-item-note-editor');
+    const viewActions = document.getElementById('calendar-item-note-view-actions');
+    const editActions = document.getElementById('calendar-item-note-edit-actions');
+    if (view) view.classList.toggle('is-hidden', mode === 'edit');
+    if (editor) editor.classList.toggle('is-hidden', mode !== 'edit');
+    if (viewActions) viewActions.classList.toggle('is-hidden', mode === 'edit');
+    if (editActions) editActions.classList.toggle('is-hidden', mode !== 'edit');
+}
+
+function renderCalendarItemNoteContent(text) {
+    const view = document.getElementById('calendar-item-note-view');
+    if (!view) return;
+    const content = (text || '').trim();
+    view.innerHTML = content ? escapeHtml(content).replace(/\n/g, '<br>') : '<em>No note yet.</em>';
+}
+
+async function openCalendarItemNoteModal(ev, mode = 'view') {
+    const modal = document.getElementById('calendar-item-note-modal');
+    const label = document.getElementById('calendar-item-note-label');
+    const input = document.getElementById('calendar-item-note-input');
+    if (!modal) return;
+    const resolved = await resolveCalendarEventId(ev);
+    if (!resolved) return;
+    calendarItemNoteState = { event: resolved, mode, isNew: !((resolved.item_note || '').trim()) };
+    if (label) label.textContent = resolved.title ? `For "${resolved.title}"` : '';
+    if (input) input.value = resolved.item_note || '';
+    renderCalendarItemNoteContent(resolved.item_note || '');
+    updateCalendarItemNoteCounter();
+    setCalendarItemNoteMode(mode);
+    modal.classList.add('active');
+    if (mode === 'edit' && input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
+}
+
+function closeCalendarItemNoteModal() {
+    const modal = document.getElementById('calendar-item-note-modal');
+    if (modal) modal.classList.remove('active');
+    calendarItemNoteState = { event: null, mode: 'view', isNew: false };
+    const input = document.getElementById('calendar-item-note-input');
+    if (input) input.value = '';
+}
+
+async function saveCalendarItemNote() {
+    const input = document.getElementById('calendar-item-note-input');
+    if (!calendarItemNoteState.event || !input) return;
+    const text = input.value || '';
+    if (text.length > CALENDAR_ITEM_NOTE_MAX_CHARS) {
+        showToast(`Item note is limited to ${CALENDAR_ITEM_NOTE_MAX_CHARS} characters.`, 'warning');
+        return;
+    }
+    await updateCalendarEvent(calendarItemNoteState.event.id, { item_note: text });
+    closeCalendarItemNoteModal();
+}
+
+async function deleteCalendarItemNote() {
+    if (!calendarItemNoteState.event) return;
+    openConfirmModal('Delete this item note?', async () => {
+        await updateCalendarEvent(calendarItemNoteState.event.id, { item_note: null });
+        closeCalendarItemNoteModal();
+    });
+}
+
+async function convertCalendarItemNote() {
+    if (!calendarItemNoteState.event) return;
+    const rawText = (calendarItemNoteState.event.item_note || '').trim();
+    if (!rawText) {
+        showToast('Item note is empty.', 'warning');
+        return;
+    }
+    const title = calendarItemNoteState.event.title
+        ? `${calendarItemNoteState.event.title} note`
+        : 'Item note';
+    const content = escapeHtml(rawText).replace(/\n/g, '<br>');
+    try {
+        const res = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title,
+                content,
+                calendar_event_id: calendarItemNoteState.event.id
+            })
+        });
+        if (!res.ok) {
+            throw new Error('Failed to create note');
+        }
+        await updateCalendarEvent(calendarItemNoteState.event.id, { item_note: null });
+        closeCalendarItemNoteModal();
+        showToast('Converted to a note.', 'success');
+    } catch (err) {
+        console.error('Error converting item note:', err);
+        showToast('Could not convert note.', 'error');
+    }
+}
+
+function appendCalendarItemNoteChip(container, ev) {
+    if (!container || !ev || !ev.item_note) return;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'meta-chip note item-note';
+    chip.title = 'Item note';
+    chip.setAttribute('aria-label', 'Item note');
+    chip.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
+    chip.onclick = (e) => {
+        e.stopPropagation();
+        openCalendarItemNoteModal(ev, 'view');
+    };
+    container.appendChild(chip);
 }
 
 async function updateLinkedTaskStatus(taskId, status) {
@@ -1229,6 +1471,16 @@ function toggleHeaderAddMenu(event) {
     dropdown.classList.toggle('show');
 }
 
+function toggleNoteAddMenu(event, dropdownId) {
+    const dropdown = document.getElementById(dropdownId);
+    if (!dropdown) return;
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.header-add-dropdown').forEach(el => {
+        if (el !== dropdown) el.classList.remove('show');
+    });
+    dropdown.classList.toggle('show');
+}
+
 // Close header menu when clicking outside
 document.addEventListener('click', (e) => {
     const dropdown = document.getElementById('header-menu-dropdown');
@@ -1243,6 +1495,11 @@ document.addEventListener('click', (e) => {
             addDropdown.classList.remove('show');
         }
     }
+    document.querySelectorAll('.header-add-dropdown').forEach(dropdown => {
+        if (dropdown.classList.contains('show') && !e.target.closest('.header-add-menu')) {
+            dropdown.classList.remove('show');
+        }
+    });
 });
 
 async function bulkImportItems(listId) {
@@ -1737,6 +1994,7 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
     if (!menu) return;
     if (forceClose) {
         menu.classList.remove('show');
+        restoreCalendarNoteChoiceDropdown(menu);
         menu.style.position = '';
         menu.style.top = '';
         menu.style.left = '';
@@ -1744,8 +2002,12 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
         return;
     }
     const shouldShow = !menu.classList.contains('show');
+    if (shouldShow) restoreCalendarNoteChoiceDropdown(menu);
     menu.classList.toggle('show', shouldShow);
-    if (!shouldShow) return;
+      if (!shouldShow) {
+          restoreCalendarNoteChoiceDropdown(menu);
+          return;
+      }
 
     if (window.innerWidth <= 768 && event && event.currentTarget) {
         const rect = event.currentTarget.getBoundingClientRect();
@@ -2886,26 +3148,1083 @@ function restorePhaseVisibility() {
 
 function initNotesPage() {
     const editor = document.getElementById('note-editor');
-    const listEl = document.getElementById('notes-list');
-    const titleInput = document.getElementById('note-title');
-    if (!editor || !listEl || !titleInput) return; // Not on notes page
+    const unifiedListEl = document.getElementById('notes-unified-list');
+    const listEditor = document.getElementById('list-editor-page');
 
-    const params = new URLSearchParams(window.location.search);
-    const targetNoteId = parseInt(params.get('note'), 10) || parseInt(params.get('note_id'), 10) || null;
+    if (unifiedListEl) {
+        initNotesListPage();
+    }
+    if (editor) {
+        initNoteEditorPage();
+    }
+    if (listEditor) {
+        initListEditorPage();
+    }
+}
+
+function initNotesListPage() {
+    const listEl = document.getElementById('notes-unified-list');
+    if (!listEl) return;
+
+    const page = document.querySelector('.notes-page');
+    const rawFolderId = page ? page.dataset.folderId : '';
+    const folderId = rawFolderId ? parseInt(rawFolderId, 10) : null;
+    noteFolderState.currentFolderId = Number.isFinite(folderId) ? folderId : null;
+
+    // Initialize FAB
+    initNotesFab();
+
+    // Load notes and folders
+    loadNotesUnified();
+}
+
+// --- New Unified Notes Functions ---
+
+// Swipe gesture state
+let noteSwipeState = {
+    activeItem: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    isSwiping: false,
+    swipeDirection: null,
+    swipeThreshold: 120,
+    cancelThreshold: 15
+};
+
+// FAB state
+let noteFabExpanded = false;
+
+/**
+ * Load notes and folders, then render unified list
+ */
+async function loadNotesUnified() {
+    const listEl = document.getElementById('notes-unified-list');
+    const emptyEl = document.getElementById('notes-empty-state');
+    if (!listEl) return;
+
+    try {
+        const folderId = noteFolderState.currentFolderId;
+        const query = folderId ? `?folder_id=${folderId}` : '';
+        const [notesRes, foldersRes] = await Promise.all([
+            fetch(`/api/notes${query}`),
+            fetch('/api/note-folders')
+        ]);
+
+        if (!notesRes.ok || !foldersRes.ok) throw new Error('Failed to load');
+
+        const notes = await notesRes.json();
+        const folders = await foldersRes.json();
+
+        notesState.notes = notes;
+        noteFolderState.folders = folders;
+
+        renderNotesUnified();
+
+    } catch (err) {
+        console.error('Error loading notes:', err);
+        listEl.innerHTML = '<div class="notes-empty-state"><i class="fa-solid fa-exclamation-circle"></i><p>Could not load notes</p></div>';
+    }
+}
+
+/**
+ * Sort and group items for display
+ */
+function getSortedNotesItems() {
+    const currentFolderId = noteFolderState.currentFolderId;
+    const notes = notesState.notes || [];
+    const folders = noteFolderState.folders || [];
+
+    // Filter folders to current parent level
+    const currentFolders = folders.filter(f =>
+        (f.parent_id || null) === (currentFolderId || null)
+    ).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+    // Separate pinned and unpinned notes
+    const pinnedItems = notes.filter(n => n.pinned)
+        .sort((a, b) => (a.pin_order || 0) - (b.pin_order || 0));
+
+    const unpinnedNotes = notes.filter(n => !n.pinned && n.note_type === 'note')
+        .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+    const unpinnedLists = notes.filter(n => !n.pinned && n.note_type === 'list')
+        .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+    return {
+        pinned: pinnedItems,
+        notes: unpinnedNotes,
+        lists: unpinnedLists,
+        folders: currentFolders
+    };
+}
+
+/**
+ * Render the unified notes list
+ */
+function renderNotesUnified() {
+    const listEl = document.getElementById('notes-unified-list');
+    const emptyEl = document.getElementById('notes-empty-state');
+    if (!listEl) return;
+
+    const sorted = getSortedNotesItems();
+
+    listEl.innerHTML = '';
+
+    const hasItems = sorted.pinned.length || sorted.notes.length ||
+                     sorted.lists.length || sorted.folders.length;
+
+    if (!hasItems) {
+        if (emptyEl) emptyEl.style.display = 'flex';
+        return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    // Render pinned section
+    if (sorted.pinned.length) {
+        listEl.appendChild(createSectionHeader('Pinned'));
+        sorted.pinned.forEach(note => {
+            listEl.appendChild(createNoteItem(note, true));
+        });
+    }
+
+    // Render notes section
+    if (sorted.notes.length) {
+        listEl.appendChild(createSectionHeader('Notes'));
+        sorted.notes.forEach(note => {
+            listEl.appendChild(createNoteItem(note, false));
+        });
+    }
+
+    // Render lists section
+    if (sorted.lists.length) {
+        listEl.appendChild(createSectionHeader('Lists'));
+        sorted.lists.forEach(note => {
+            listEl.appendChild(createNoteItem(note, false));
+        });
+    }
+
+    // Render folders section
+    if (sorted.folders.length) {
+        listEl.appendChild(createSectionHeader('Folders'));
+        sorted.folders.forEach(folder => {
+            listEl.appendChild(createFolderItem(folder));
+        });
+    }
+
+    // Bind swipe and drag handlers
+    initNoteSwipeHandlers();
+    initPinnedDragHandlers();
+}
+
+function createSectionHeader(title) {
+    const header = document.createElement('div');
+    header.className = 'notes-section-header';
+    header.textContent = title;
+    return header;
+}
+
+function createNoteItem(note, isPinned) {
+    const item = document.createElement('div');
+    item.className = 'notes-item' + (isPinned ? ' pinned-item' : '');
+    item.dataset.itemId = note.id;
+    item.dataset.itemType = 'note';
+    if (isPinned) {
+        item.draggable = true;
+    }
+
+    const iconClass = note.note_type === 'list' ? 'type-list' : 'type-note';
+    const iconName = note.note_type === 'list' ? 'fa-list' : 'fa-note-sticky';
+    const displayTitle = getNoteDisplayTitle(note);
+    const pinLabel = isPinned ? 'Unpin' : 'Pin';
+
+    item.innerHTML = `
+        <div class="notes-item-swipe-layer swipe-right">
+            <i class="fa-solid fa-thumbtack"></i>
+            <span>${pinLabel}</span>
+        </div>
+        <div class="notes-item-swipe-layer swipe-left">
+            <i class="fa-solid fa-trash"></i>
+            <span>Delete</span>
+        </div>
+        <div class="notes-item-content">
+            ${isPinned ? '<div class="notes-item-drag-handle"><i class="fa-solid fa-grip-vertical"></i></div>' : ''}
+            <div class="notes-item-icon ${iconClass}">
+                <i class="fa-solid ${iconName}"></i>
+            </div>
+            <span class="notes-item-title">${escapeHtml(displayTitle)}</span>
+            ${isPinned ? '<i class="notes-item-pinned fa-solid fa-thumbtack"></i>' : ''}
+            <div class="notes-item-dropdown">
+                <button class="btn-icon" data-note-id="${note.id}" data-pin-label="${pinLabel}" onclick="toggleNoteActionsMenu(${note.id}, event)" title="More actions">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    return item;
+}
+
+function createFolderItem(folder) {
+    const item = document.createElement('div');
+    item.className = 'notes-item';
+    item.dataset.itemId = folder.id;
+    item.dataset.itemType = 'folder';
+
+    item.innerHTML = `
+        <div class="notes-item-content">
+            <div class="notes-item-icon type-folder">
+                <i class="fa-solid fa-folder"></i>
+            </div>
+            <span class="notes-item-title">${escapeHtml(folder.name)}</span>
+            <i class="notes-item-chevron fa-solid fa-chevron-right"></i>
+            <div class="notes-item-dropdown">
+                <button class="btn-icon" data-folder-id="${folder.id}" data-folder-name="${escapeHtml(folder.name)}" onclick="toggleFolderActionsMenu(${folder.id}, event)" title="More actions">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    return item;
+}
+
+/**
+ * Initialize swipe handlers on all note items
+ */
+function initNoteSwipeHandlers() {
+    const items = document.querySelectorAll('.notes-item[data-item-type="note"]');
+
+    items.forEach(item => {
+        const content = item.querySelector('.notes-item-content');
+        if (!content) return;
+
+        content.addEventListener('touchstart', handleNoteSwipeStart, { passive: true });
+        content.addEventListener('touchmove', handleNoteSwipeMove, { passive: false });
+        content.addEventListener('touchend', handleNoteSwipeEnd, { passive: true });
+
+        // Click handler for navigation (non-swipe) or action buttons
+        content.addEventListener('click', (e) => {
+            if (noteSwipeState.isSwiping) return;
+
+            const noteId = parseInt(item.dataset.itemId, 10);
+
+            // Check if clicked on an action button
+            const actionBtn = e.target.closest('.notes-item-actions .btn-icon');
+            if (actionBtn) {
+                e.stopPropagation();
+                const action = actionBtn.dataset.action;
+                if (action === 'pin') {
+                    handleSwipePin(noteId);
+                } else if (action === 'delete') {
+                    handleSwipeDelete(noteId);
+                }
+                return;
+            }
+
+            // Otherwise navigate to editor
+            openNoteInEditor(noteId);
+        });
+    });
+
+    // Folder items - click handler with action buttons
+    const folderItems = document.querySelectorAll('.notes-item[data-item-type="folder"]');
+    folderItems.forEach(item => {
+        const content = item.querySelector('.notes-item-content');
+        if (!content) return;
+
+        content.addEventListener('click', (e) => {
+            const folderId = parseInt(item.dataset.itemId, 10);
+
+            // Check if clicked on an action button
+            const actionBtn = e.target.closest('.notes-item-actions .btn-icon');
+            if (actionBtn) {
+                e.stopPropagation();
+                const action = actionBtn.dataset.action;
+                const folder = noteFolderState.folders.find(f => f.id === folderId);
+                if (action === 'rename' && folder) {
+                    openNoteFolderModal('rename', folder);
+                } else if (action === 'delete' && folder) {
+                    deleteNoteFolder(folderId, folder.name);
+                }
+                return;
+            }
+
+            // Otherwise navigate to folder
+            window.location.href = `/notes/folder/${folderId}`;
+        });
+    });
+}
+
+function handleNoteSwipeStart(e) {
+    if (!e.touches || e.touches.length !== 1) return;
+
+    // Don't intercept touches on drag handle - let drag handlers handle those
+    if (e.target.closest('.notes-item-drag-handle')) return;
+
+    const touch = e.touches[0];
+    const item = e.currentTarget.closest('.notes-item');
+
+    noteSwipeState.activeItem = item;
+    noteSwipeState.startX = touch.clientX;
+    noteSwipeState.startY = touch.clientY;
+    noteSwipeState.currentX = touch.clientX;
+    noteSwipeState.isSwiping = false;
+    noteSwipeState.swipeDirection = null;
+
+    // Reset any existing swipe states on other items
+    document.querySelectorAll('.notes-item').forEach(el => {
+        if (el !== item) {
+            const content = el.querySelector('.notes-item-content');
+            if (content) content.style.transform = '';
+        }
+    });
+}
+
+function handleNoteSwipeMove(e) {
+    if (!noteSwipeState.activeItem || !e.touches || e.touches.length !== 1) return;
+
+    const touch = e.touches[0];
+    const dx = touch.clientX - noteSwipeState.startX;
+    const dy = Math.abs(touch.clientY - noteSwipeState.startY);
+
+    // Cancel swipe if scrolling vertically
+    if (dy > noteSwipeState.cancelThreshold && !noteSwipeState.isSwiping) {
+        noteSwipeState.activeItem = null;
+        return;
+    }
+
+    // Start swiping if horizontal movement is significant
+    if (Math.abs(dx) > 20 && !noteSwipeState.isSwiping) {
+        e.preventDefault();
+        noteSwipeState.isSwiping = true;
+        noteSwipeState.activeItem.classList.add('swiping');
+    }
+
+    if (!noteSwipeState.isSwiping) return;
+
+    e.preventDefault();
+    noteSwipeState.currentX = touch.clientX;
+
+    const item = noteSwipeState.activeItem;
+    const content = item.querySelector('.notes-item-content');
+    if (!content) return;
+
+    // Determine swipe direction and apply transform with resistance
+    if (dx > 0) {
+        noteSwipeState.swipeDirection = 'right';
+        const translateX = Math.min(dx * 0.8, 140);
+        content.style.transform = `translateX(${translateX}px)`;
+    } else if (dx < 0) {
+        noteSwipeState.swipeDirection = 'left';
+        const translateX = Math.max(dx * 0.8, -140);
+        content.style.transform = `translateX(${translateX}px)`;
+    }
+}
+
+function handleNoteSwipeEnd(e) {
+    if (!noteSwipeState.activeItem) return;
+
+    const item = noteSwipeState.activeItem;
+    const content = item.querySelector('.notes-item-content');
+    const dx = noteSwipeState.currentX - noteSwipeState.startX;
+    const itemId = parseInt(item.dataset.itemId, 10);
+
+    // Remove swiping class
+    item.classList.remove('swiping');
+
+    // Reset visual state with transition
+    if (content) {
+        content.style.transition = 'transform 0.2s ease';
+        content.style.transform = '';
+        setTimeout(() => {
+            content.style.transition = '';
+        }, 200);
+    }
+
+    // Check if swipe threshold was met
+    if (Math.abs(dx) >= noteSwipeState.swipeThreshold) {
+        if (dx > 0) {
+            handleSwipePin(itemId);
+        } else {
+            handleSwipeDelete(itemId);
+        }
+    }
+
+    // Small delay before allowing clicks again
+    setTimeout(() => {
+        noteSwipeState.isSwiping = false;
+    }, 100);
+
+    noteSwipeState.activeItem = null;
+    noteSwipeState.swipeDirection = null;
+}
+
+async function handleSwipePin(noteId) {
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    const newPinned = !note.pinned;
+
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pinned: newPinned,
+                title: note.title || deriveNoteAutoTitleFromHtml(note.content || '')
+            })
+        });
+
+        if (!res.ok) throw new Error('Failed to update pin');
+
+        showToast(newPinned ? 'Pinned' : 'Unpinned', 'success', 2000);
+        await loadNotesUnified();
+
+    } catch (err) {
+        console.error('Pin toggle failed:', err);
+        showToast('Failed to update', 'error');
+    }
+}
+
+function handleSwipeDelete(noteId) {
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    openConfirmModal(`Delete "${getNoteDisplayTitle(note)}"?`, async () => {
+        try {
+            const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+
+            showToast('Deleted', 'success', 2000);
+            await loadNotesUnified();
+
+        } catch (err) {
+            console.error('Delete failed:', err);
+            showToast('Failed to delete', 'error');
+        }
+    });
+}
+
+// Global reference to active notes dropdown
+let activeNotesDropdown = null;
+
+/**
+ * Close any active notes dropdown menu
+ */
+function closeNotesDropdown() {
+    if (activeNotesDropdown) {
+        activeNotesDropdown.remove();
+        activeNotesDropdown = null;
+    }
+}
+
+/**
+ * Position dropdown relative to trigger button
+ */
+function positionNotesDropdown(dropdown, button) {
+    const rect = button.getBoundingClientRect();
+    const dropdownWidth = 180;
+    const dropdownHeight = dropdown.offsetHeight || 150;
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
+    const padding = 8;
+
+    // Position below button by default, above if not enough space
+    let topPos = rect.bottom + padding;
+    if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > dropdownHeight + padding) {
+        topPos = rect.top - dropdownHeight - padding;
+    }
+
+    // Align right edge to button, but ensure it stays on screen
+    let leftPos = rect.right - dropdownWidth;
+    if (leftPos < padding) leftPos = padding;
+    if (leftPos + dropdownWidth > screenWidth - padding) {
+        leftPos = screenWidth - dropdownWidth - padding;
+    }
+
+    dropdown.style.top = `${topPos}px`;
+    dropdown.style.left = `${leftPos}px`;
+}
+
+/**
+ * Toggle note actions dropdown menu
+ */
+function toggleNoteActionsMenu(noteId, event) {
+    event.stopPropagation();
+    const button = event.currentTarget;
+
+    // If clicking same button, close
+    if (activeNotesDropdown && activeNotesDropdown.dataset.noteId === String(noteId)) {
+        closeNotesDropdown();
+        return;
+    }
+
+    // Close any existing dropdown
+    closeNotesDropdown();
+
+    // Get pin label from note state
+    const note = notesState.notes.find(n => n.id === noteId);
+    const pinLabel = note && note.is_pinned ? 'Unpin' : 'Pin';
+    const isListNote = note && note.note_type === 'list';
+    const convertOption = isListNote ? '' : `
+        <button class="notes-item-menu-option" data-action="convert">
+            <i class="fa-solid fa-list-check"></i> Convert to list
+        </button>
+    `;
+
+    // Create dropdown
+    const dropdown = document.createElement('div');
+    dropdown.className = 'notes-item-menu active';
+    dropdown.dataset.noteId = noteId;
+    dropdown.innerHTML = `
+        <button class="notes-item-menu-option" data-action="pin">
+            <i class="fa-solid fa-thumbtack"></i> ${pinLabel}
+        </button>
+        <button class="notes-item-menu-option" data-action="share">
+            <i class="fa-solid fa-share-nodes"></i> Share
+        </button>
+        <button class="notes-item-menu-option" data-action="move">
+            <i class="fa-solid fa-folder-open"></i> Move to folder
+        </button>
+        ${convertOption}
+        <button class="notes-item-menu-option" data-action="duplicate">
+            <i class="fa-solid fa-copy"></i> Duplicate
+        </button>
+        <button class="notes-item-menu-option danger" data-action="delete">
+            <i class="fa-solid fa-trash"></i> Delete
+        </button>
+    `;
+
+    // Add click handlers
+    dropdown.querySelectorAll('.notes-item-menu-option').forEach(opt => {
+        opt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const action = opt.dataset.action;
+            closeNotesDropdown();
+            if (action === 'pin') handleNoteMenuPin(noteId);
+            else if (action === 'share') handleNoteMenuShare(noteId);
+            else if (action === 'convert') handleNoteMenuConvert(noteId);
+            else if (action === 'move') handleNoteMenuMove(noteId);
+            else if (action === 'duplicate') handleNoteMenuDuplicate(noteId);
+            else if (action === 'delete') handleNoteMenuDelete(noteId);
+        });
+    });
+
+    document.body.appendChild(dropdown);
+    positionNotesDropdown(dropdown, button);
+    activeNotesDropdown = dropdown;
+}
+
+/**
+ * Toggle folder actions dropdown menu
+ */
+function toggleFolderActionsMenu(folderId, event) {
+    event.stopPropagation();
+    const button = event.currentTarget;
+    const folderName = button.dataset.folderName || '';
+
+    // If clicking same button, close
+    if (activeNotesDropdown && activeNotesDropdown.dataset.folderId === String(folderId)) {
+        closeNotesDropdown();
+        return;
+    }
+
+    // Close any existing dropdown
+    closeNotesDropdown();
+
+    // Create dropdown
+    const dropdown = document.createElement('div');
+    dropdown.className = 'notes-item-menu active';
+    dropdown.dataset.folderId = folderId;
+    dropdown.innerHTML = `
+        <button class="notes-item-menu-option" data-action="rename">
+            <i class="fa-solid fa-pen"></i> Rename
+        </button>
+        <button class="notes-item-menu-option danger" data-action="delete">
+            <i class="fa-solid fa-trash"></i> Delete
+        </button>
+    `;
+
+    // Add click handlers
+    dropdown.querySelectorAll('.notes-item-menu-option').forEach(opt => {
+        opt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const action = opt.dataset.action;
+            closeNotesDropdown();
+            if (action === 'rename') handleFolderMenuRename(folderId, folderName);
+            else if (action === 'delete') handleFolderMenuDelete(folderId);
+        });
+    });
+
+    document.body.appendChild(dropdown);
+    positionNotesDropdown(dropdown, button);
+    activeNotesDropdown = dropdown;
+}
+
+// Close notes dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    if (activeNotesDropdown && !e.target.closest('.notes-item-dropdown')) {
+        closeNotesDropdown();
+    }
+});
+
+/**
+ * Note menu action handlers
+ */
+async function handleNoteMenuPin(noteId) {
+    await handleSwipePin(noteId);
+}
+
+function handleNoteMenuMove(noteId) {
+    openNoteMoveModal(noteId, 'note');
+}
+
+async function handleNoteMenuShare(noteId) {
+    let note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+    const isListNote = note.note_type === 'list';
+
+    // Fetch full note content if not loaded (list view might not have it)
+    const needsContent = !isListNote && (note.content === undefined || note.content === null);
+    const needsItems = isListNote && (!Array.isArray(note.items) || !note.items.length);
+    if (needsContent || needsItems) {
+        try {
+            const res = await fetch(`/api/notes/${noteId}`);
+            if (res.ok) {
+                const fullNote = await res.json();
+                note = { ...note, ...fullNote };
+            }
+        } catch (err) {
+            console.error('Failed to fetch note content:', err);
+        }
+    }
+
+    if (isListNote) {
+        await shareListContent({
+            title: note.title || 'Untitled List',
+            items: note.items || [],
+            checkboxMode: !!note.checkbox_mode
+        });
+        return;
+    }
+
+    // Convert HTML content to plain text for sharing
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = note.content || '';
+    const plainText = tempDiv.textContent || tempDiv.innerText || '';
+    const title = note.title || 'Untitled Note';
+
+    // Use universal share function
+    if (typeof window.universalShare === 'function') {
+        const result = await window.universalShare({ title, text: plainText });
+        if (result.cancelled) return;
+        if (result.success && result.method === 'clipboard') {
+            showToast('Note copied to clipboard', 'success', 2000);
+        }
+        return;
+    }
+
+    // Fallback if universalShare not available
+    const shareText = `${title}\n\n${plainText}`.trim();
+    try {
+        await navigator.clipboard.writeText(shareText);
+        showToast('Note copied to clipboard', 'success', 2000);
+    } catch (err) {
+        showToast('Could not share note', 'error', 2000);
+    }
+}
+
+async function handleNoteMenuDuplicate(noteId) {
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    try {
+        const res = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: (note.title || 'Untitled') + ' (copy)',
+                content: note.content || '',
+                folder_id: note.folder_id,
+                note_type: note.note_type || 'note'
+            })
+        });
+
+        if (!res.ok) throw new Error('Failed to duplicate');
+
+        showToast('Note duplicated', 'success', 2000);
+        await loadNotesUnified();
+
+    } catch (err) {
+        console.error('Duplicate failed:', err);
+        showToast('Failed to duplicate', 'error');
+    }
+}
+
+function handleNoteMenuDelete(noteId) {
+    handleSwipeDelete(noteId);
+}
+
+async function handleNoteMenuConvert(noteId) {
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (note && note.note_type === 'list') {
+        showToast('This note is already a list.', 'info');
+        return;
+    }
+
+    openConfirmModal('Convert this note to a list? This replaces the note content with list items.', async () => {
+        try {
+            const res = await fetch(`/api/notes/${noteId}/convert-to-list`, { method: 'POST' });
+            if (!res.ok) {
+                let errorMessage = 'Note does not qualify for list conversion.';
+                try {
+                    const data = await res.json();
+                    if (data?.details) {
+                        errorMessage = `${data.error}: ${data.details}`;
+                    } else if (data?.error) {
+                        errorMessage = data.error;
+                    }
+                } catch (e) {
+                    // Keep fallback message
+                }
+                showToast(errorMessage, 'warning');
+                return;
+            }
+            showToast('Converted to list.', 'success');
+            const returnTo = `${window.location.pathname}${window.location.search || ''}`;
+            window.location.href = `/notes/${noteId}?return=${encodeURIComponent(returnTo)}`;
+        } catch (err) {
+            console.error('Error converting note:', err);
+            showToast('Could not convert note to list.', 'error');
+        }
+    });
+}
+
+/**
+ * Folder menu action handlers
+ */
+function handleFolderMenuRename(folderId, currentName) {
+    // Open the folder modal in edit mode
+    const modal = document.getElementById('note-folder-modal');
+    const titleEl = document.getElementById('note-folder-modal-title');
+    const nameInput = document.getElementById('note-folder-name');
+    const idInput = document.getElementById('note-folder-id');
+
+    titleEl.textContent = 'Rename Folder';
+    nameInput.value = currentName;
+    idInput.value = folderId;
+
+    modal.classList.add('active');
+    nameInput.focus();
+}
+
+async function handleFolderMenuDelete(folderId) {
+    const folder = notesState.folders.find(f => f.id === folderId);
+    if (!folder) return;
+
+    openConfirmModal(`Delete folder "${folder.name}"? Notes inside will be moved out.`, async () => {
+        try {
+            const res = await fetch(`/api/note-folders/${folderId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+
+            showToast('Folder deleted', 'success', 2000);
+            await loadNotesUnified();
+
+        } catch (err) {
+            console.error('Delete failed:', err);
+            showToast('Failed to delete folder', 'error');
+        }
+    });
+}
+
+/**
+ * Drag reorder state for pinned notes
+ */
+let pinnedDragState = {
+    draggingItem: null,
+    dragStartY: 0,
+    placeholder: null,
+    touchIdentifier: null
+};
+
+/**
+ * Initialize drag handlers for pinned notes reordering
+ */
+function initPinnedDragHandlers() {
+    const pinnedItems = document.querySelectorAll('.notes-item.pinned-item');
+    if (!pinnedItems.length) return;
+
+    pinnedItems.forEach(item => {
+        // Desktop drag events
+        item.addEventListener('dragstart', handlePinnedDragStart);
+        item.addEventListener('dragend', handlePinnedDragEnd);
+        item.addEventListener('dragover', handlePinnedDragOver);
+        item.addEventListener('dragleave', handlePinnedDragLeave);
+        item.addEventListener('drop', handlePinnedDrop);
+
+        // Touch drag events (on drag handle)
+        const handle = item.querySelector('.notes-item-drag-handle');
+        if (handle) {
+            handle.addEventListener('touchstart', handlePinnedTouchStart, { passive: false });
+            handle.addEventListener('touchmove', handlePinnedTouchMove, { passive: false });
+            handle.addEventListener('touchend', handlePinnedTouchEnd);
+        }
+    });
+}
+
+// Desktop drag handlers
+function handlePinnedDragStart(e) {
+    pinnedDragState.draggingItem = e.currentTarget;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', e.currentTarget.dataset.itemId);
+}
+
+function handlePinnedDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.notes-item.drag-over').forEach(el => {
+        el.classList.remove('drag-over');
+    });
+    pinnedDragState.draggingItem = null;
+}
+
+function handlePinnedDragOver(e) {
+    e.preventDefault();
+    const item = e.currentTarget;
+    if (item === pinnedDragState.draggingItem) return;
+    if (!item.classList.contains('pinned-item')) return;
+
+    // Remove drag-over from all items
+    document.querySelectorAll('.notes-item.drag-over').forEach(el => {
+        el.classList.remove('drag-over');
+    });
+
+    item.classList.add('drag-over');
+}
+
+function handlePinnedDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over');
+}
+
+function handlePinnedDrop(e) {
+    e.preventDefault();
+    const dropTarget = e.currentTarget;
+    dropTarget.classList.remove('drag-over');
+
+    if (!pinnedDragState.draggingItem || dropTarget === pinnedDragState.draggingItem) return;
+    if (!dropTarget.classList.contains('pinned-item')) return;
+
+    // Reorder in DOM
+    const parent = dropTarget.parentNode;
+    const allPinned = Array.from(parent.querySelectorAll('.notes-item.pinned-item'));
+    const dragIndex = allPinned.indexOf(pinnedDragState.draggingItem);
+    const dropIndex = allPinned.indexOf(dropTarget);
+
+    if (dragIndex < dropIndex) {
+        parent.insertBefore(pinnedDragState.draggingItem, dropTarget.nextSibling);
+    } else {
+        parent.insertBefore(pinnedDragState.draggingItem, dropTarget);
+    }
+
+    // Save new order
+    savePinnedOrder();
+}
+
+// Touch drag handlers
+function handlePinnedTouchStart(e) {
+    if (e.touches.length !== 1) return;
+    e.preventDefault(); // Prevent scroll
+    e.stopPropagation(); // Prevent swipe handlers from intercepting
+
+    const touch = e.touches[0];
+    const item = e.currentTarget.closest('.notes-item.pinned-item');
+    if (!item) return;
+
+    pinnedDragState.draggingItem = item;
+    pinnedDragState.dragStartY = touch.clientY;
+    pinnedDragState.touchIdentifier = touch.identifier;
+    item.classList.add('dragging');
+
+    // Haptic feedback
+    if (navigator.vibrate) navigator.vibrate(30);
+}
+
+function handlePinnedTouchMove(e) {
+    if (!pinnedDragState.draggingItem) return;
+
+    const touch = Array.from(e.touches).find(t => t.identifier === pinnedDragState.touchIdentifier);
+    if (!touch) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Find which item we're over
+    const elemBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+    const itemBelow = elemBelow ? elemBelow.closest('.notes-item.pinned-item') : null;
+
+    // Clear previous drag-over
+    document.querySelectorAll('.notes-item.drag-over').forEach(el => {
+        el.classList.remove('drag-over');
+    });
+
+    if (itemBelow && itemBelow !== pinnedDragState.draggingItem) {
+        itemBelow.classList.add('drag-over');
+    }
+}
+
+function handlePinnedTouchEnd(e) {
+    if (!pinnedDragState.draggingItem) return;
+    e.stopPropagation();
+
+    const draggingItem = pinnedDragState.draggingItem;
+    draggingItem.classList.remove('dragging');
+
+    // Find the item we're dropping onto
+    const dragOverItem = document.querySelector('.notes-item.pinned-item.drag-over');
+    if (dragOverItem) {
+        dragOverItem.classList.remove('drag-over');
+
+        // Reorder in DOM
+        const parent = dragOverItem.parentNode;
+        const allPinned = Array.from(parent.querySelectorAll('.notes-item.pinned-item'));
+        const dragIndex = allPinned.indexOf(draggingItem);
+        const dropIndex = allPinned.indexOf(dragOverItem);
+
+        if (dragIndex < dropIndex) {
+            parent.insertBefore(draggingItem, dragOverItem.nextSibling);
+        } else {
+            parent.insertBefore(draggingItem, dragOverItem);
+        }
+
+        // Save new order
+        savePinnedOrder();
+    }
+
+    pinnedDragState.draggingItem = null;
+    pinnedDragState.touchIdentifier = null;
+}
+
+/**
+ * Save the new pinned order to the backend
+ */
+async function savePinnedOrder() {
+    const listEl = document.getElementById('notes-unified-list');
+    if (!listEl) return;
+
+    const pinnedItems = listEl.querySelectorAll('.notes-item.pinned-item');
+    const ids = Array.from(pinnedItems).map(item => parseInt(item.dataset.itemId, 10));
+
+    if (!ids.length) return;
+
+    try {
+        const res = await fetch('/api/notes/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+        });
+
+        if (!res.ok) throw new Error('Reorder failed');
+
+        // Update local state to match new order
+        const newPinOrder = {};
+        ids.forEach((id, index) => {
+            newPinOrder[id] = index;
+        });
+        notesState.notes.forEach(note => {
+            if (note.pinned && newPinOrder[note.id] !== undefined) {
+                note.pin_order = newPinOrder[note.id];
+            }
+        });
+
+    } catch (err) {
+        console.error('Failed to save pinned order:', err);
+        showToast('Failed to save order', 'error');
+    }
+}
+
+/**
+ * Initialize FAB button
+ */
+function initNotesFab() {
+    const fab = document.getElementById('notes-fab');
+    const mainBtn = document.getElementById('notes-fab-main');
+    const options = document.querySelectorAll('.notes-fab-option');
+
+    if (!fab || !mainBtn) return;
+
+    mainBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        noteFabExpanded = !noteFabExpanded;
+        fab.classList.toggle('expanded', noteFabExpanded);
+    });
+
+    options.forEach(option => {
+        option.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const action = option.dataset.action;
+
+            noteFabExpanded = false;
+            fab.classList.remove('expanded');
+
+            switch (action) {
+                case 'new-note':
+                    handleNewNoteClick();
+                    break;
+                case 'new-list':
+                    openListCreateModal();
+                    break;
+                case 'new-folder':
+                    openNoteFolderModal('create');
+                    break;
+            }
+        });
+    });
+
+    // Close FAB when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!fab.contains(e.target) && noteFabExpanded) {
+            noteFabExpanded = false;
+            fab.classList.remove('expanded');
+        }
+    });
+}
+
+function initNoteEditorPage() {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    if (!editor || !titleInput) return;
 
     const saveBtn = document.getElementById('note-save-btn');
-    const newBtn = document.getElementById('note-new-btn');
-    const newTopBtn = document.getElementById('note-new-top-btn');
     const deleteBtn = document.getElementById('note-delete-btn');
-    const refreshBtn = document.getElementById('note-refresh-btn');
     const shareBtn = document.getElementById('note-share-btn');
+    const convertBtn = document.getElementById('note-convert-btn');
+    const backBtn = document.getElementById('note-back-btn');
+    const notesBtn = document.getElementById('note-notes-btn');
+    const actionsToggle = document.getElementById('note-actions-toggle');
+    const actionsMenu = document.getElementById('note-actions-menu');
+    const noteId = getNoteEditorNoteId();
 
-    if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote());
-    if (newBtn) newBtn.addEventListener('click', () => handleNewNoteClick());
-    if (newTopBtn) newTopBtn.addEventListener('click', () => handleNewNoteClick());
+    if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
-    if (refreshBtn) refreshBtn.addEventListener('click', () => loadNotes({ keepSelection: true }));
     if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
+    if (convertBtn) convertBtn.addEventListener('click', () => convertCurrentNoteToList());
+    if (backBtn) backBtn.addEventListener('click', () => handleNoteBack());
+    if (notesBtn) notesBtn.addEventListener('click', () => handleNoteExit());
+    if (actionsToggle && actionsMenu) {
+        actionsToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            actionsMenu.classList.toggle('open');
+        });
+        actionsMenu.addEventListener('click', (e) => {
+            if (e.target.closest('button')) actionsMenu.classList.remove('open');
+        });
+        document.addEventListener('click', (e) => {
+            if (!actionsMenu.contains(e.target) && !actionsToggle.contains(e.target)) {
+                actionsMenu.classList.remove('open');
+            }
+        });
+    }
 
     editor.addEventListener('input', () => {
         refreshNoteDirtyState();
@@ -2925,7 +4244,853 @@ function initNotesPage() {
     });
 
     bindNoteToolbar();
-    loadNotes({ keepSelection: false, targetNoteId });
+    setupNoteExitAutosave();
+
+    if (noteId) {
+        loadNoteForEditor(noteId);
+    } else {
+        prepareNewNoteEditor();
+    }
+}
+
+function initListEditorPage() {
+    const titleInput = document.getElementById('list-title');
+    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    const listId = getListEditorNoteId();
+    if (!titleInput || !checkboxToggle || !listId) return;
+
+    const saveBtn = document.getElementById('list-save-btn');
+    const deleteBtn = document.getElementById('list-delete-btn');
+    const shareBtn = document.getElementById('list-share-btn');
+    const backBtn = document.getElementById('list-back-btn');
+    const notesBtn = document.getElementById('list-notes-btn');
+    const actionsToggle = document.getElementById('list-actions-toggle');
+    const actionsMenu = document.getElementById('list-actions-menu');
+    const stack = document.getElementById('list-pill-stack');
+
+    if (saveBtn) saveBtn.addEventListener('click', () => saveListMetadata({ closeAfter: true }));
+    if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
+    if (shareBtn) shareBtn.addEventListener('click', () => shareCurrentList());
+    if (backBtn) backBtn.addEventListener('click', () => handleListBack());
+    if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
+    if (actionsToggle && actionsMenu) {
+        actionsToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            actionsMenu.classList.toggle('open');
+        });
+        actionsMenu.addEventListener('click', (e) => {
+            if (e.target.closest('button')) actionsMenu.classList.remove('open');
+        });
+        document.addEventListener('click', (e) => {
+            if (!actionsMenu.contains(e.target) && !actionsToggle.contains(e.target)) {
+                actionsMenu.classList.remove('open');
+            }
+        });
+    }
+    if (stack) {
+        stack.addEventListener('click', (e) => {
+            if (e.target.closest('.list-pill')) return;
+            if (e.target.closest('.list-pill-input')) return;
+            setListInsertionAtPosition(e.clientY);
+        });
+    }
+    document.addEventListener('mousedown', handleListEditorOutsideClick);
+
+    titleInput.addEventListener('input', refreshListDirtyState);
+    checkboxToggle.addEventListener('change', () => {
+        listState.checkboxMode = checkboxToggle.checked;
+        refreshListDirtyState();
+        renderListItems();
+    });
+
+    loadListForEditor(listId);
+}
+
+function handleListEditorOutsideClick(e) {
+    const page = document.getElementById('list-editor-page');
+    if (!page) return;
+    if (listState.editingItemId !== null) return;
+    if (listState.insertionIndex === null) return;
+    const inputRow = page.querySelector('.list-pill-input');
+    if (!inputRow) return;
+    if (inputRow.contains(e.target)) return;
+    const input = inputRow.querySelector('textarea');
+    if (!input) return;
+    if (input.value.trim() !== '') return;
+    listState.insertionIndex = null;
+    listState.editingItemId = null;
+    renderListItems();
+}
+
+function setListInsertionAtPosition(clientY) {
+    const stack = document.getElementById('list-pill-stack');
+    if (!stack) return;
+    const pills = Array.from(stack.querySelectorAll('.list-pill:not(.list-pill-input)'));
+    let index = 0;
+    for (const pill of pills) {
+        const rect = pill.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
+        if (clientY > midpoint) {
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    listState.insertionIndex = index;
+    listState.editingItemId = null;
+    renderListItems();
+}
+
+function getListEditorNoteId() {
+    const page = document.getElementById('list-editor-page');
+    if (!page) return null;
+    const raw = page.dataset.noteId || '';
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getListReturnUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('return');
+    if (raw && raw.startsWith('/')) {
+        return raw;
+    }
+    return '/notes';
+}
+
+async function loadListForEditor(listId) {
+    try {
+        const res = await fetch(`/api/notes/${listId}`);
+        if (!res.ok) throw new Error('Failed to load list');
+        const list = await res.json();
+        if (list.note_type !== 'list') {
+            window.location.href = `/notes/${listId}`;
+            return;
+        }
+        listState.listId = list.id;
+        listState.items = list.items || [];
+        listState.checkboxMode = !!list.checkbox_mode;
+        listState.activeSnapshot = {
+            title: list.title || '',
+            checkboxMode: !!list.checkbox_mode
+        };
+        listState.dirty = false;
+        listState.insertionIndex = null;
+        listState.editingItemId = null;
+        const titleInput = document.getElementById('list-title');
+        const checkboxToggle = document.getElementById('list-checkbox-toggle');
+        const updatedLabel = document.getElementById('list-updated-label');
+        if (titleInput) titleInput.value = list.title || '';
+        if (checkboxToggle) checkboxToggle.checked = !!list.checkbox_mode;
+        if (updatedLabel) updatedLabel.textContent = list.updated_at ? formatNoteDate(list.updated_at) : 'New list';
+        renderListItems();
+        setListDirty(false);
+    } catch (err) {
+        console.error('Error loading list:', err);
+        showToast('Could not load that list.', 'error');
+    }
+}
+
+function refreshListDirtyState() {
+    const titleInput = document.getElementById('list-title');
+    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    if (!titleInput || !checkboxToggle) return;
+    const snapshot = listState.activeSnapshot || { title: '', checkboxMode: false };
+    const title = (titleInput.value || '').trim();
+    const checkboxMode = checkboxToggle.checked;
+    const dirty = title !== (snapshot.title || '') || checkboxMode !== !!snapshot.checkboxMode;
+    setListDirty(dirty);
+}
+
+function setListDirty(dirty) {
+    listState.dirty = dirty;
+    const saveBtn = document.getElementById('list-save-btn');
+    if (saveBtn) saveBtn.disabled = !dirty;
+    if (!dirty) {
+        if (listAutoSaveTimer) {
+            clearTimeout(listAutoSaveTimer);
+            listAutoSaveTimer = null;
+        }
+        return;
+    }
+    scheduleListAutosave();
+}
+
+function scheduleListAutosave() {
+    if (!listState.listId) return;
+    if (listAutoSaveInFlight) return;
+    if (listAutoSaveTimer) clearTimeout(listAutoSaveTimer);
+    listAutoSaveTimer = setTimeout(async () => {
+        listAutoSaveTimer = null;
+        if (!listState.dirty) return;
+        if (listAutoSaveInFlight) return;
+        listAutoSaveInFlight = true;
+        try {
+            await saveListMetadata({ silent: true, keepOpen: true });
+        } catch (e) {
+            console.error('List auto-save failed', e);
+        } finally {
+            listAutoSaveInFlight = false;
+        }
+    }, 800);
+}
+
+async function saveListMetadata(options = {}) {
+    const { closeAfter = false, silent = false } = options;
+    const listId = listState.listId;
+    const titleInput = document.getElementById('list-title');
+    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    if (!listId || !titleInput || !checkboxToggle) return;
+    const title = titleInput.value.trim() || 'Untitled List';
+    const checkboxMode = checkboxToggle.checked;
+    try {
+        const res = await fetch(`/api/notes/${listId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, checkbox_mode: checkboxMode })
+        });
+        if (!res.ok) throw new Error('Save failed');
+        const saved = await res.json();
+        listState.activeSnapshot = {
+            title: saved.title || title,
+            checkboxMode: !!saved.checkbox_mode
+        };
+        listState.checkboxMode = !!saved.checkbox_mode;
+        setListDirty(false);
+        const updatedLabel = document.getElementById('list-updated-label');
+        if (updatedLabel) updatedLabel.textContent = saved.updated_at ? formatNoteDate(saved.updated_at) : 'Saved';
+        if (closeAfter) {
+            window.location.href = getListReturnUrl();
+        }
+    } catch (err) {
+        console.error('Error saving list:', err);
+        if (!silent) {
+            showToast('Could not save list.', 'error');
+        }
+    }
+}
+
+async function handleListExit() {
+    if (listState.dirty) {
+        await saveListMetadata({ closeAfter: true });
+        return;
+    }
+    window.location.href = getListReturnUrl();
+}
+
+async function handleListBack() {
+    if (listState.dirty) {
+        await saveListMetadata({ closeAfter: true });
+        return;
+    }
+    if (window.history.length > 1) {
+        window.history.back();
+        return;
+    }
+    window.location.href = getListReturnUrl();
+}
+
+async function deleteCurrentList() {
+    const listId = listState.listId;
+    if (!listId) return;
+    openConfirmModal('Delete this list?', async () => {
+        try {
+            const res = await fetch(`/api/notes/${listId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            window.location.href = getListReturnUrl();
+        } catch (err) {
+            console.error('Error deleting list:', err);
+            showToast('Could not delete list.', 'error');
+        }
+    });
+}
+
+function sortListItemsForShare(items) {
+    return (items || []).slice().sort((a, b) => {
+        const aOrder = a.order_index || 0;
+        const bOrder = b.order_index || 0;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.id || 0) - (b.id || 0);
+    });
+}
+
+function buildListShareText(items, checkboxMode) {
+    const sorted = sortListItemsForShare(items);
+    const lines = [];
+    sorted.forEach((item) => {
+        if (isListSectionItem(item)) {
+            const title = getListSectionTitle(item);
+            if (lines.length) lines.push('');
+            if (title) lines.push(title);
+            lines.push('');
+            return;
+        }
+        const textValue = (item.text || '').trim();
+        const linkLabel = (item.link_text || '').trim();
+        const linkUrl = (item.link_url || '').trim();
+        const noteValue = (item.note || '').trim();
+        let line = textValue;
+
+        if (linkLabel) {
+            if (line && linkLabel !== line) line = `${line} - ${linkLabel}`;
+            else if (!line) line = linkLabel;
+        }
+
+        if (linkUrl) {
+            if (line) line = `${line} (${linkUrl})`;
+            else line = linkUrl;
+        }
+
+        if (noteValue) {
+            line = line ? `${line} - ${noteValue}` : noteValue;
+        }
+
+        if (!line) return '';
+        if (checkboxMode) {
+            lines.push(`${item.checked ? '[x]' : '[ ]'} ${line}`);
+            return;
+        }
+        lines.push(`- ${line}`);
+    });
+
+    while (lines.length && lines[0] === '') lines.shift();
+    while (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return lines.join('\n');
+}
+
+async function shareListContent({ title, items, checkboxMode }) {
+    const shareTitle = title || 'Untitled List';
+    const shareText = buildListShareText(items, checkboxMode);
+    if (typeof window.universalShare === 'function') {
+        const result = await window.universalShare({ title: shareTitle, text: shareText });
+        if (result.cancelled) return result;
+        if (result.success && result.method === 'clipboard') {
+            showToast('List copied to clipboard', 'success', 2000);
+        }
+        return result;
+    }
+
+    const fallbackText = `${shareTitle}\n\n${shareText}`.trim();
+    try {
+        await navigator.clipboard.writeText(fallbackText);
+        showToast('List copied to clipboard', 'success', 2000);
+        return { success: true, method: 'clipboard' };
+    } catch (err) {
+        console.error('Share list failed:', err);
+        showToast('Could not share list', 'error', 2000);
+        return { success: false, method: 'none' };
+    }
+}
+
+async function shareCurrentList() {
+    const titleInput = document.getElementById('list-title');
+    const title = titleInput ? titleInput.value.trim() : '';
+    return shareListContent({
+        title,
+        items: listState.items || [],
+        checkboxMode: !!listState.checkboxMode
+    });
+}
+
+const LIST_SECTION_PREFIX = '[[section]]';
+
+function isListSectionItem(item) {
+    const textValue = (item?.text || '').trim();
+    return textValue.startsWith(LIST_SECTION_PREFIX);
+}
+
+function getListSectionTitle(item) {
+    const textValue = (item?.text || '').trim();
+    if (!textValue.startsWith(LIST_SECTION_PREFIX)) return '';
+    return textValue.slice(LIST_SECTION_PREFIX.length).trim();
+}
+
+function buildListSectionText(title) {
+    const trimmed = (title || '').trim();
+    return trimmed ? `${LIST_SECTION_PREFIX} ${trimmed}` : LIST_SECTION_PREFIX;
+}
+
+function renderListItems() {
+    const stack = document.getElementById('list-pill-stack');
+    if (!stack) return;
+    const items = (listState.items || []).slice().sort((a, b) => {
+        const aOrder = a.order_index || 0;
+        const bOrder = b.order_index || 0;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.id || 0) - (b.id || 0);
+    });
+    stack.innerHTML = '';
+    const hasSections = items.some(isListSectionItem);
+    let activeSectionBody = null;
+
+    const appendInsertionRow = (insertIndex, target) => {
+        if (listState.insertionIndex !== insertIndex) return;
+        const row = createListInputRow({
+            mode: 'insert',
+            insertIndex,
+            autoFocus: true
+        });
+        target.appendChild(row);
+    };
+
+    items.forEach((item, index) => {
+        const isSection = isListSectionItem(item);
+        if (isSection) {
+            const section = document.createElement('div');
+            section.className = 'list-section';
+            const title = getListSectionTitle(item);
+            const isEditing = listState.editingItemId === item.id;
+            if (title && !isEditing) {
+                section.classList.add('has-title');
+            } else {
+                section.classList.add('no-title');
+            }
+            if (isEditing) {
+                const row = createListInputRow({
+                    mode: 'edit',
+                    itemId: item.id,
+                    insertIndex: index,
+                    value: title,
+                    placeholder: 'Section title (optional)',
+                    autoFocus: true,
+                    isSection: true
+                });
+                section.appendChild(row);
+            } else {
+                const header = document.createElement('div');
+                header.className = 'list-section-header';
+                if (title) {
+                    header.textContent = title;
+                } else {
+                    header.classList.add('empty');
+                }
+                header.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    listState.editingItemId = item.id;
+                    listState.insertionIndex = null;
+                    renderListItems();
+                });
+                section.appendChild(header);
+            }
+            const body = document.createElement('div');
+            body.className = 'list-section-body';
+            section.appendChild(body);
+            stack.appendChild(section);
+            activeSectionBody = body;
+            return;
+        }
+
+        if (hasSections && !activeSectionBody) {
+            const section = document.createElement('div');
+            section.className = 'list-section no-title';
+            // Add clickable header to create a section for these items
+            const header = document.createElement('div');
+            header.className = 'list-section-header empty';
+            header.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await createListItem({ text: buildListSectionText('') }, 0);
+                    await loadListItems();
+                    // Find the section at the beginning (lowest order_index)
+                    const sections = listState.items.filter(i => isListSectionItem(i));
+                    const firstSection = sections.sort((a, b) => (a.order_index || 0) - (b.order_index || 0))[0];
+                    if (firstSection) {
+                        listState.editingItemId = firstSection.id;
+                        renderListItems();
+                    }
+                } catch (err) {
+                    console.error('Failed to create section:', err);
+                }
+            });
+            section.appendChild(header);
+            const body = document.createElement('div');
+            body.className = 'list-section-body';
+            section.appendChild(body);
+            stack.appendChild(section);
+            activeSectionBody = body;
+        }
+
+        const target = activeSectionBody || stack;
+        if (listState.editingItemId === item.id) {
+            const row = createListInputRow({
+                mode: 'edit',
+                itemId: item.id,
+                insertIndex: index,
+                value: getListItemMainText(item),
+                noteValue: item.note,
+                autoFocus: true
+            });
+            target.appendChild(row);
+        } else {
+            target.appendChild(createListPill(item));
+        }
+        const gapIndex = index + 1;
+        target.appendChild(createListGap(gapIndex));
+        appendInsertionRow(gapIndex, target);
+    });
+
+    const primaryTarget = activeSectionBody || stack;
+    primaryTarget.appendChild(createListInputRow({
+        mode: 'new',
+        insertIndex: items.length,
+        placeholder: 'Add item... (use /section to split)',
+        isPrimary: true
+    }));
+}
+
+function createListGap(insertIndex) {
+    const gap = document.createElement('div');
+    gap.className = 'list-gap';
+    gap.tabIndex = 0;
+    const activate = () => {
+        listState.insertionIndex = insertIndex;
+        listState.editingItemId = null;
+        renderListItems();
+    };
+    gap.addEventListener('click', activate);
+    gap.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            activate();
+        }
+    });
+    return gap;
+}
+
+function createListPill(item) {
+    const pill = document.createElement('div');
+    const hasNote = !!(item.note && item.note.trim());
+    pill.className = `list-pill${hasNote ? ' has-note' : ''}`;
+    const content = document.createElement('div');
+    content.className = 'list-pill-content';
+    const textValue = (item.text || '').trim();
+    const linkLabel = (item.link_text || '').trim();
+    const linkUrl = (item.link_url || '').trim();
+    const linkSameAsText = linkLabel && textValue && linkLabel === textValue;
+
+    if (listState.checkboxMode) {
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'list-checkbox';
+        checkbox.checked = !!item.checked;
+        checkbox.addEventListener('click', (e) => e.stopPropagation());
+        checkbox.addEventListener('change', async () => {
+            await updateListItem(item.id, { checked: checkbox.checked }, { refresh: true });
+        });
+        pill.appendChild(checkbox);
+    }
+
+    if (!linkSameAsText && textValue) {
+        const textSpan = document.createElement('span');
+        textSpan.textContent = textValue;
+        content.appendChild(textSpan);
+    }
+
+    if (linkLabel && linkUrl) {
+        const link = document.createElement('a');
+        link.href = linkUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = linkLabel;
+        link.addEventListener('click', (e) => e.stopPropagation());
+        content.appendChild(link);
+    }
+
+    if (hasNote) {
+        const noteBadge = document.createElement('span');
+        noteBadge.className = 'list-note-indicator';
+        noteBadge.title = 'Has note';
+        content.appendChild(noteBadge);
+    }
+
+    pill.appendChild(content);
+    if (hasNote) {
+        const note = document.createElement('div');
+        note.className = 'list-pill-note';
+        note.textContent = item.note;
+        note.style.display = 'none';
+        pill.appendChild(note);
+    }
+
+    pill.addEventListener('click', () => {
+        listState.editingItemId = item.id;
+        listState.insertionIndex = null;
+        renderListItems();
+    });
+
+    return pill;
+}
+
+function createListInputRow(options) {
+    const { mode, itemId, insertIndex, value, placeholder, autoFocus, noteValue, isSection, isPrimary } = options;
+    const row = document.createElement('div');
+    row.className = `list-pill list-pill-input${mode === 'edit' ? ' expanded' : ''}`;
+    const input = document.createElement('textarea');
+    input.rows = 1;
+    input.value = value || '';
+    input.placeholder = placeholder || '';
+    let committed = false;
+    let noteInput = null;
+    const initialNoteValue = noteValue || '';
+    const hasExistingNote = initialNoteValue.trim().length > 0;
+
+    const commit = async (continueInserting = false) => {
+        if (committed) return;
+        committed = true;
+        const raw = input.value.trim();
+        if (!raw && !isSection) {
+            if (mode === 'edit' && itemId) {
+                await deleteListItem(itemId);
+            }
+            resetListInputState();
+            return;
+        }
+        let parsed;
+        if (isSection) {
+            parsed = { text: buildListSectionText(raw) };
+        } else if (mode === 'edit') {
+            parsed = hasExistingNote ? parseListItemMainInput(raw) : parseListItemInput(raw);
+        } else {
+            parsed = parseListItemInput(raw);
+        }
+        if (!parsed.text) {
+            resetListInputState();
+            return;
+        }
+        if (mode === 'edit' && noteInput && !isSection) {
+            const currentNote = noteInput.value;
+            const noteEdited = currentNote !== initialNoteValue;
+            if (noteEdited) {
+                const noteText = currentNote.trim();
+                parsed.note = noteText || null;
+            } else if (hasExistingNote) {
+                delete parsed.note;
+            }
+        }
+        try {
+            if (mode === 'edit' && itemId) {
+                await updateListItem(itemId, parsed);
+            } else {
+                await createListItem(parsed, insertIndex);
+            }
+        } catch (err) {
+            console.error('List item save failed:', err);
+            showToast('Could not save item.', 'error');
+            return;
+        }
+        // For insert mode with Enter, continue inserting at next position
+        if (continueInserting && mode === 'insert') {
+            listState.insertionIndex = insertIndex + 1;
+            listState.editingItemId = null;
+            await loadListItems();
+        } else if (isPrimary) {
+            // Primary input at bottom - stay there
+            listState.insertionIndex = null;
+            listState.editingItemId = null;
+            await loadListItems({ focusPrimary: true });
+        } else {
+            resetListInputState();
+        }
+    };
+
+    const resetListInputState = () => {
+        listState.insertionIndex = null;
+        listState.editingItemId = null;
+        loadListItems();
+    };
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            commit(true); // Continue inserting after Enter
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            listState.insertionIndex = null;
+            listState.editingItemId = null;
+            renderListItems();
+        }
+    });
+
+    const handleBlurCommit = () => {
+        // Handle section title editing - always save on blur
+        if (mode === 'edit' && isSection) {
+            setTimeout(() => {
+                if (row.contains(document.activeElement)) return;
+                commit(false);
+            }, 0);
+            return;
+        }
+        if (mode !== 'new' && mode !== 'insert') return;
+        if (input.value.trim() === '') {
+            setTimeout(() => {
+                if (row.contains(document.activeElement)) return;
+                listState.insertionIndex = null;
+                listState.editingItemId = null;
+                renderListItems();
+            }, 0);
+            return;
+        }
+        setTimeout(() => {
+            if (row.contains(document.activeElement)) return;
+            commit(false); // Don't continue inserting on blur
+        }, 0);
+    };
+
+    input.addEventListener('blur', handleBlurCommit);
+
+    row.appendChild(input);
+    if (mode === 'edit' && !isSection) {
+        noteInput = document.createElement('textarea');
+        noteInput.className = 'list-pill-note-edit';
+        noteInput.rows = 1;
+        noteInput.placeholder = 'Add note...';
+        noteInput.value = noteValue || '';
+        noteInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commit();
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                listState.insertionIndex = null;
+                listState.editingItemId = null;
+                renderListItems();
+            }
+        });
+        noteInput.addEventListener('blur', handleBlurCommit);
+        row.appendChild(noteInput);
+    }
+    if (autoFocus) {
+        requestAnimationFrame(() => {
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+        });
+    }
+    return row;
+}
+
+function getListItemMainText(item) {
+    if (isListSectionItem(item)) {
+        return getListSectionTitle(item);
+    }
+    const textValue = (item.text || '').trim();
+    const linkLabel = (item.link_text || '').trim();
+    const linkUrl = (item.link_url || '').trim();
+    let text = textValue;
+    if (linkLabel && linkUrl) {
+        if (textValue && textValue !== linkLabel) {
+            text = `${textValue} [${linkLabel}](${linkUrl})`.trim();
+        } else {
+            text = `[${linkLabel}](${linkUrl})`;
+        }
+    }
+    return text;
+}
+
+function parseListItemInput(raw) {
+    const sectionMatch = raw.match(/^\/section(?:\s+(.*))?$/i);
+    if (sectionMatch) {
+        const title = sectionMatch[1] || '';
+        return { text: buildListSectionText(title) };
+    }
+    const noteSplit = raw.indexOf('::');
+    let main = raw;
+    let noteText = null;
+    if (noteSplit >= 0) {
+        main = raw.slice(0, noteSplit).trim();
+        noteText = raw.slice(noteSplit + 2).trim() || null;
+    }
+    const linkMatch = main.match(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
+    let linkText = null;
+    let linkUrl = null;
+    let baseText = main;
+    if (linkMatch) {
+        linkText = linkMatch[1].trim();
+        linkUrl = linkMatch[2].trim();
+        baseText = main.replace(linkMatch[0], '').trim();
+    }
+    const text = (baseText || linkText || '').trim();
+    return { text, note: noteText, link_text: linkText, link_url: linkUrl };
+}
+
+function parseListItemMainInput(raw) {
+    const linkMatch = raw.match(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
+    let linkText = null;
+    let linkUrl = null;
+    let baseText = raw;
+    if (linkMatch) {
+        linkText = linkMatch[1].trim();
+        linkUrl = linkMatch[2].trim();
+        baseText = raw.replace(linkMatch[0], '').trim();
+    }
+    const text = (baseText || linkText || '').trim();
+    return { text, note: null, link_text: linkText, link_url: linkUrl };
+}
+
+async function loadListItems(options = {}) {
+    const { focusPrimary = false } = options;
+    if (!listState.listId) return;
+    try {
+        const res = await fetch(`/api/notes/${listState.listId}/list-items`);
+        if (!res.ok) throw new Error('Failed to load items');
+        listState.items = await res.json();
+        renderListItems();
+        if (focusPrimary) {
+            const inputs = document.querySelectorAll('.list-pill-input textarea');
+            const last = inputs[inputs.length - 1];
+            if (last) last.focus();
+        }
+    } catch (err) {
+        console.error('Error loading list items:', err);
+    }
+}
+
+async function createListItem(payload, insertIndex) {
+    if (!listState.listId) return;
+    const res = await fetch(`/api/notes/${listState.listId}/list-items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            ...payload,
+            insert_index: insertIndex
+        })
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Create failed');
+    }
+    const updatedLabel = document.getElementById('list-updated-label');
+    if (updatedLabel) updatedLabel.textContent = formatNoteDate(new Date().toISOString());
+}
+
+async function updateListItem(itemId, payload, options = {}) {
+    if (!listState.listId) return;
+    const res = await fetch(`/api/notes/${listState.listId}/list-items/${itemId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Update failed');
+    }
+    if (options.refresh) {
+        await loadListItems();
+    }
+    const updatedLabel = document.getElementById('list-updated-label');
+    if (updatedLabel) updatedLabel.textContent = formatNoteDate(new Date().toISOString());
+}
+
+async function deleteListItem(itemId) {
+    if (!listState.listId) return;
+    const res = await fetch(`/api/notes/${listState.listId}/list-items/${itemId}`, { method: 'DELETE' });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Delete failed');
+    }
+    const updatedLabel = document.getElementById('list-updated-label');
+    if (updatedLabel) updatedLabel.textContent = formatNoteDate(new Date().toISOString());
 }
 
 function isMobileNotesView() {
@@ -2938,10 +5103,486 @@ function scrollToNoteEditor() {
     editorCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-async function handleNewNoteClick() {
-    await createNote();
-    if (isMobileNotesView()) {
-        scrollToNoteEditor();
+function getNoteEditorNoteId() {
+    const page = document.getElementById('note-editor-page');
+    if (!page) return null;
+    const raw = page.dataset.noteId || '';
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getNoteEditorFolderId() {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('folder') || params.get('folder_id');
+    const parsed = raw ? parseInt(raw, 10) : null;
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getNoteReturnUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('return');
+    if (raw && raw.startsWith('/')) {
+        return raw;
+    }
+    return '/notes';
+}
+
+function prepareNewNoteEditor() {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const updatedLabel = document.getElementById('note-updated-label');
+    const folderId = getNoteEditorFolderId();
+    if (editor) editor.innerHTML = '';
+    if (titleInput) titleInput.value = '';
+    if (titleInput) titleInput.placeholder = 'Untitled note';
+    if (updatedLabel) updatedLabel.textContent = 'New note';
+    notesState.notes = [];
+    notesState.activeNoteId = null;
+    notesState.activeSnapshot = { title: '', content: '' };
+    notesState.activeFolderId = folderId;
+    notesState.checkboxMode = false;
+    setNoteDirty(false);
+    updateNoteToolbarStates();
+}
+
+async function loadNoteForEditor(noteId) {
+    try {
+        const res = await fetch(`/api/notes/${noteId}`);
+        if (!res.ok) throw new Error('Failed to load note');
+        const note = await res.json();
+        notesState.notes = [note];
+        await setActiveNote(note.id, { skipAutosave: true });
+    } catch (err) {
+        console.error('Error loading note:', err);
+        showToast('Could not load that note.', 'error');
+    }
+}
+
+function noteHasContent() {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const title = titleInput ? titleInput.value.trim() : '';
+    if (title) return true;
+    if (!editor) return false;
+    const text = (editor.textContent || '').replace(/\u00a0/g, ' ').trim();
+    if (text) return true;
+    return editor.querySelector('input[type="checkbox"]') !== null;
+}
+
+function isStandaloneNoteEditor() {
+    return !!document.getElementById('note-editor') && !document.getElementById('notes-list');
+}
+
+async function handleNoteExit() {
+    noteExitInProgress = true;
+    if (notesState.dirty && noteHasContent()) {
+        await saveCurrentNote({ closeAfter: true });
+        return;
+    }
+    window.location.href = getNoteReturnUrl();
+}
+
+async function handleNoteBack() {
+    noteExitInProgress = true;
+    if (notesState.dirty && noteHasContent()) {
+        await saveCurrentNote({ closeAfter: true });
+        return;
+    }
+    if (window.history.length > 1) {
+        window.history.back();
+        return;
+    }
+    window.location.href = getNoteReturnUrl();
+}
+
+function setupNoteExitAutosave() {
+    let exitSaveTriggered = false;
+    const onExit = () => {
+        if (exitSaveTriggered) return;
+        exitSaveTriggered = true;
+        saveNoteOnExit();
+    };
+    window.addEventListener('pagehide', onExit);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            onExit();
+        }
+    });
+}
+
+function saveNoteOnExit() {
+    if (noteExitInProgress || !notesState.dirty || !noteHasContent()) return;
+    saveCurrentNote({ silent: true, keepOpen: true, keepalive: true });
+}
+
+function handleNewNoteClick() {
+    const folderId = noteFolderState.currentFolderId;
+    const returnTo = window.location.pathname;
+    if (folderId) {
+        window.location.href = `/notes/new?folder=${folderId}&return=${encodeURIComponent(returnTo)}`;
+        return;
+    }
+    window.location.href = `/notes/new?return=${encodeURIComponent(returnTo)}`;
+}
+
+function openNoteInEditor(noteId) {
+    const returnTo = window.location.pathname;
+    const suffix = returnTo ? `?return=${encodeURIComponent(returnTo)}` : '';
+    window.location.href = `/notes/${noteId}${suffix}`;
+}
+
+async function loadNoteFolders() {
+    const listEl = document.getElementById('notes-folder-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="empty-state"><p style="color: var(--text-muted); margin: 0;">Loading folders...</p></div>';
+    try {
+        const res = await fetch('/api/note-folders');
+        if (!res.ok) throw new Error('Failed to load folders');
+        const folders = await res.json();
+        noteFolderState.folders = folders || [];
+        renderNoteFolders();
+    } catch (err) {
+        console.error('Error loading folders:', err);
+        listEl.innerHTML = '<div class="empty-state"><p style="color: var(--text-muted); margin: 0;">Could not load folders.</p></div>';
+    }
+}
+
+function renderNoteFolders() {
+    const listEl = document.getElementById('notes-folder-list');
+    if (!listEl) return;
+    const currentParentId = noteFolderState.currentFolderId;
+    const folders = noteFolderState.folders
+        .filter(f => (f.parent_id || null) === (currentParentId || null))
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+    listEl.innerHTML = '';
+    if (!folders.length) {
+        listEl.innerHTML = '<div class="empty-state"><p style="color: var(--text-muted); margin: 0;">No folders yet.</p></div>';
+        return;
+    }
+
+    folders.forEach(folder => {
+        const row = document.createElement('div');
+        row.className = 'notes-folder-item';
+        row.innerHTML = `
+            <div class="notes-folder-main">
+                <i class="fa-solid fa-folder"></i>
+                <span>${escapeHtml(folder.name)}</span>
+            </div>
+            <div class="notes-folder-actions">
+                <button class="btn-icon" title="Rename folder"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn-icon delete" title="Delete folder"><i class="fa-solid fa-trash"></i></button>
+            </div>
+        `;
+        row.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            window.location.href = `/notes/folder/${folder.id}`;
+        });
+
+        const actionButtons = row.querySelectorAll('.notes-folder-actions .btn-icon');
+        if (actionButtons[0]) {
+            actionButtons[0].addEventListener('click', (e) => {
+                e.stopPropagation();
+                openNoteFolderModal('rename', folder);
+            });
+        }
+        if (actionButtons[1]) {
+            actionButtons[1].addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteNoteFolder(folder.id, folder.name);
+            });
+        }
+
+        listEl.appendChild(row);
+    });
+}
+
+async function openListCreateModal() {
+    const modal = document.getElementById('note-list-modal');
+    if (!modal) return;
+    const titleInput = document.getElementById('note-list-title');
+    const checkboxToggle = document.getElementById('note-list-checkbox-toggle');
+    if (titleInput) titleInput.value = '';
+    if (checkboxToggle) checkboxToggle.checked = false;
+    if (!noteFolderState.folders.length) {
+        await loadNoteFolders();
+    }
+    populateListFolderSelect();
+    modal.classList.add('active');
+    if (titleInput) titleInput.focus();
+}
+
+function closeListCreateModal() {
+    const modal = document.getElementById('note-list-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+function populateListFolderSelect() {
+    const select = document.getElementById('note-list-folder');
+    if (!select) return;
+    select.innerHTML = '<option value="">No folder</option>';
+    const folders = noteFolderState.folders || [];
+
+    const buildOptions = (parentId, prefix) => {
+        folders
+            .filter(f => (f.parent_id || null) === (parentId || null))
+            .sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
+            .forEach(folder => {
+                const opt = document.createElement('option');
+                opt.value = folder.id;
+                opt.textContent = `${prefix}${folder.name}`;
+                select.appendChild(opt);
+                buildOptions(folder.id, `${prefix}— `);
+            });
+    };
+
+    buildOptions(null, '');
+    if (noteFolderState.currentFolderId) {
+        select.value = String(noteFolderState.currentFolderId);
+    }
+}
+
+async function createListFromModal() {
+    const titleInput = document.getElementById('note-list-title');
+    const checkboxToggle = document.getElementById('note-list-checkbox-toggle');
+    const folderSelect = document.getElementById('note-list-folder');
+    const title = titleInput ? titleInput.value.trim() : '';
+    if (!title) {
+        alert('List title required');
+        return;
+    }
+    const checkboxMode = checkboxToggle ? checkboxToggle.checked : false;
+    const folderId = folderSelect ? folderSelect.value : '';
+    try {
+        const res = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title,
+                note_type: 'list',
+                checkbox_mode: checkboxMode,
+                folder_id: folderId || null
+            })
+        });
+        if (!res.ok) throw new Error('Failed to create list');
+        const list = await res.json();
+        closeListCreateModal();
+        const returnTo = window.location.pathname;
+        window.location.href = `/notes/${list.id}?return=${encodeURIComponent(returnTo)}`;
+    } catch (err) {
+        console.error('Error creating list:', err);
+        alert('Could not create list');
+    }
+}
+
+function openNoteFolderModal(mode = 'create', folder = null) {
+    const modal = document.getElementById('note-folder-modal');
+    if (!modal) return;
+    const title = document.getElementById('note-folder-modal-title');
+    const nameInput = document.getElementById('note-folder-name');
+    const idInput = document.getElementById('note-folder-id');
+
+    if (mode === 'rename' && folder) {
+        if (title) title.textContent = 'Rename Folder';
+        if (nameInput) nameInput.value = folder.name || '';
+        if (idInput) idInput.value = folder.id;
+    } else {
+        if (title) title.textContent = 'New Folder';
+        if (nameInput) nameInput.value = '';
+        if (idInput) idInput.value = '';
+    }
+
+    modal.classList.add('active');
+    if (nameInput) nameInput.focus();
+}
+
+function closeNoteFolderModal() {
+    const modal = document.getElementById('note-folder-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function saveNoteFolder() {
+    const nameInput = document.getElementById('note-folder-name');
+    const idInput = document.getElementById('note-folder-id');
+    const name = nameInput ? nameInput.value.trim() : '';
+    if (!name) {
+        alert('Folder name required');
+        return;
+    }
+    const folderId = idInput ? idInput.value : '';
+    const payload = { name };
+    if (!folderId) {
+        payload.parent_id = noteFolderState.currentFolderId;
+    }
+    try {
+        let res;
+        if (folderId) {
+            res = await fetch(`/api/note-folders/${folderId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } else {
+            res = await fetch('/api/note-folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        }
+        if (!res.ok) throw new Error('Folder save failed');
+        closeNoteFolderModal();
+        showToast(folderId ? 'Folder renamed' : 'Folder created', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Error saving folder:', err);
+        showToast('Could not save folder', 'error');
+    }
+}
+
+function deleteNoteFolder(folderId, folderName) {
+    openConfirmModal(`Delete folder "${folderName}"?`, async () => {
+        try {
+            const res = await fetch(`/api/note-folders/${folderId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            showToast('Folder deleted', 'success', 2000);
+            await loadNotesUnified();
+        } catch (err) {
+            console.error('Error deleting folder:', err);
+            showToast('Could not delete folder', 'error');
+        }
+    });
+}
+
+function openNoteMoveModal(noteId = null) {
+    const modal = document.getElementById('note-move-modal');
+    if (!modal) return;
+    let ids = [];
+    if (noteId) {
+        ids = [noteId];
+    } else if (selectedNotes.size > 0) {
+        ids = Array.from(selectedNotes);
+    } else {
+        return;
+    }
+    noteMoveState.ids = ids;
+    noteMoveState.destinationFolderId = null;
+    noteMoveState.navStack = [];
+    const title = document.getElementById('note-move-title');
+    if (title) {
+        title.textContent = ids.length > 1 ? `Move ${ids.length} notes` : 'Move Note';
+    }
+    modal.classList.add('active');
+    if (!noteFolderState.folders.length) {
+        loadNoteFolders();
+    }
+    renderNoteMoveRoot();
+}
+
+function closeNoteMoveModal() {
+    const modal = document.getElementById('note-move-modal');
+    if (modal) modal.classList.remove('active');
+    noteMoveState.ids = [];
+    noteMoveState.destinationFolderId = null;
+    noteMoveState.navStack = [];
+    updateNoteMoveBackButton();
+}
+
+function updateNoteMoveBackButton() {
+    const backBtn = document.getElementById('note-move-back-button');
+    if (!backBtn) return;
+    backBtn.style.display = noteMoveState.navStack.length > 1 ? 'inline-flex' : 'none';
+}
+
+function pushNoteMoveView(renderFn) {
+    noteMoveState.navStack.push(renderFn);
+    updateNoteMoveBackButton();
+}
+
+function noteMoveNavBack() {
+    if (noteMoveState.navStack.length > 1) {
+        noteMoveState.navStack.pop();
+        const last = noteMoveState.navStack[noteMoveState.navStack.length - 1];
+        last();
+    }
+    updateNoteMoveBackButton();
+}
+
+function renderNoteMoveRoot() {
+    const panel = document.getElementById('note-move-step-container');
+    if (!panel) return;
+    noteMoveState.navStack = [renderNoteMoveRoot];
+    updateNoteMoveBackButton();
+    panel.innerHTML = `
+        <div class="move-heading"><i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>Choose destination</div>
+    `;
+    const mainBtn = document.createElement('button');
+    mainBtn.className = 'btn';
+    mainBtn.innerHTML = '<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move to main notes';
+    mainBtn.addEventListener('click', () => performNoteMove(null));
+    panel.appendChild(mainBtn);
+
+    const browseBtn = document.createElement('button');
+    browseBtn.className = 'btn';
+    browseBtn.innerHTML = '<i class="fa-solid fa-folder-open" style="margin-right: 0.5rem;"></i>Browse folders';
+    browseBtn.addEventListener('click', () => {
+        pushNoteMoveView(() => renderNoteMoveFolderList(null, 'Folders'));
+        renderNoteMoveFolderList(null, 'Folders');
+    });
+    panel.appendChild(browseBtn);
+}
+
+function renderNoteMoveFolderList(parentId, titleText) {
+    const panel = document.getElementById('note-move-step-container');
+    if (!panel) return;
+    panel.innerHTML = `<div class="move-heading"><i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>${titleText}</div>`;
+
+    if (parentId !== null) {
+        const moveHereBtn = document.createElement('button');
+        moveHereBtn.className = 'btn';
+        moveHereBtn.innerHTML = '<i class="fa-solid fa-folder" style="margin-right: 0.5rem;"></i>Move to this folder';
+        moveHereBtn.addEventListener('click', () => performNoteMove(parentId));
+        panel.appendChild(moveHereBtn);
+    }
+
+    const folders = noteFolderState.folders
+        .filter(f => (f.parent_id || null) === (parentId || null))
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+    if (!folders.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.innerHTML = '<p style="color: var(--text-muted); margin: 0;">No subfolders here.</p>';
+        panel.appendChild(empty);
+        return;
+    }
+
+    folders.forEach(folder => {
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.innerHTML = `<i class="fa-solid fa-folder" style="margin-right: 0.5rem;"></i>${escapeHtml(folder.name)}`;
+        btn.addEventListener('click', () => {
+            pushNoteMoveView(() => renderNoteMoveFolderList(folder.id, folder.name));
+            renderNoteMoveFolderList(folder.id, folder.name);
+        });
+        panel.appendChild(btn);
+    });
+}
+
+async function performNoteMove(folderId) {
+    try {
+        const res = await fetch('/api/notes/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: noteMoveState.ids, folder_id: folderId })
+        });
+        if (!res.ok) throw new Error('Move failed');
+        closeNoteMoveModal();
+        resetNoteSelection();
+        showToast('Moved', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Error moving notes:', err);
+        showToast('Could not move notes', 'error');
     }
 }
 
@@ -3557,7 +6198,11 @@ function setNoteDirty(dirty) {
     notesState.dirty = dirty;
     const saveBtn = document.getElementById('note-save-btn');
     if (saveBtn) {
-        saveBtn.disabled = !dirty;
+        if (isStandaloneNoteEditor()) {
+            saveBtn.disabled = false;
+        } else {
+            saveBtn.disabled = !dirty;
+        }
     }
     if (!dirty) {
         if (noteAutoSaveTimer) {
@@ -3580,11 +6225,13 @@ function refreshNoteDirtyState() {
 }
 
 async function loadNotes(options = {}) {
-    const { keepSelection = false, targetNoteId = null } = options;
+    const { keepSelection = false, targetNoteId = null, folderId = undefined } = options;
     const listEl = document.getElementById('notes-list');
     if (!listEl) return;
     try {
-        const res = await fetch('/api/notes');
+        const effectiveFolderId = folderId !== undefined ? folderId : noteFolderState.currentFolderId;
+        const query = effectiveFolderId ? `?folder_id=${effectiveFolderId}` : '';
+        const res = await fetch(`/api/notes${query}`);
         if (!res.ok) throw new Error('Failed to load notes');
         const notes = await res.json();
         notesState.notes = notes;
@@ -3614,6 +6261,64 @@ async function loadNotes(options = {}) {
     }
 }
 
+function getNoteDisplayTitle(note) {
+    const isList = note.note_type === 'list';
+    let displayTitle = note.title;
+    if (!displayTitle || displayTitle === 'Untitled Note' || displayTitle === 'Untitled note' || displayTitle === 'Untitled List') {
+        if (isList) {
+            return 'Untitled List';
+        }
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = note.content || '';
+        const plainText = tempDiv.textContent || tempDiv.innerText || '';
+        if (plainText.trim()) {
+            const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
+            const firstLine = lines[0] || '';
+            displayTitle = firstLine.substring(0, 35).trim();
+            if (firstLine.length > 35 || lines.length > 1) {
+                displayTitle += '...';
+            }
+        } else {
+            displayTitle = 'Untitled';
+        }
+    }
+    return displayTitle;
+}
+
+function getNotePreviewLines(note) {
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = note.content || '';
+    const plainText = tempDiv.textContent || tempDiv.innerText || '';
+    const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
+    return lines.slice(0, 2);
+}
+
+function renderNotePreview(note) {
+    if (note.note_type === 'list') {
+        const items = (note.list_preview || []).slice(0, 3);
+        if (!items.length) return '';
+        return `
+            <ul class="note-preview list-preview">
+                ${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+            </ul>
+        `;
+    }
+    const lines = getNotePreviewLines(note);
+    if (!lines.length) return '';
+    return `
+        <div class="note-preview text-preview">
+            ${lines.map(line => `<div>${escapeHtml(line)}</div>`).join('')}
+        </div>
+    `;
+}
+
+function renderNoteIcon(note) {
+    if (note.note_type === 'list') {
+        return '<i class="fa-regular fa-square-check"></i>';
+    }
+    return '<i class="fa-solid fa-note-sticky"></i>';
+}
+
 function renderNotesList() {
     const listPinned = document.getElementById('notes-list-pinned');
     const listAll = document.getElementById('notes-list');
@@ -3633,33 +6338,26 @@ function renderNotesList() {
                 btn.className = `notes-list-item draggable ${note.id === notesState.activeNoteId ? 'active' : ''} ${isSelected ? 'selected' : ''}`;
                 btn.draggable = true;
                 btn.dataset.noteId = note.id;
-
-                let displayTitle = note.title;
-                if (!displayTitle || displayTitle === 'Untitled Note' || displayTitle === 'Untitled note') {
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = note.content || '';
-                    const plainText = tempDiv.textContent || tempDiv.innerText || '';
-                    if (plainText.trim()) {
-                        const firstLine = plainText.split('\n')[0].trim();
-                        displayTitle = firstLine.substring(0, 35).trim();
-                        if (firstLine.length > 35 || plainText.split('\n').length > 1) {
-                            displayTitle += '...';
-                        }
-                    } else {
-                        displayTitle = 'Untitled';
-                    }
-                }
+                const displayTitle = getNoteDisplayTitle(note);
+                const previewHtml = renderNotePreview(note);
 
                 btn.innerHTML = `
                     <div class="note-select-indicator"><i class="fa-solid fa-check"></i></div>
                     <div class="note-title-row">
-                        <div class="note-title">${displayTitle}</div>
+                        <div class="note-title">
+                            <span class="note-kind-icon ${note.note_type === 'list' ? 'list' : 'note'}">${renderNoteIcon(note)}</span>
+                            <span class="note-title-text">${escapeHtml(displayTitle)}</span>
+                        </div>
                         <div class="note-actions">
+                            <button class="btn-icon move-btn" title="Move note">
+                                <i class="fa-solid fa-folder-open"></i>
+                            </button>
                             <button class="btn-icon pin-btn active" title="Unpin">
                                 <i class="fa-solid fa-thumbtack"></i>
                             </button>
                         </div>
                     </div>
+                    ${previewHtml}
                     <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
                 `;
                 btn.addEventListener('click', async (e) => {
@@ -3678,8 +6376,12 @@ function renderNotesList() {
                         setNoteSelected(note.id, nowSelected);
                         updateNotesBulkBar();
                     } else {
-                        await setActiveNote(note.id);
-                        scrollNotesEditorIntoView();
+                        if (document.getElementById('note-editor')) {
+                            await setActiveNote(note.id);
+                            scrollNotesEditorIntoView();
+                        } else {
+                            openNoteInEditor(note.id);
+                        }
                     }
                 });
                 const pinBtn = btn.querySelector('.pin-btn');
@@ -3687,6 +6389,13 @@ function renderNotesList() {
                     pinBtn.addEventListener('click', async (e) => {
                         e.stopPropagation();
                         await toggleNotePin(note.id, false);
+                    });
+                }
+                const moveBtn = btn.querySelector('.move-btn');
+                if (moveBtn) {
+                    moveBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        openNoteMoveModal(note.id);
                     });
                 }
 
@@ -3720,7 +6429,7 @@ function renderNotesList() {
     listAll.innerHTML = '';
     if (!regularNotes.length) {
         listAll.innerHTML = `<div class="empty-state">
-            <p style="color: var(--text-muted); margin: 0;">No notes yet. Create one to get started.</p>
+            <p style="color: var(--text-muted); margin: 0;">No notes or lists yet. Create one to get started.</p>
         </div>`;
     } else {
         regularNotes.forEach(note => {
@@ -3729,34 +6438,26 @@ function renderNotesList() {
         btn.className = `notes-list-item ${note.id === notesState.activeNoteId ? 'active' : ''} ${isSelected ? 'selected' : ''}`;
         btn.dataset.noteId = note.id;
 
-        // Use auto-generated title if note title is default
-        let displayTitle = note.title;
-        if (!displayTitle || displayTitle === 'Untitled Note' || displayTitle === 'Untitled note') {
-            // Extract first line from content
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = note.content || '';
-            const plainText = tempDiv.textContent || tempDiv.innerText || '';
-            if (plainText.trim()) {
-                const firstLine = plainText.split('\n')[0].trim();
-                displayTitle = firstLine.substring(0, 35).trim();
-                if (firstLine.length > 35 || plainText.split('\n').length > 1) {
-                    displayTitle += '...';
-                }
-            } else {
-                displayTitle = 'Untitled';
-            }
-        }
+        const displayTitle = getNoteDisplayTitle(note);
+        const previewHtml = renderNotePreview(note);
 
         btn.innerHTML = `
             <div class="note-select-indicator"><i class="fa-solid fa-check"></i></div>
             <div class="note-title-row">
-                <div class="note-title">${displayTitle}</div>
+                <div class="note-title">
+                    <span class="note-kind-icon ${note.note_type === 'list' ? 'list' : 'note'}">${renderNoteIcon(note)}</span>
+                    <span class="note-title-text">${escapeHtml(displayTitle)}</span>
+                </div>
                 <div class="note-actions">
+                    <button class="btn-icon move-btn" title="Move note">
+                        <i class="fa-solid fa-folder-open"></i>
+                    </button>
                     <button class="btn-icon pin-btn ${note.pinned ? 'active' : ''}" title="${note.pinned ? 'Unpin' : 'Pin'}">
                         <i class="fa-solid fa-thumbtack"></i>
                     </button>
                 </div>
             </div>
+            ${previewHtml}
             <div class="note-updated">${formatNoteDate(note.updated_at)}</div>
         `;
         btn.addEventListener('click', async (e) => {
@@ -3772,8 +6473,12 @@ function renderNotesList() {
                 setNoteSelected(note.id, nowSelected);
                 updateNotesBulkBar();
             } else {
-                await setActiveNote(note.id);
-                scrollNotesEditorIntoView();
+                if (document.getElementById('note-editor')) {
+                    await setActiveNote(note.id);
+                    scrollNotesEditorIntoView();
+                } else {
+                    openNoteInEditor(note.id);
+                }
             }
         });
 
@@ -3782,6 +6487,13 @@ function renderNotesList() {
             pinBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 await toggleNotePin(note.id, !note.pinned);
+            });
+        }
+        const moveBtn = btn.querySelector('.move-btn');
+        if (moveBtn) {
+            moveBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openNoteMoveModal(note.id);
             });
         }
 
@@ -3825,6 +6537,7 @@ async function setActiveNote(noteId, options = {}) {
         title: (note.title || '').trim(),
         content: (note.content || '').trim()
     };
+    notesState.activeFolderId = note.folder_id || null;
     notesState.checkboxMode = false; // Reset checkbox mode when switching notes
     setNoteDirty(false);
     renderNotesList();
@@ -3867,7 +6580,7 @@ function getPinnedNoteDragAfterElement(container, y) {
 }
 
 async function saveCurrentNote(options = {}) {
-    const { silent = false, keepOpen = false } = options;
+    const { silent = false, keepOpen = false, closeAfter = false, keepalive = false } = options;
     const editor = document.getElementById('note-editor');
     const titleInput = document.getElementById('note-title');
     const updatedLabel = document.getElementById('note-updated-label');
@@ -3875,9 +6588,19 @@ async function saveCurrentNote(options = {}) {
     const noteId = notesState.activeNoteId;
     if (!notesState.dirty && noteId) {
         // No changes: still clear and reset without touching the timestamp
+        if (closeAfter) {
+            window.location.href = getNoteReturnUrl();
+            return;
+        }
         if (!keepOpen) {
             clearNoteEditor();
             renderNotesList();
+        }
+        return;
+    }
+    if (!notesState.dirty && !noteId) {
+        if (closeAfter) {
+            window.location.href = getNoteReturnUrl();
         }
         return;
     }
@@ -3890,7 +6613,8 @@ async function saveCurrentNote(options = {}) {
 
     const payload = {
         title: title,
-        content: editor.innerHTML.trim()
+        content: editor.innerHTML.trim(),
+        folder_id: notesState.activeFolderId
     };
 
     try {
@@ -3900,7 +6624,8 @@ async function saveCurrentNote(options = {}) {
             res = await fetch('/api/notes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                keepalive: keepalive
             });
             if (!res.ok) throw new Error('Create failed');
             savedNote = await res.json();
@@ -3910,7 +6635,8 @@ async function saveCurrentNote(options = {}) {
             res = await fetch(`/api/notes/${noteId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                keepalive: keepalive
             });
             if (!res.ok) throw new Error('Save failed');
             savedNote = await res.json();
@@ -3927,6 +6653,11 @@ async function saveCurrentNote(options = {}) {
                 title: payload.title,
                 content: payload.content
             };
+            return;
+        }
+
+        if (closeAfter || isStandaloneNoteEditor()) {
+            window.location.href = getNoteReturnUrl();
             return;
         }
 
@@ -3973,8 +6704,55 @@ async function deleteCurrentNote() {
             notesState.activeNoteId = null;
             renderNotesList();
             clearNoteEditor();
+            if (isStandaloneNoteEditor()) {
+                window.location.href = getNoteReturnUrl();
+            }
         } catch (err) {
             console.error('Error deleting note:', err);
+        }
+    });
+}
+
+async function convertCurrentNoteToList() {
+    if (!noteHasContent()) {
+        showToast('Add at least two short lines before converting.', 'warning');
+        return;
+    }
+
+    if (notesState.dirty) {
+        await saveCurrentNote({ silent: true, keepOpen: true });
+    }
+
+    const noteId = notesState.activeNoteId;
+    if (!noteId) {
+        showToast('Save the note before converting.', 'warning');
+        return;
+    }
+
+    openConfirmModal('Convert this note to a list? This replaces the note content with list items.', async () => {
+        try {
+            const res = await fetch(`/api/notes/${noteId}/convert-to-list`, { method: 'POST' });
+            if (!res.ok) {
+                let errorMessage = 'Note does not qualify for list conversion.';
+                try {
+                    const data = await res.json();
+                    if (data?.details) {
+                        errorMessage = `${data.error}: ${data.details}`;
+                    } else if (data?.error) {
+                        errorMessage = data.error;
+                    }
+                } catch (e) {
+                    // Keep fallback message
+                }
+                showToast(errorMessage, 'warning');
+                return;
+            }
+            showToast('Converted to list.', 'success');
+            const returnTo = getNoteReturnUrl();
+            window.location.href = `/notes/${noteId}?return=${encodeURIComponent(returnTo)}`;
+        } catch (err) {
+            console.error('Error converting note:', err);
+            showToast('Could not convert note to list.', 'error');
         }
     });
 }
@@ -3989,6 +6767,7 @@ function clearNoteEditor() {
     if (updatedLabel) updatedLabel.textContent = 'No note selected';
     notesState.activeNoteId = null;
     notesState.activeSnapshot = null;
+    notesState.activeFolderId = null;
     notesState.checkboxMode = false; // Reset checkbox mode
     setNoteDirty(false);
     updateNoteToolbarStates(); // Update toolbar button states
@@ -4053,50 +6832,21 @@ async function openShareNoteModal() {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = note.content || '';
     const plainText = tempDiv.textContent || tempDiv.innerText || '';
-    const sharePayload = {
-        title: note.title || 'Untitled Note',
-        text: plainText
-    };
+    const title = note.title || 'Untitled Note';
 
-    // Prefer Capacitor native share when running in the APK
-    const nativeShare = window?.Capacitor?.Plugins?.Share;
-    if (nativeShare && typeof nativeShare.share === 'function' && window.Capacitor.isNativePlatform?.()) {
-        console.log('Capacitor Share is available, attempting native share...');
-        try {
-            await nativeShare.share(sharePayload);
-            console.log('Native share successful!');
+    // Use universal share function if available
+    if (typeof window.universalShare === 'function') {
+        const result = await window.universalShare({ title, text: plainText });
+        if (result.cancelled) return;
+        if (result.success) {
+            if (result.method === 'clipboard') {
+                showToast('Note copied to clipboard', 'success', 2000);
+            }
             return;
-        } catch (err) {
-            console.log('Native share error:', err?.name, err?.message || err);
-            if (err?.name === 'AbortError') {
-                console.log('User cancelled native share');
-                return;
-            }
         }
     }
 
-    // Try to use Web Share API (works in mobile browsers)
-    if (navigator.share) {
-        console.log('Web Share API is available, attempting to share...');
-        try {
-            await navigator.share(sharePayload);
-            console.log('Share successful!');
-            return; // Successfully shared, exit
-        } catch (err) {
-            // User cancelled or share failed, show modal as fallback
-            console.log('Share error:', err.name, err.message);
-            if (err.name !== 'AbortError') {
-                console.log('Share failed, showing modal as fallback');
-            } else {
-                console.log('User cancelled share');
-                return; // User cancelled, don't show modal
-            }
-        }
-    } else {
-        console.log('Web Share API not available - Protocol:', window.location.protocol, 'Host:', window.location.host);
-    }
-
-    // Fallback: Show modal with share options
+    // Fallback: Show modal with share options (for desktop or if native share fails)
     const modal = document.getElementById('share-note-modal');
     if (!modal) return;
 
@@ -5291,10 +8041,13 @@ function renderCalendarEvents() {
             meta.append(listChip);
             titleWrap.appendChild(meta);
 
-        const actions = document.createElement('div');
-        actions.className = 'calendar-actions-row';
-        const priorityDot = document.createElement('button');
-        priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
+          const actions = document.createElement('div');
+          actions.className = 'calendar-actions-row';
+          const noteChips = document.createElement('div');
+          noteChips.className = 'calendar-note-chips';
+          appendCalendarItemNoteChip(noteChips, ev);
+          const priorityDot = document.createElement('button');
+          priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
         priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
         priorityDot.onclick = (e) => {
             e.stopPropagation();
@@ -5398,7 +8151,8 @@ function renderCalendarEvents() {
             if (overflowDropdown.classList.contains('active')) positionDropdown();
         }, { passive: true });
 
-        actions.append(priorityDot, overflowMenuContainer);
+          if (noteChips.childNodes.length) actions.append(noteChips);
+          actions.append(priorityDot, overflowMenuContainer);
 
         row.append(left, titleWrap, actions);
         attachCalendarRowSelection(row, ev);
@@ -5583,12 +8337,13 @@ function renderCalendarEvents() {
         (ev.linked_notes || []).forEach(note => {
             const link = document.createElement('a');
             link.className = 'meta-chip note';
-            link.href = `/notes?note=${note.id}`;
+            link.href = `/notes/${note.id}`;
             link.title = note.title || `Note #${note.id}`;
             link.setAttribute('aria-label', note.title || `Note #${note.id}`);
             link.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
             noteChips.appendChild(link);
         });
+        appendCalendarItemNoteChip(noteChips, ev);
         if (meta.childNodes.length) titleWrap.appendChild(meta);
 
         const actions = document.createElement('div');
@@ -5642,11 +8397,12 @@ function renderCalendarEvents() {
 
         const noteMenuItem = document.createElement('button');
         noteMenuItem.className = 'calendar-item-menu-option';
-        noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Link Note';
-        noteMenuItem.onclick = (e) => {
+        noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Add Note...';
+        noteMenuItem.onclick = async (e) => {
             e.stopPropagation();
-            overflowDropdown.classList.remove('active');
-            linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+            const resolved = await resolveCalendarEventId(ev);
+            if (!resolved) return;
+            showCalendarNoteChoiceInDropdown(overflowDropdown, resolved);
         };
 
         const convertMenuItem = document.createElement('button');
@@ -5739,8 +8495,9 @@ function renderCalendarEvents() {
         overflowDropdown.updatePosition = positionDropdown;
         overflowDropdown.triggerButton = overflowBtn;
 
-        overflowBtn.onclick = (e) => {
+          overflowBtn.onclick = (e) => {
             e.stopPropagation();
+            restoreCalendarNoteChoiceDropdown(overflowDropdown);
 
             const isOpen = overflowDropdown.classList.contains('active');
 
@@ -5816,7 +8573,7 @@ function renderCalendarEvents() {
         (ev.linked_notes || []).forEach(note => {
             const link = document.createElement('a');
             link.className = 'meta-chip note';
-            link.href = `/notes?note=${note.id}`;
+            link.href = `/notes/${note.id}`;
             link.title = note.title || `Note #${note.id}`;
             link.setAttribute('aria-label', note.title || `Note #${note.id}`);
             link.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
@@ -5865,11 +8622,12 @@ function renderCalendarEvents() {
 
         const noteMenuItem = document.createElement('button');
         noteMenuItem.className = 'calendar-item-menu-option';
-        noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Link Note';
-        noteMenuItem.onclick = (e) => {
+        noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Add Note...';
+        noteMenuItem.onclick = async (e) => {
             e.stopPropagation();
-            overflowDropdown.classList.remove('active');
-            linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+            const resolved = await resolveCalendarEventId(ev);
+            if (!resolved) return;
+            showCalendarNoteChoiceInDropdown(overflowDropdown, resolved);
         };
 
         const convertMenuItem = document.createElement('button');
@@ -5960,8 +8718,9 @@ function renderCalendarEvents() {
         overflowDropdown.updatePosition = positionDropdown;
         overflowDropdown.triggerButton = overflowBtn;
 
-        overflowBtn.onclick = (e) => {
+          overflowBtn.onclick = (e) => {
             e.stopPropagation();
+            restoreCalendarNoteChoiceDropdown(overflowDropdown);
             const isOpen = overflowDropdown.classList.contains('active');
             document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
                 if (d !== overflowDropdown) {
@@ -6366,7 +9125,7 @@ function startBulkCalendarPriorityPicker(anchor) {
     openBulkPriorityDropdown(button, (val) => bulkCalendarChangePriority(val));
 }
 
-function startBulkCalendarNoteLink() {
+function startBulkCalendarNoteLink(anchor = null) {
     const targets = getSelectedCalendarEvents(true).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
     if (!targets.length) return;
     if (targets.length > 1) {
@@ -6374,7 +9133,9 @@ function startBulkCalendarNoteLink() {
         return;
     }
     const ev = targets[0];
-    linkNoteToCalendarEvent(ev.id, ev.title, (ev.linked_notes || []).map(n => n.id));
+    const menu = document.getElementById('calendar-bulk-more-dropdown');
+    if (!menu) return;
+    showCalendarNoteChoiceInDropdown(menu, ev);
 }
 
 function enableCalendarDragAndDrop(container) {
@@ -7808,6 +10569,14 @@ function initCalendarPage() {
     const recurringFreq = document.getElementById('calendar-recurring-frequency');
     const recurringUnit = document.getElementById('calendar-recurring-interval-unit');
     const recurringType = document.getElementById('calendar-recurring-type');
+    const itemNoteModal = document.getElementById('calendar-item-note-modal');
+    const itemNoteInput = document.getElementById('calendar-item-note-input');
+    const itemNoteCloseBtn = document.getElementById('calendar-item-note-close');
+    const itemNoteEditBtn = document.getElementById('calendar-item-note-edit');
+    const itemNoteDeleteBtn = document.getElementById('calendar-item-note-delete');
+    const itemNoteConvertBtn = document.getElementById('calendar-item-note-convert');
+    const itemNoteSaveBtn = document.getElementById('calendar-item-note-save');
+    const itemNoteCancelBtn = document.getElementById('calendar-item-note-cancel');
 
     const sortLabelMap = {
         time: 'Time',
@@ -7838,30 +10607,31 @@ function initCalendarPage() {
             dropdownMenu.classList.toggle('active');
         };
         // Close dropdown when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!e.target.closest('.calendar-actions-menu')) {
-                dropdownMenu.classList.remove('active');
-                if (sortMobileMenu) sortMobileMenu.classList.remove('active');
-            }
-            if (sortMenu && !e.target.closest('.calendar-sort-menu')) {
-                sortMenu.classList.remove('active');
-            }
-            // Also close all calendar item dropdowns
-            if (!e.target.closest('.calendar-overflow-menu') && !e.target.closest('.calendar-item-dropdown')) {
-                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
-                    d.classList.remove('active');
-                });
-            }
+          document.addEventListener('click', (e) => {
+              if (!e.target.closest('.calendar-actions-menu')) {
+                  dropdownMenu.classList.remove('active');
+                  if (sortMobileMenu) sortMobileMenu.classList.remove('active');
+              }
+              if (sortMenu && !e.target.closest('.calendar-sort-menu')) {
+                  sortMenu.classList.remove('active');
+              }
+              // Also close all calendar item dropdowns
+              if (!e.target.closest('.calendar-overflow-menu') && !e.target.closest('.calendar-item-dropdown')) {
+                  document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
+                      d.classList.remove('active');
+                      restoreCalendarNoteChoiceDropdown(d);
+                  });
+              }
         });
 
         // Update dropdown positions on scroll instead of closing them
-        window.addEventListener('scroll', () => {
-            document.querySelectorAll('.calendar-item-dropdown.active').forEach(dropdown => {
-                if (dropdown.updatePosition && typeof dropdown.updatePosition === 'function') {
-                    dropdown.updatePosition();
-                }
-            });
-        }, true);
+          window.addEventListener('scroll', () => {
+              document.querySelectorAll('.calendar-item-dropdown.active').forEach(dropdown => {
+                  if (dropdown.updatePosition && typeof dropdown.updatePosition === 'function') {
+                      dropdown.updatePosition();
+                  }
+              });
+          }, true);
 
     }
 
@@ -7881,6 +10651,29 @@ function initCalendarPage() {
         const next = new Date(current.getFullYear(), current.getMonth() + 1, 1);
         setCalendarMonth(next);
     };
+
+
+    if (itemNoteCloseBtn) itemNoteCloseBtn.onclick = closeCalendarItemNoteModal;
+    if (itemNoteEditBtn) itemNoteEditBtn.onclick = () => {
+        if (itemNoteInput && calendarItemNoteState.event) {
+            itemNoteInput.value = calendarItemNoteState.event.item_note || '';
+            updateCalendarItemNoteCounter();
+        }
+        setCalendarItemNoteMode('edit');
+    };
+    if (itemNoteDeleteBtn) itemNoteDeleteBtn.onclick = deleteCalendarItemNote;
+    if (itemNoteConvertBtn) itemNoteConvertBtn.onclick = convertCalendarItemNote;
+    if (itemNoteSaveBtn) itemNoteSaveBtn.onclick = saveCalendarItemNote;
+    if (itemNoteCancelBtn) itemNoteCancelBtn.onclick = () => {
+        if (calendarItemNoteState.isNew) {
+            closeCalendarItemNoteModal();
+        } else {
+            setCalendarItemNoteMode('view');
+        }
+    };
+    if (itemNoteInput) {
+        itemNoteInput.addEventListener('input', updateCalendarItemNoteCounter);
+    }
 
     if (prevBtn) prevBtn.onclick = () => {
         if (!calendarState.selectedDay) return;
@@ -8083,7 +10876,7 @@ function initCalendarPage() {
     };
     if (bulkNoteBtn) bulkNoteBtn.onclick = () => {
         toggleCalendarBulkMenu(null, true);
-        startBulkCalendarNoteLink();
+        startBulkCalendarNoteLink(bulkNoteBtn);
     };
     if (bulkDeleteBtn) bulkDeleteBtn.onclick = bulkCalendarDelete;
     if (bulkMoreBtn) bulkMoreBtn.onclick = toggleCalendarBulkMenu;
@@ -10030,8 +12823,30 @@ function formatAIMessage(text) {
     // Convert **▶ Phase:** to styled phase header
     formatted = formatted.replace(/\*\*▶ Phase: (.+?)\*\*/g, '<strong class="ai-phase-header">▶ Phase: $1</strong>');
 
+    // Calendar: Convert **📅 Day, Month Date, Year** to styled calendar day header
+    formatted = formatted.replace(/\*\*📅 (.+?)\*\*/g, '<span class="ai-calendar-day">📅 $1</span>');
+
+    // Calendar: Convert **📁 Group** to styled group header
+    formatted = formatted.replace(/\*\*📁 (.+?)\*\*/g, '<span class="ai-calendar-group">📁 $1</span>');
+
     // Convert remaining **text** to <strong>text</strong>
     formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Calendar: Convert timed events (⏰ HH:MM-HH:MM | status **title** priority)
+    formatted = formatted.replace(/⏰\s*(\d{2}:\d{2})-(\d{2}:\d{2})\s*\|\s*(○|◐|✓)\s*<strong>(.+?)<\/strong>(\s*🔴|\s*🟡)?/g,
+        (match, start, end, status, title, priority) => {
+            const statusClass = status === '○' ? 'ai-status-todo' : status === '◐' ? 'ai-status-progress' : 'ai-status-done';
+            const priorityHtml = priority ? (priority.includes('🔴') ? ' <span class="ai-priority-high">🔴</span>' : ' <span class="ai-priority-medium">🟡</span>') : '';
+            return `<span class="ai-calendar-event"><span class="ai-calendar-time">${start}-${end}</span> <span class="ai-status ${statusClass}">${status}</span> <span class="ai-calendar-title">${title}</span>${priorityHtml}</span>`;
+        });
+
+    // Calendar: Convert non-timed events (📌 status **title** priority)
+    formatted = formatted.replace(/📌\s*(○|◐|✓)\s*<strong>(.+?)<\/strong>(\s*🔴|\s*🟡)?/g,
+        (match, status, title, priority) => {
+            const statusClass = status === '○' ? 'ai-status-todo' : status === '◐' ? 'ai-status-progress' : 'ai-status-done';
+            const priorityHtml = priority ? (priority.includes('🔴') ? ' <span class="ai-priority-high">🔴</span>' : ' <span class="ai-priority-medium">🟡</span>') : '';
+            return `<span class="ai-calendar-event"><span class="ai-status ${statusClass}">${status}</span> <span class="ai-calendar-title">${title}</span>${priorityHtml}</span>`;
+        });
 
     // Convert newlines to <br>
     formatted = formatted.replace(/\n/g, '<br>');
