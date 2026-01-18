@@ -86,7 +86,7 @@ let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null };
-let pinState = { hasPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
+let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
 let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
@@ -127,10 +127,12 @@ const TOUCH_SCROLL_THRESHOLD = 12;
 async function loadDashboard() {
     const hubsGrid = document.getElementById('hubs-grid');
     const listsGrid = document.getElementById('lists-grid');
+    const lightListsGrid = document.getElementById('light-lists-grid');
     const hubsContainer = document.getElementById('hubs-container');
     const listsContainer = document.getElementById('lists-container');
+    const lightListsContainer = document.getElementById('light-lists-container');
 
-    if (!hubsGrid || !listsGrid) return; // Not on dashboard
+    if (!hubsGrid || !listsGrid || !lightListsGrid) return; // Not on dashboard
 
     try {
         const res = await fetch('/api/lists');
@@ -138,6 +140,7 @@ async function loadDashboard() {
 
         const hubs = lists.filter(l => l.type === 'hub');
         const simpleLists = lists.filter(l => l.type === 'list');
+        const lightLists = lists.filter(l => l.type === 'light');
 
         // Render Hubs
         if (hubs.length > 0) {
@@ -155,6 +158,14 @@ async function loadDashboard() {
             listsContainer.style.display = 'none';
         }
 
+        // Render Light Lists
+        if (lightLists.length > 0) {
+            lightListsContainer.style.display = 'block';
+            lightListsGrid.innerHTML = lightLists.map(list => renderListCard(list)).join('');
+        } else {
+            lightListsContainer.style.display = 'none';
+        }
+
         initDashboardReorder();
     } catch (e) {
         console.error('Error loading lists:', e);
@@ -164,7 +175,8 @@ async function loadDashboard() {
 function initDashboardReorder() {
     const grids = [
         { el: document.getElementById('hubs-grid'), type: 'hub' },
-        { el: document.getElementById('lists-grid'), type: 'list' }
+        { el: document.getElementById('lists-grid'), type: 'list' },
+        { el: document.getElementById('light-lists-grid'), type: 'light' }
     ];
     grids.forEach(({ el, type }) => {
         if (!el) return;
@@ -244,18 +256,23 @@ async function persistDashboardOrder(container, type) {
 }
 
 function renderListCard(list) {
-    const cardColorVar = list.type === 'hub' ? 'var(--accent-color)' : 'var(--primary-color)';
+    const cardColorVar = list.type === 'hub'
+        ? 'var(--accent-color)'
+        : (list.type === 'light' ? 'var(--info-color)' : 'var(--primary-color)');
     const progress = list.progress || 0;
     const items = (list.items || []).filter(i => !i.is_phase);
     const itemCount = items.length;
     const doneCount = items.filter(i => i.status === 'done').length;
+    const typeLabel = list.type === 'hub'
+        ? 'Project Hub'
+        : (list.type === 'light' ? 'Light List' : 'List');
 
     return `
         <a href="/list/${list.id}" class="card" data-list-id="${list.id}" data-list-type="${list.type}" style="border-top-color: ${cardColorVar};">
             <div class="card-header">
                 <div style="display:flex; align-items:center; gap:0.5rem;">
                     <span class="card-title">${list.title}</span>
-                    <span class="card-type ${list.type}">${list.type === 'hub' ? 'Project Hub' : 'List'}</span>
+                    <span class="card-type ${list.type}">${typeLabel}</span>
                 </div>
             </div>
             <div class="progress-container">
@@ -1655,15 +1672,18 @@ function renderMoveRoot(itemType = 'task') {
     panel.innerHTML = '';
     moveSelectedDestination = null;
     const effectiveType = itemType || moveItemType || 'task';
+    const currentListType = (typeof CURRENT_LIST_TYPE !== 'undefined' ? CURRENT_LIST_TYPE : null);
     moveNavStack = [() => renderMoveRoot(effectiveType)];
     updateMoveBackButton();
 
     const actions = [];
     if (effectiveType === 'task') {
-        actions.push({
-            label: `<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
-            handler: () => pushMoveView(() => renderPhasePicker(CURRENT_LIST_ID, typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'This project'))
-        });
+        if (currentListType === 'list') {
+            actions.push({
+                label: `<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
+                handler: () => pushMoveView(() => renderPhasePicker(CURRENT_LIST_ID, typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'This project'))
+            });
+        }
     } else if (effectiveType === 'project') {
         actions.push({
             label: '<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move to main page',
@@ -1671,6 +1691,12 @@ function renderMoveRoot(itemType = 'task') {
                 moveSelectedDestination = { destination_hub_id: null, label: 'Main page' };
                 moveItem();
             }
+        });
+    }
+    if (effectiveType === 'task') {
+        actions.push({
+            label: '<i class="fa-solid fa-feather" style="margin-right: 0.5rem;"></i>Browse light lists',
+            handler: () => pushMoveView(renderLightListPicker)
         });
     }
     actions.push({
@@ -1778,6 +1804,15 @@ async function renderHubProjects(hubId, hubTitle) {
                 btnHub.innerHTML = `<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem; opacity: 0.7;"></i>${child.title} <span style="opacity: 0.6; margin-left: 0.25rem;">(Hub)</span>`;
                 btnHub.onclick = () => pushMoveView(() => renderHubProjects(child.id, child.title));
                 panel.appendChild(btnHub);
+            } else if (child.type === 'light') {
+                const btnLight = document.createElement('button');
+                btnLight.className = 'btn';
+                btnLight.innerHTML = `<i class="fa-solid fa-feather" style="margin-right: 0.5rem; opacity: 0.7;"></i>${child.title} <span style="opacity: 0.6; margin-left: 0.25rem;">(Light)</span>`;
+                btnLight.onclick = () => {
+                    moveSelectedDestination = { destination_list_id: child.id, destination_phase_id: null, label: child.title };
+                    moveItem();
+                };
+                panel.appendChild(btnLight);
             } else {
                 // Project list - show it to navigate to phases
                 const btnProject = document.createElement('button');
@@ -1789,6 +1824,32 @@ async function renderHubProjects(hubId, hubTitle) {
         });
     } catch (e) {
         panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem; padding: 1rem;"><i class="fa-solid fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>Unable to load hub contents.</div>';
+    }
+}
+
+async function renderLightListPicker() {
+    const panel = document.getElementById('move-step-container');
+    if (!panel) return;
+    panel.innerHTML = '<div class="move-heading"><i class="fa-solid fa-feather" style="margin-right: 0.5rem;"></i>Choose a light list</div>';
+    try {
+        const res = await fetch('/api/lists?type=light');
+        const lists = await res.json();
+        if (!lists.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted); padding: 1rem; text-align: center;"><i class="fa-solid fa-inbox" style="margin-right: 0.5rem;"></i>No light lists available.</div>';
+            return;
+        }
+        lists.forEach(list => {
+            const btn = document.createElement('button');
+            btn.className = 'btn';
+            btn.innerHTML = `<i class="fa-solid fa-feather" style="margin-right: 0.5rem; opacity: 0.7;"></i>${list.title}`;
+            btn.onclick = () => {
+                moveSelectedDestination = { destination_list_id: list.id, destination_phase_id: null, label: list.title };
+                moveItem();
+            };
+            panel.appendChild(btn);
+        });
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem; padding: 1rem;"><i class="fa-solid fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>Unable to load light lists.</div>';
     }
 }
 // --- Confirm Modal ---
@@ -3177,6 +3238,7 @@ function initNotesListPage() {
 
     // Check PIN status and load notes
     checkPinStatus();
+    checkNotesPinStatus();
     loadNotesUnified();
 }
 
@@ -3826,8 +3888,11 @@ async function handleNoteMenuPin(noteId) {
 }
 
 async function handleNoteMenuProtect(noteId) {
-    // Check if user has PIN set
-    if (!pinState.hasPin) {
+    // Check if user has notes PIN set
+    if (!pinState.hasNotesPin) {
+        pinState.settingNotesPin = true;
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'protect_after_set';
         openSetPinModal();
         return;
     }
@@ -4041,8 +4106,12 @@ async function handleFolderMenuDelete(folderId) {
 }
 
 async function handleFolderMenuProtect(folderId) {
-    // Check if user has PIN set
-    if (!pinState.hasPin) {
+    // Check if user has notes PIN set
+    if (!pinState.hasNotesPin) {
+        pinState.settingNotesPin = true;
+        pinState.pendingFolderId = folderId;
+        pinState.pendingNoteId = null;
+        pinState.pendingAction = 'protect_folder_after_set';
         openSetPinModal();
         return;
     }
@@ -4364,6 +4433,7 @@ function initNoteEditorPage() {
 
     // Check PIN status
     checkPinStatus();
+    checkNotesPinStatus();
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -4431,6 +4501,7 @@ function initListEditorPage() {
 
     // Check PIN status
     checkPinStatus();
+    checkNotesPinStatus();
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -13324,6 +13395,17 @@ async function checkPinStatus() {
     }
 }
 
+async function checkNotesPinStatus() {
+    try {
+        const res = await fetch('/api/notes-pin/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        pinState.hasNotesPin = data.has_notes_pin;
+    } catch (e) {
+        console.error('Error checking notes PIN status:', e);
+    }
+}
+
 async function verifyPin(pin) {
     const noteId = pinState.pendingNoteId;
     const folderId = pinState.pendingFolderId;
@@ -13493,17 +13575,33 @@ function closePinModal() {
         modal.classList.remove('active');
     }
     pinState.pendingNoteId = null;
+    pinState.pendingFolderId = null;
     pinState.pendingAction = null;
+
+    // Reset Quick Access protected state if it exists
+    if (window.qaProtectedState) {
+        window.qaProtectedState.active = false;
+        window.qaProtectedState.pendingUrl = null;
+    }
 }
 
 function submitPin() {
     const input = document.getElementById('pin-input');
     const pin = input ? input.value.trim() : '';
-    if (pin.length === 4 && /^\d{4}$/.test(pin)) {
-        verifyPin(pin);
-    } else {
+    if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
         showToast('PIN must be 4 digits', 'warning', 2000);
+        return;
     }
+
+    // Check if this is a Quick Access protected item unlock
+    if (window.qaProtectedState && window.qaProtectedState.active) {
+        if (typeof window.verifyQAProtectedPin === 'function') {
+            window.verifyQAProtectedPin(pin);
+        }
+        return;
+    }
+
+    verifyPin(pin);
 }
 
 function openSetPinModal() {
@@ -13525,6 +13623,8 @@ function closeSetPinModal() {
     if (modal) {
         modal.classList.remove('active');
     }
+    // Reset notes PIN setting state if cancelled
+    pinState.settingNotesPin = false;
 }
 
 async function submitSetPin() {
@@ -13543,17 +13643,40 @@ async function submitSetPin() {
         return;
     }
 
+    // Check if we're setting the notes PIN
+    const settingNotesPin = pinState.settingNotesPin;
+    const pendingAction = pinState.pendingAction;
+    const pendingNoteId = pinState.pendingNoteId;
+    const pendingFolderId = pinState.pendingFolderId;
+
     try {
-        const res = await fetch('/api/pin', {
+        const endpoint = settingNotesPin ? '/api/notes-pin' : '/api/pin';
+        const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin: newPin })
+            body: JSON.stringify({ pin: newPin, confirm_pin: confirmPin })
         });
         const data = await res.json();
         if (res.ok) {
-            pinState.hasPin = true;
+            if (settingNotesPin) {
+                pinState.hasNotesPin = true;
+                pinState.settingNotesPin = false;
+            } else {
+                pinState.hasPin = true;
+            }
             closeSetPinModal();
             showToast('PIN set successfully', 'success', 2000);
+
+            // If there was a pending protection action, execute it now
+            if (settingNotesPin && pendingAction === 'protect_after_set' && pendingNoteId) {
+                await doProtectNote(pendingNoteId, true);
+                pinState.pendingNoteId = null;
+                pinState.pendingAction = null;
+            } else if (settingNotesPin && pendingAction === 'protect_folder_after_set' && pendingFolderId) {
+                await doProtectFolder(pendingFolderId, true);
+                pinState.pendingFolderId = null;
+                pinState.pendingAction = null;
+            }
         } else {
             showToast(data.error || 'Failed to set PIN', 'error', 3000);
         }
@@ -13571,8 +13694,11 @@ async function toggleNoteProtection(noteId) {
         return;
     }
 
-    // Check if user has PIN set
-    if (!pinState.hasPin) {
+    // Check if user has notes PIN set
+    if (!pinState.hasNotesPin) {
+        pinState.settingNotesPin = true;
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'protect_after_set';
         openSetPinModal();
         return;
     }
@@ -13651,8 +13777,11 @@ async function toggleListProtection() {
         return;
     }
 
-    // Check if user has PIN set
-    if (!pinState.hasPin) {
+    // Check if user has notes PIN set
+    if (!pinState.hasNotesPin) {
+        pinState.settingNotesPin = true;
+        pinState.pendingNoteId = listId;
+        pinState.pendingAction = 'protect_after_set';
         openSetPinModal();
         return;
     }

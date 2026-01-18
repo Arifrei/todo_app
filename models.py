@@ -28,6 +28,7 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.String(200), nullable=False)
     pin_hash = db.Column(db.String(200), nullable=True)
+    notes_pin_hash = db.Column(db.String(200), nullable=True)
     sidebar_order = db.Column(db.Text, nullable=True)
     homepage_order = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -54,10 +55,24 @@ class User(UserMixin, db.Model):
             return False
         return check_password_hash(self.pin_hash, str(pin))
 
+    def set_notes_pin(self, pin: str):
+        """Set a separate 4-digit PIN for unlocking protected notes/folders."""
+        if not pin or not str(pin).isdigit() or len(str(pin)) != 4:
+            raise ValueError("PIN must be exactly 4 digits")
+        self.notes_pin_hash = generate_password_hash(str(pin))
+
+    def check_notes_pin(self, pin: str) -> bool:
+        if not self.notes_pin_hash:
+            return False
+        return check_password_hash(self.notes_pin_hash, str(pin))
+
+    def has_notes_pin(self) -> bool:
+        return bool(self.notes_pin_hash)
+
 class TodoList(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
-    type = db.Column(db.String(20), default='list') # 'hub' or 'list'
+    type = db.Column(db.String(20), default='list') # 'hub', 'list', or 'light'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     order_index = db.Column(db.Integer, default=0)
@@ -524,6 +539,36 @@ class BookmarkItem(db.Model):
             'value': self.value,
             'pinned': bool(self.pinned),
             'pin_order': self.pin_order or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class EmbeddingRecord(db.Model):
+    """Stored embeddings for semantic search across app entities."""
+    __tablename__ = 'embedding_record'
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'entity_type', 'entity_id', name='uniq_embedding_entity'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    entity_type = db.Column(db.String(30), nullable=False)
+    entity_id = db.Column(db.Integer, nullable=False)
+    embedding_json = db.Column(db.Text, nullable=True)
+    embedding_dim = db.Column(db.Integer, nullable=True)
+    source_hash = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'entity_type': self.entity_type,
+            'entity_id': self.entity_id,
+            'embedding_dim': self.embedding_dim,
+            'source_hash': self.source_hash,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

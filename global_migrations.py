@@ -199,6 +199,43 @@ def ensure_calendar_event(cur):
     add_column(cur, "calendar_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_embedding_table(cur):
+    if not table_exists(cur, "embedding_record"):
+        cur.execute(
+            """
+            CREATE TABLE embedding_record (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                entity_type VARCHAR(30) NOT NULL,
+                entity_id INTEGER NOT NULL,
+                embedding_json TEXT,
+                embedding_dim INTEGER,
+                source_hash VARCHAR(64),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_unique "
+            "ON embedding_record(user_id, entity_type, entity_id)"
+        )
+        print("[add] embedding_record table created")
+        return
+    add_column(cur, "embedding_record", "user_id", "INTEGER")
+    add_column(cur, "embedding_record", "entity_type", "VARCHAR(30)")
+    add_column(cur, "embedding_record", "entity_id", "INTEGER")
+    add_column(cur, "embedding_record", "embedding_json", "TEXT")
+    add_column(cur, "embedding_record", "embedding_dim", "INTEGER")
+    add_column(cur, "embedding_record", "source_hash", "VARCHAR(64)")
+    add_column(cur, "embedding_record", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "embedding_record", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_unique "
+        "ON embedding_record(user_id, entity_type, entity_id)"
+    )
+
+
 def ensure_recurring_event(cur):
     if table_exists(cur, "recurring_event"):
         add_column(cur, "recurring_event", "description", "TEXT")
@@ -456,6 +493,7 @@ def main():
         ensure_recurring_event(cur)
         ensure_recurrence_exception(cur)
         ensure_recalls(cur)
+        ensure_embedding_table(cur)
         ensure_notifications(cur)
         ensure_quick_access(cur)
         ensure_bookmark_item(cur)

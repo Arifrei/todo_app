@@ -318,6 +318,11 @@ def process_recall(recall_id):
             recall.summary = result.get('summary', '')
             recall.ai_status = 'done'
             db.session.commit()
+            try:
+                from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
+                refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
+            except Exception as exc:
+                print(f"Embedding refresh failed for recall {recall_id}: {exc}")
 
         except Exception as e:
             print(f"Error processing recall {recall_id}: {e}")
@@ -325,3 +330,8 @@ def process_recall(recall_id):
             recall.summary = f"[Processing failed: {str(e)}]"
             recall.ai_status = 'failed'
             db.session.commit()
+            try:
+                from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
+                refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
+            except Exception as exc:
+                print(f"Embedding refresh failed for recall {recall_id}: {exc}")

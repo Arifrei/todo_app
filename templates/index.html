@@ -25,6 +25,13 @@
     </div>
 </div>
 
+<div id="light-lists-container" style="display: none;">
+    <h2 class="section-title">Light Task Lists</h2>
+    <div class="grid" id="light-lists-grid">
+        <!-- Light lists will be populated here via JS -->
+    </div>
+</div>
+
 <!-- Create List Modal -->
 <div class="modal" id="create-modal">
     <div class="modal-content">
@@ -39,6 +46,7 @@
             <select id="list-type" class="form-control">
                 <option value="hub">Project Hub (Parent List)</option>
                 <option value="list">Simple Task List</option>
+                <option value="light">Light Task List</option>
             </select>
         </div>
         <div class="modal-actions">

@@ -1,11 +1,22 @@
 import json
 import os
+import threading
 from datetime import datetime, date, time
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
-from openai import OpenAI
 from flask import current_app
+from ai_embeddings import embed_text, get_openai_client
+from embedding_service import (
+    ENTITY_BOOKMARK,
+    ENTITY_CALENDAR,
+    ENTITY_RECALL,
+    ENTITY_TODO_ITEM,
+    ENTITY_TODO_LIST,
+    ensure_embeddings_for_type,
+    list_embedding_vectors,
+    refresh_embedding_for_entity,
+    score_embeddings,
+)
 from models import db, TodoList, TodoItem, CalendarEvent, RecallItem, BookmarkItem
 from ai_context import get_all_ai_context
 
@@ -27,6 +38,29 @@ ORDINAL_MAP = {
 }
 
 
+def _start_embedding_job(user_id: int, entity_type: str, entity_id: int) -> None:
+    try:
+        app = current_app._get_current_object()
+    except Exception:
+        return
+
+    def _run():
+        with app.app_context():
+            try:
+                refresh_embedding_for_entity(user_id, entity_type, entity_id)
+            except Exception as exc:
+                app.logger.warning(
+                    "Embedding refresh failed for %s:%s user=%s (%s)",
+                    entity_type,
+                    entity_id,
+                    user_id,
+                    exc,
+                )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+
 def is_phase_header(item: TodoItem) -> bool:
     return getattr(item, "is_phase", False) or getattr(item, "status", None) == "phase"
 
@@ -37,33 +71,6 @@ def canonicalize_phase_flags(items: List[TodoItem]) -> None:
         if item.status == "phase" and not item.is_phase:
             item.is_phase = True
             item.status = "not_started"
-
-
-def get_openai_client() -> OpenAI:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-    return OpenAI(api_key=api_key)
-
-
-def embed_text(text: str) -> Optional[List[float]]:
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return None
-    try:
-        client = get_openai_client()
-    except Exception as exc:
-        if current_app:
-            current_app.logger.warning(f"Embedding unavailable: {exc}")
-        return None
-    try:
-        model_name = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
-        resp = client.embeddings.create(model=model_name, input=cleaned[:7000])
-        return resp.data[0].embedding
-    except Exception as exc:
-        if current_app:
-            current_app.logger.warning(f"Embedding failed: {exc}")
-        return None
 
 
 def _list_lists(user_id: int, list_type: Optional[str] = None, search: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -103,15 +110,73 @@ def _list_items(
     return [_item_dict(i) for i in items]
 
 
-def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-        return 0.0
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
-    mag_a = math.sqrt(sum(a * a for a in vec_a))
-    mag_b = math.sqrt(sum(b * b for b in vec_b))
-    if mag_a == 0 or mag_b == 0:
-        return 0.0
-    return dot / (mag_a * mag_b)
+def _task_dict(item: TodoItem, similarity: Optional[float] = None) -> Dict[str, Any]:
+    data = _item_dict(item)
+    if similarity is not None:
+        data["similarity"] = similarity
+    return data
+
+
+def _calendar_event_dict(item: CalendarEvent, similarity: Optional[float] = None) -> Dict[str, Any]:
+    data = item.to_dict()
+    if similarity is not None:
+        data["similarity"] = similarity
+    return data
+
+
+def _rerank_with_ai(query: str, candidates: Sequence[Dict[str, Any]], limit: int) -> Optional[List[int]]:
+    if not query or not candidates:
+        return None
+    try:
+        client = get_openai_client()
+    except Exception:
+        return None
+
+    system_prompt = (
+        "You rank search candidates to best answer a user query. "
+        "Return ONLY JSON as {\"ids\": [id1, id2, ...]} with up to the requested limit, "
+        "ordered best to worst. Do not invent ids."
+    )
+    payload = {
+        "query": query,
+        "limit": limit,
+        "candidates": candidates,
+    }
+    try:
+        response = client.chat.completions.create(
+            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload)},
+            ],
+            temperature=0.1,
+            max_tokens=300,
+        )
+    except Exception:
+        return None
+
+    raw = response.choices[0].message.content or ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    ids = data.get("ids")
+    if not isinstance(ids, list):
+        return None
+    clean = []
+    seen = set()
+    for value in ids:
+        try:
+            val = int(value)
+        except (TypeError, ValueError):
+            continue
+        if val in seen:
+            continue
+        seen.add(val)
+        clean.append(val)
+        if len(clean) >= limit:
+            break
+    return clean or None
 
 
 def _recall_dict(item: RecallItem, similarity: Optional[float] = None) -> Dict[str, Any]:
@@ -180,24 +245,60 @@ def _create_recall(
     )
     db.session.add(recall)
     db.session.commit()
+    _start_embedding_job(user_id, ENTITY_RECALL, recall.id)
     return _recall_dict(recall)
 
 
 def _search_recalls_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
     if not query:
         return []
-    items = RecallItem.query.filter(RecallItem.user_id == user_id).all()
-    needle = query.lower()
-    results = []
-    for item in items:
-        haystack = " ".join([item.title or "", item.why or "", item.payload or ""]).lower()
-        score = 0.0
-        if needle in haystack:
-            score = 0.3 + min(haystack.count(needle) * 0.1, 0.7)
-        results.append((score, item))
-    results.sort(key=lambda tup: tup[0], reverse=True)
-    trimmed = results[: max(1, min(limit, 15))]
-    return [_recall_dict(item, similarity=score) for score, item in trimmed]
+    candidate_limit = max(limit, 30)
+    ensure_embeddings_for_type(user_id, ENTITY_RECALL, max_new=200)
+    embeddings = list_embedding_vectors(user_id, ENTITY_RECALL)
+    query_vec = embed_text(query)
+    if not embeddings or not query_vec:
+        items = RecallItem.query.filter(RecallItem.user_id == user_id).all()
+        needle = query.lower()
+        results = []
+        for item in items:
+            haystack = " ".join([item.title or "", item.why or "", item.payload or ""]).lower()
+            score = 0.0
+            if needle in haystack:
+                score = 0.3 + min(haystack.count(needle) * 0.1, 0.7)
+            results.append((score, item))
+        results.sort(key=lambda tup: tup[0], reverse=True)
+        trimmed = results[: max(1, min(candidate_limit, 30))]
+        return [_recall_dict(item, similarity=score) for score, item in trimmed]
+
+    scored = score_embeddings(query_vec, embeddings, candidate_limit)
+    ids = [entity_id for score, entity_id in scored if score > 0]
+    if not ids:
+        return []
+    items = RecallItem.query.filter(RecallItem.user_id == user_id, RecallItem.id.in_(ids)).all()
+    item_map = {item.id: item for item in items}
+    candidates = []
+    for score, entity_id in scored:
+        item = item_map.get(entity_id)
+        if not item:
+            continue
+        candidates.append({
+            "id": item.id,
+            "title": item.title,
+            "why": item.why,
+            "summary": item.summary,
+            "payload_type": item.payload_type,
+            "payload": item.payload,
+            "when_context": item.when_context,
+            "similarity": score,
+        })
+    reranked_ids = _rerank_with_ai(query, candidates, limit)
+    if reranked_ids:
+        return [_recall_dict(item_map[item_id]) for item_id in reranked_ids if item_id in item_map]
+    return [
+        _recall_dict(item_map[entity_id], similarity=score)
+        for score, entity_id in scored[:limit]
+        if entity_id in item_map
+    ]
 
 
 def _bookmark_dict(item: BookmarkItem, similarity: Optional[float] = None) -> Dict[str, Any]:
@@ -273,24 +374,173 @@ def _create_bookmark(
     )
     db.session.add(bookmark)
     db.session.commit()
+    _start_embedding_job(user_id, ENTITY_BOOKMARK, bookmark.id)
     return _bookmark_dict(bookmark)
 
 
 def _search_bookmarks_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
     if not query:
         return []
-    items = BookmarkItem.query.filter(BookmarkItem.user_id == user_id).all()
-    needle = query.lower()
-    results = []
-    for item in items:
-        haystack = " ".join([item.title or "", item.description or "", item.value or ""]).lower()
-        score = 0.0
-        if needle in haystack:
-            score = 0.3 + min(haystack.count(needle) * 0.1, 0.7)
-        results.append((score, item))
-    results.sort(key=lambda tup: tup[0], reverse=True)
-    trimmed = results[: max(1, min(limit, 15))]
-    return [_bookmark_dict(item, similarity=score) for score, item in trimmed]
+    candidate_limit = max(limit, 30)
+    ensure_embeddings_for_type(user_id, ENTITY_BOOKMARK, max_new=200)
+    embeddings = list_embedding_vectors(user_id, ENTITY_BOOKMARK)
+    query_vec = embed_text(query)
+    if not embeddings or not query_vec:
+        items = BookmarkItem.query.filter(BookmarkItem.user_id == user_id).all()
+        needle = query.lower()
+        results = []
+        for item in items:
+            haystack = " ".join([item.title or "", item.description or "", item.value or ""]).lower()
+            score = 0.0
+            if needle in haystack:
+                score = 0.3 + min(haystack.count(needle) * 0.1, 0.7)
+            results.append((score, item))
+        results.sort(key=lambda tup: tup[0], reverse=True)
+        trimmed = results[: max(1, min(candidate_limit, 30))]
+        return [_bookmark_dict(item, similarity=score) for score, item in trimmed]
+
+    scored = score_embeddings(query_vec, embeddings, candidate_limit)
+    ids = [entity_id for score, entity_id in scored if score > 0]
+    if not ids:
+        return []
+    items = BookmarkItem.query.filter(BookmarkItem.user_id == user_id, BookmarkItem.id.in_(ids)).all()
+    item_map = {item.id: item for item in items}
+    candidates = []
+    for score, entity_id in scored:
+        item = item_map.get(entity_id)
+        if not item:
+            continue
+        candidates.append({
+            "id": item.id,
+            "title": item.title,
+            "description": item.description,
+            "value": item.value,
+            "pinned": bool(item.pinned),
+            "similarity": score,
+        })
+    reranked_ids = _rerank_with_ai(query, candidates, limit)
+    if reranked_ids:
+        return [_bookmark_dict(item_map[item_id]) for item_id in reranked_ids if item_id in item_map]
+    return [
+        _bookmark_dict(item_map[entity_id], similarity=score)
+        for score, entity_id in scored[:limit]
+        if entity_id in item_map
+    ]
+
+
+def _search_tasks_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    candidate_limit = max(limit, 30)
+    ensure_embeddings_for_type(user_id, ENTITY_TODO_ITEM, max_new=200)
+    embeddings = list_embedding_vectors(user_id, ENTITY_TODO_ITEM)
+    query_vec = embed_text(query)
+    if not embeddings or not query_vec:
+        like_expr = f"%{query}%"
+        items = (
+            TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id)
+            .filter(TodoList.user_id == user_id)
+            .filter(
+                db.or_(
+                    TodoItem.content.ilike(like_expr),
+                    TodoItem.description.ilike(like_expr),
+                    TodoItem.notes.ilike(like_expr),
+                    TodoItem.tags.ilike(like_expr),
+                )
+            )
+            .all()
+        )
+        return [_task_dict(item) for item in items[: max(1, min(candidate_limit, 30))]]
+
+    scored = score_embeddings(query_vec, embeddings, candidate_limit)
+    ids = [entity_id for score, entity_id in scored if score > 0]
+    if not ids:
+        return []
+    items = (
+        TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id)
+        .filter(TodoList.user_id == user_id, TodoItem.id.in_(ids))
+        .all()
+    )
+    item_map = {item.id: item for item in items}
+    candidates = []
+    for score, entity_id in scored:
+        item = item_map.get(entity_id)
+        if not item:
+            continue
+        candidates.append({
+            "id": item.id,
+            "content": item.content,
+            "description": item.description,
+            "notes": item.notes,
+            "tags": item.tag_list(),
+            "status": item.status,
+            "project": item.list.title if item.list else None,
+            "project_type": item.list.type if item.list else None,
+            "similarity": score,
+        })
+    reranked_ids = _rerank_with_ai(query, candidates, limit)
+    if reranked_ids:
+        return [_task_dict(item_map[item_id]) for item_id in reranked_ids if item_id in item_map]
+    return [
+        _task_dict(item_map[entity_id], similarity=score)
+        for score, entity_id in scored[:limit]
+        if entity_id in item_map
+    ]
+
+
+def _search_calendar_semantic(user_id: int, query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    candidate_limit = max(limit, 30)
+    ensure_embeddings_for_type(user_id, ENTITY_CALENDAR, max_new=200)
+    embeddings = list_embedding_vectors(user_id, ENTITY_CALENDAR)
+    query_vec = embed_text(query)
+    if not embeddings or not query_vec:
+        like_expr = f"%{query}%"
+        items = (
+            CalendarEvent.query.filter(CalendarEvent.user_id == user_id)
+            .filter(
+                db.or_(
+                    CalendarEvent.title.ilike(like_expr),
+                    CalendarEvent.description.ilike(like_expr),
+                    CalendarEvent.item_note.ilike(like_expr),
+                )
+            )
+            .all()
+        )
+        return [_calendar_event_dict(item) for item in items[: max(1, min(candidate_limit, 30))]]
+
+    scored = score_embeddings(query_vec, embeddings, candidate_limit)
+    ids = [entity_id for score, entity_id in scored if score > 0]
+    if not ids:
+        return []
+    items = CalendarEvent.query.filter(CalendarEvent.user_id == user_id, CalendarEvent.id.in_(ids)).all()
+    item_map = {item.id: item for item in items}
+    candidates = []
+    for score, entity_id in scored:
+        item = item_map.get(entity_id)
+        if not item:
+            continue
+        candidates.append({
+            "id": item.id,
+            "title": item.title,
+            "description": item.description,
+            "item_note": item.item_note,
+            "day": item.day.isoformat() if item.day else None,
+            "start_time": item.start_time.isoformat(timespec="minutes") if item.start_time else None,
+            "end_time": item.end_time.isoformat(timespec="minutes") if item.end_time else None,
+            "status": item.status,
+            "priority": item.priority,
+            "similarity": score,
+        })
+    reranked_ids = _rerank_with_ai(query, candidates, limit)
+    if reranked_ids:
+        return [_calendar_event_dict(item_map[item_id]) for item_id in reranked_ids if item_id in item_map]
+    return [
+        _calendar_event_dict(item_map[entity_id], similarity=score)
+        for score, entity_id in scored[:limit]
+        if entity_id in item_map
+    ]
 
 
 def _list_hub_tasks(
@@ -386,6 +636,9 @@ def _create_item(
     # Place in order (under phase if provided)
     _insert_item_in_order(todo_list, new_item, phase_id=new_item.phase_id if not is_phase else None)
     db.session.commit()
+    _start_embedding_job(user_id, ENTITY_TODO_ITEM, new_item.id)
+    if is_project and new_item.linked_list_id:
+        _start_embedding_job(user_id, ENTITY_TODO_LIST, new_item.linked_list_id)
     return _item_dict(new_item)
 
 
@@ -416,6 +669,7 @@ def _update_item(
         item.notes = notes
 
     db.session.commit()
+    _start_embedding_job(user_id, ENTITY_TODO_ITEM, item.id)
     return _item_dict(item)
 
 
@@ -692,6 +946,7 @@ def _create_calendar_event(
     )
     event.order_index = max_order + 1
     db.session.commit()
+    _start_embedding_job(user_id, ENTITY_CALENDAR, event.id)
     return _calendar_event_dict(event)
 
 
@@ -969,6 +1224,36 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_tasks_semantic",
+            "description": "Search across task items to find fuzzy matches",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 6},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_calendar_semantic",
+            "description": "Search across calendar events to find fuzzy matches",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 6},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -981,6 +1266,8 @@ def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
 - For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with when_context filters.
 - For bookmark capture: when the user wants to save quick-reference info, call create_bookmark with title, value, and optional description/pinned.
 - For bookmark retrieval: start with search_bookmarks_semantic(query); if user asks for lists or pinned-only, use list_bookmarks with pinned filter.
+- For task retrieval: when the user has a vague memory or fuzzy description, start with search_tasks_semantic(query); when they want a list by project/status, use list_items/list_hub_tasks.
+- For calendar retrieval: when the user has a vague memory, start with search_calendar_semantic(query); when they specify dates or ranges, use list_calendar/list_calendar_range.
 - Recall response format (concise markdown with clickable links):
   * Header: "**Recall matches**" (only when showing results)
   * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) - <when_context> - <payload_type> - <why>"
@@ -996,6 +1283,12 @@ def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
   * Header: "**Bookmark matches**" (only when showing results)
   * Each match MUST use this EXACT format: "- [<title>](/bookmarks?item=<id>) - <pinned|unpinned> - <value>"
   * The markdown link href MUST ALWAYS be: /bookmarks?item=<id>
+- Task search response format:
+  * Header: "**Task matches**" (only when showing results)
+  * Each match: "- [<status>] <content> (Project: <list_title>)"
+- Calendar search response format:
+  * Header: "**Calendar matches**" (only when showing results)
+  * Each match: "- <YYYY-MM-DD> - [<status>] <title> (<priority>)"
 - Always use tools to fetch ids before mutating. Do not guess ids.
 - When user refers to names, search then pick the closest; if multiple matches, ask a short clarifying question.
 - If user says "first/second/third/last phase", choose that phase by order_index (1-based; last = final phase).
@@ -1167,6 +1460,18 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
         )
     if name == "search_bookmarks_semantic":
         return _search_bookmarks_semantic(
+            user_id=user_id,
+            query=args.get("query", ""),
+            limit=args.get("limit", 6),
+        )
+    if name == "search_tasks_semantic":
+        return _search_tasks_semantic(
+            user_id=user_id,
+            query=args.get("query", ""),
+            limit=args.get("limit", 6),
+        )
+    if name == "search_calendar_semantic":
+        return _search_calendar_semantic(
             user_id=user_id,
             query=args.get("query", ""),
             limit=args.get("limit", 6),

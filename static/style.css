@@ -352,6 +352,10 @@ body {
     box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
 }
 
+#lists-container {
+    margin-bottom: 2rem;
+}
+
 .header-row.compact {
     margin-bottom: 1rem;
 }
@@ -782,6 +786,10 @@ header p {
     background: linear-gradient(90deg, var(--accent-color), var(--teal));
 }
 
+.card:has(.card-type.light)::before {
+    background: linear-gradient(90deg, var(--info-color), var(--teal));
+}
+
 .card:has(.card-type.hub) {
     background: linear-gradient(135deg, var(--white) 0%, var(--accent-light) 100%);
     border-color: var(--accent-color);
@@ -790,6 +798,11 @@ header p {
 .card:has(.card-type.list) {
     background: linear-gradient(135deg, var(--white) 0%, var(--primary-light) 100%);
     border-color: var(--primary-color);
+}
+
+.card:has(.card-type.light) {
+    background: linear-gradient(135deg, var(--white) 0%, var(--info-light) 100%);
+    border-color: var(--info-color);
 }
 
 .card:hover {
@@ -803,6 +816,10 @@ header p {
 }
 
 .card:has(.card-type.list):hover {
+    box-shadow: var(--shadow-md);
+}
+
+.card:has(.card-type.light):hover {
     box-shadow: var(--shadow-md);
 }
 
@@ -839,6 +856,12 @@ header p {
     background: linear-gradient(135deg, var(--indigo), var(--secondary-color));
     color: var(--white);
     box-shadow: 0 4px 12px -4px var(--indigo);
+}
+
+.card-type.light {
+    background: linear-gradient(135deg, var(--info-color), var(--teal));
+    color: var(--white);
+    box-shadow: 0 4px 12px -4px var(--info-color);
 }
 
 /* Progress Bar */
@@ -1210,6 +1233,75 @@ header p {
     gap: 0.3rem;
 }
 
+.light-list-view .task-list {
+    gap: 0.45rem;
+    margin-top: 0.5rem;
+}
+
+.light-list-view .task-text {
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.light-list-view .task-item.status-done .task-text {
+    text-decoration-thickness: 1px;
+}
+
+.light-list-view .task-description {
+    font-size: 0.85rem !important;
+    margin-top: 2px !important;
+    color: var(--text-muted) !important;
+}
+
+.light-list-view .task-notes {
+    font-size: 0.8rem !important;
+    margin-top: 2px !important;
+}
+
+.light-list-view .task-meta-lite {
+    margin-top: 4px !important;
+}
+
+.light-list-view .task-select-indicator {
+    top: 10px;
+    right: 12px;
+    width: 24px;
+    height: 24px;
+}
+
+.light-list-view .drag-handle {
+    font-size: 1rem;
+}
+
+.light-list-view .status-buttons .btn-status {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+    border-radius: 999px;
+}
+
+.light-list-view .list-header-compact {
+    background: linear-gradient(135deg, var(--white) 0%, var(--info-light) 100%);
+    border-bottom-width: 1px;
+    box-shadow: none;
+}
+
+.light-list-view .btn-home {
+    background: linear-gradient(135deg, var(--info-color), var(--teal));
+}
+
+.light-list-view .btn-back {
+    border-width: 1px;
+    padding: 0.4rem 0.7rem;
+    min-height: 36px;
+    min-width: 36px;
+}
+
+.light-list-view .bulk-actions {
+    border: 1px solid rgba(6, 182, 212, 0.2);
+    background: rgba(6, 182, 212, 0.06);
+    box-shadow: none;
+}
+
 .task-item {
     background: var(--white);
     border: 2px solid var(--border-color);
@@ -1300,6 +1392,51 @@ header p {
 .task-item.status-done .task-text {
     text-decoration: line-through;
     color: var(--text-muted);
+}
+
+/* Light list task rows (override base task styles) */
+.light-list-view .task-item,
+.light-list-view .task-item.status-not_started {
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 0.75rem 0.9rem;
+    box-shadow: none;
+    background: var(--white);
+    gap: 1rem;
+}
+
+.light-list-view .task-item.status-in_progress {
+    background: var(--white);
+    border-color: var(--border-color);
+    box-shadow: none;
+}
+
+.light-list-view .task-item.status-done {
+    background: var(--white);
+    border-color: var(--border-color);
+    box-shadow: none;
+}
+
+.light-list-view .task-item:hover {
+    box-shadow: none;
+    transform: none;
+    border-color: var(--border-color);
+}
+
+.light-list-view .task-item.status-in_progress:hover {
+    border-color: var(--border-color);
+}
+
+.light-list-view .task-item.status-done:hover {
+    border-color: var(--border-color);
+}
+
+.light-list-view .drag-handle {
+    display: flex;
+}
+
+.light-list-view .task-footer {
+    gap: 0.5rem;
 }
 
 /* Override strikethrough for phases */
@@ -8159,6 +8296,7 @@ button.meta-chip {
 }
 .btn.header-add-circle {
     padding: 0;
+    border-radius: 999px;
 }
 
 .bookmarks-page .btn-primary {
@@ -8841,6 +8979,20 @@ button.meta-chip {
     font-size: 0.95rem;
     font-weight: 600;
     color: var(--text-color);
+}
+
+.quick-access-lock {
+    margin-left: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.quick-access-card.protected {
+    border-color: var(--warning-color);
+}
+
+.quick-access-card.protected .quick-access-icon {
+    background: linear-gradient(135deg, var(--warning-color), var(--warning-dark, #d4a106));
 }
 
 .quick-access-subtitle {

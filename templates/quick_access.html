@@ -54,6 +54,7 @@
                 <option value="custom">Custom URL</option>
                 <option value="list">Project/List</option>
                 <option value="note">Note</option>
+                <option value="folder">Note Folder</option>
                 <option value="calendar">Calendar Date</option>
             </select>
         </div>
@@ -81,6 +82,17 @@
             </div>
             <div id="qa-note-nav-container" class="qa-nav-container">
                 <!-- Note navigation options populated by JS -->
+            </div>
+        </div>
+        <div class="form-group" id="qa-folder-group" style="display: none;">
+            <label>Select Folder</label>
+            <div class="qa-nav-header">
+                <button class="btn btn-secondary btn-small" id="qa-folder-back-button" style="display:none;" onclick="qaFolderNavBack()">
+                    <i class="fa-solid fa-arrow-left"></i> Back
+                </button>
+            </div>
+            <div id="qa-folder-nav-container" class="qa-nav-container">
+                <!-- Folder navigation options populated by JS -->
             </div>
         </div>
         <div class="form-group" id="qa-date-group" style="display: none;">
@@ -114,13 +126,22 @@ async function loadQuickAccessItems() {
         items.forEach(item => {
             qaItemsById.set(item.id, item);
             const card = document.createElement('a');
-            card.className = 'quick-access-card';
+            card.className = 'quick-access-card' + (item.is_protected ? ' protected' : '');
             card.href = item.url;
             card.dataset.id = item.id;
+            card.dataset.protected = item.is_protected ? 'true' : 'false';
+            card.dataset.protectedType = item.protected_type || '';
+            card.dataset.itemType = item.item_type || '';
+            card.dataset.referenceId = item.reference_id || '';
+            if (item.protected_folder_id) {
+                card.dataset.protectedFolderId = item.protected_folder_id;
+            }
+
+            const lockIcon = item.is_protected ? '<i class="quick-access-lock fa-solid fa-lock"></i>' : '';
 
             card.innerHTML = `
                 <div class="quick-access-icon"><i class="${item.icon}"></i></div>
-                <div class="quick-access-title">${escapeHtml(item.title)}</div>
+                <div class="quick-access-title">${escapeHtml(item.title)}${lockIcon}</div>
                 <button class="quick-access-edit" onclick="openEditQuickAccessModal(${item.id}, event)" title="Edit">
                     <i class="fa-solid fa-pen"></i>
                 </button>
@@ -128,6 +149,9 @@ async function loadQuickAccessItems() {
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             `;
+
+            // Add click handler for protected items
+            card.addEventListener('click', handleQuickAccessCardClick);
 
             grid.appendChild(card);
         });
@@ -137,6 +161,93 @@ async function loadQuickAccessItems() {
         console.error('Failed to load quick access items:', error);
     }
 }
+
+// Handle click on quick access card - check for protection
+function handleQuickAccessCardClick(e) {
+    // Don't intercept edit mode or button clicks
+    if (qaEditMode.active || qaDragState.dragMoved || qaTouchState.active) return;
+    if (e.target.closest('.quick-access-edit') || e.target.closest('.quick-access-delete')) return;
+
+    const card = e.currentTarget;
+    const isProtected = card.dataset.protected === 'true';
+
+    if (!isProtected) return; // Let normal navigation happen
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const protectedType = card.dataset.protectedType;
+    const itemType = card.dataset.itemType;
+    const referenceId = card.dataset.referenceId;
+    const protectedFolderId = card.dataset.protectedFolderId;
+    const targetUrl = card.href;
+
+    // Store pending action for PIN verification using Quick Access specific state
+    window.qaProtectedState.pendingUrl = targetUrl;
+    window.qaProtectedState.protectedType = protectedType;
+    window.qaProtectedState.itemType = itemType;
+    window.qaProtectedState.referenceId = referenceId ? parseInt(referenceId) : null;
+    window.qaProtectedState.protectedFolderId = protectedFolderId ? parseInt(protectedFolderId) : null;
+    window.qaProtectedState.active = true;
+
+    openPinModal();
+}
+
+// Quick Access protected state - exposed globally for app.js to check
+window.qaProtectedState = {
+    active: false,
+    pendingUrl: null,
+    protectedType: null,
+    itemType: null,
+    referenceId: null,
+    protectedFolderId: null
+};
+
+// Verify PIN for Quick Access protected items - exposed globally for app.js to call
+window.verifyQAProtectedPin = async function(pin) {
+    const { protectedType, itemType, referenceId, protectedFolderId, pendingUrl } = window.qaProtectedState;
+
+    try {
+        let unlockEndpoint;
+
+        // Determine what to unlock
+        if (protectedType === 'note' && itemType === 'note') {
+            unlockEndpoint = `/api/notes/${referenceId}/unlock`;
+        } else if (protectedType === 'folder' && itemType === 'folder') {
+            unlockEndpoint = `/api/note-folders/${referenceId}/unlock`;
+        } else if (protectedType === 'parent_folder') {
+            // Note is in a protected folder - unlock the folder first
+            unlockEndpoint = `/api/note-folders/${protectedFolderId}/unlock`;
+        } else {
+            showToast('Unknown protection type', 'error', 3000);
+            return false;
+        }
+
+        const res = await fetch(unlockEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin })
+        });
+
+        if (res.ok) {
+            closePinModal();
+            window.qaProtectedState.active = false;
+            // Navigate to the target
+            window.location.href = pendingUrl;
+            return true;
+        } else {
+            const data = await res.json();
+            showToast(data.error || 'Incorrect PIN', 'error', 3000);
+            const input = document.getElementById('pin-input');
+            if (input) input.value = '';
+            return false;
+        }
+    } catch (e) {
+        console.error('Error verifying PIN:', e);
+        showToast('Error verifying PIN', 'error', 3000);
+        return false;
+    }
+};
 
 function setQuickAccessModalMode(mode) {
     const titleEl = document.getElementById('qa-modal-title');
@@ -164,7 +275,7 @@ function openAddQuickAccessModal() {
 
     resetQANavState();
     resetQANoteNavState();
-    resetQANoteNavState();
+    resetQAFolderNavState();
     handleQuickAccessTypeChange();
 
     // Load lists and notes for dropdowns
@@ -178,6 +289,7 @@ function closeAddQuickAccessModal() {
     setQuickAccessModalMode('add');
     resetQANavState();
     resetQANoteNavState();
+    resetQAFolderNavState();
 }
 
 // Close modal when clicking outside
@@ -193,7 +305,12 @@ function handleQuickAccessTypeChange() {
     document.getElementById('qa-url-group').style.display = type === 'custom' ? 'block' : 'none';
     document.getElementById('qa-list-group').style.display = type === 'list' ? 'block' : 'none';
     document.getElementById('qa-note-group').style.display = type === 'note' ? 'block' : 'none';
+    document.getElementById('qa-folder-group').style.display = type === 'folder' ? 'block' : 'none';
     document.getElementById('qa-date-group').style.display = type === 'calendar' ? 'block' : 'none';
+
+    if (type === 'folder') {
+        loadFoldersForQuickAccess();
+    }
 }
 
 // Quick Access navigation state
@@ -621,6 +738,139 @@ function highlightSelectedQANote() {
     }
 }
 
+// Quick Access folder navigation state
+let qaFolderNavState = {
+    currentFolderId: null,
+    stack: [],
+    folders: [],
+    selectedFolderId: null,
+    selectedFolderName: ''
+};
+
+function resetQAFolderNavState() {
+    qaFolderNavState = {
+        currentFolderId: null,
+        stack: [],
+        folders: [],
+        selectedFolderId: null,
+        selectedFolderName: ''
+    };
+}
+
+async function loadFoldersForQuickAccess(selectedFolderId = null) {
+    try {
+        const res = await fetch('/api/note-folders');
+        qaFolderNavState.folders = res.ok ? await res.json() : [];
+        qaFolderNavState.currentFolderId = null;
+        qaFolderNavState.stack = [];
+        if (selectedFolderId) {
+            qaFolderNavState.selectedFolderId = selectedFolderId;
+            const folder = qaFolderNavState.folders.find(f => f.id === selectedFolderId);
+            qaFolderNavState.selectedFolderName = folder ? folder.name : '';
+        }
+        renderQAFolderNavigation();
+    } catch (error) {
+        console.error('Failed to load folders:', error);
+    }
+}
+
+function renderQAFolderNavigation() {
+    const container = document.getElementById('qa-folder-nav-container');
+    const backButton = document.getElementById('qa-folder-back-button');
+    if (!container) return;
+
+    container.innerHTML = '';
+    backButton.style.display = qaFolderNavState.stack.length ? 'inline-flex' : 'none';
+
+    const folderId = qaFolderNavState.currentFolderId;
+    const folders = (qaFolderNavState.folders || [])
+        .filter(folder => (folder.parent_id || null) === (folderId || null))
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+    if (folders.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'qa-nav-empty';
+        empty.textContent = folderId ? 'No subfolders here.' : 'No folders available.';
+        container.appendChild(empty);
+        return;
+    }
+
+    folders.forEach(folder => {
+        const item = document.createElement('button');
+        item.className = 'qa-nav-item';
+        item.dataset.folderId = folder.id;
+
+        const hasChildren = qaFolderNavState.folders.some(f => f.parent_id === folder.id);
+        const arrow = hasChildren ? '<i class="fa-solid fa-chevron-right"></i>' : '';
+        const lockIcon = folder.is_pin_protected ? '<i class="fa-solid fa-lock" style="margin-left: 0.5rem; color: var(--text-muted);"></i>' : '';
+
+        item.innerHTML = `
+            <i class="fa-solid fa-folder"></i>
+            <span>${escapeHtml(folder.name)}${lockIcon}</span>
+            ${arrow}
+        `;
+
+        item.onclick = (e) => {
+            e.preventDefault();
+            if (hasChildren) {
+                // Show option to select this folder or navigate into it
+                selectQAFolder(folder.id, folder.name);
+            } else {
+                selectQAFolder(folder.id, folder.name);
+            }
+        };
+
+        // Double-click to navigate into folder with children
+        if (hasChildren) {
+            item.ondblclick = (e) => {
+                e.preventDefault();
+                navigateQAFolder(folder.id);
+            };
+        }
+
+        container.appendChild(item);
+    });
+
+    highlightSelectedQAFolder();
+}
+
+function navigateQAFolder(folderId) {
+    qaFolderNavState.stack.push(qaFolderNavState.currentFolderId);
+    qaFolderNavState.currentFolderId = folderId;
+    renderQAFolderNavigation();
+}
+
+function qaFolderNavBack() {
+    if (!qaFolderNavState.stack.length) return;
+    const previousParent = qaFolderNavState.stack.pop();
+    qaFolderNavState.currentFolderId = previousParent === undefined ? null : previousParent;
+    renderQAFolderNavigation();
+}
+
+function selectQAFolder(folderId, folderName) {
+    qaFolderNavState.selectedFolderId = folderId;
+    qaFolderNavState.selectedFolderName = folderName;
+
+    const titleInput = document.getElementById('qa-title');
+    if (titleInput && !titleInput.value.trim()) {
+        titleInput.value = folderName;
+    }
+
+    highlightSelectedQAFolder();
+}
+
+function highlightSelectedQAFolder() {
+    if (!qaFolderNavState.selectedFolderId) return;
+    const container = document.getElementById('qa-folder-nav-container');
+    if (!container) return;
+    const items = container.querySelectorAll('.qa-nav-item');
+    items.forEach(item => item.classList.remove('selected'));
+    const selectedItem = container.querySelector(`[data-folder-id="${qaFolderNavState.selectedFolderId}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
+    }
+}
+
 function extractCalendarDate(url) {
     if (!url) return '';
     const match = url.match(/[?&]day=([^&]+)/);
@@ -646,6 +896,7 @@ function openEditQuickAccessModal(id, event) {
     document.getElementById('qa-date').value = item.item_type === 'calendar' ? extractCalendarDate(item.url) : '';
 
     resetQANavState();
+    resetQAFolderNavState();
     if (item.item_type === 'list' && item.reference_id) {
         qaNavState.selectedListId = item.reference_id;
         qaNavState.selectedListTitle = item.title || '';
@@ -658,6 +909,12 @@ function openEditQuickAccessModal(id, event) {
         loadNotesForQuickAccess(item.reference_id);
     } else {
         loadNotesForQuickAccess();
+    }
+
+    if (item.item_type === 'folder' && item.reference_id) {
+        loadFoldersForQuickAccess(item.reference_id);
+    } else {
+        loadFoldersForQuickAccess();
     }
 
     handleQuickAccessTypeChange();
@@ -697,6 +954,14 @@ async function saveQuickAccessItem() {
         }
         url = `/notes/${noteId}`;
         referenceId = parseInt(noteId);
+    } else if (type === 'folder') {
+        const folderId = qaFolderNavState.selectedFolderId;
+        if (!folderId) {
+            alert('Please select a folder');
+            return;
+        }
+        url = `/notes/folder/${folderId}`;
+        referenceId = parseInt(folderId);
     } else if (type === 'calendar') {
         const dateValue = document.getElementById('qa-date').value;
         if (!dateValue) {

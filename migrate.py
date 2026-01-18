@@ -43,6 +43,7 @@ def add_column(cur, table: str, column: str, col_type: str, default_sql: str | N
 def ensure_user_table(cur):
     if table_exists(cur, "user"):
         add_column(cur, "user", "pin_hash", "VARCHAR(200)")
+        add_column(cur, "user", "notes_pin_hash", "VARCHAR(200)")
         add_column(cur, "user", "sidebar_order", "TEXT")
         add_column(cur, "user", "homepage_order", "TEXT")
         print("[ok] user table exists")
@@ -55,6 +56,7 @@ def ensure_user_table(cur):
             email VARCHAR(120) UNIQUE,
             password_hash VARCHAR(200) NOT NULL,
             pin_hash VARCHAR(200),
+            notes_pin_hash VARCHAR(200),
             sidebar_order TEXT,
             homepage_order TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -211,6 +213,7 @@ def ensure_note_folder_table(cur):
                 parent_id INTEGER,
                 name VARCHAR(120) NOT NULL,
                 order_index INTEGER DEFAULT 0,
+                is_pin_protected BOOLEAN DEFAULT 0 NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -221,6 +224,7 @@ def ensure_note_folder_table(cur):
     add_column(cur, "note_folder", "parent_id", "INTEGER")
     add_column(cur, "note_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "note_folder", "is_pin_protected", "BOOLEAN DEFAULT 0 NOT NULL")
     add_column(cur, "note_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
@@ -420,6 +424,44 @@ def ensure_bookmark_table(cur):
     add_column(cur, "bookmark_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_embedding_table(cur):
+    """Create or align the embeddings table used for semantic search."""
+    if not table_exists(cur, "embedding_record"):
+        cur.execute(
+            """
+            CREATE TABLE embedding_record (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                entity_type VARCHAR(30) NOT NULL,
+                entity_id INTEGER NOT NULL,
+                embedding_json TEXT,
+                embedding_dim INTEGER,
+                source_hash VARCHAR(64),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_unique "
+            "ON embedding_record(user_id, entity_type, entity_id)"
+        )
+        print("[add] embedding_record table created")
+        return
+    add_column(cur, "embedding_record", "user_id", "INTEGER")
+    add_column(cur, "embedding_record", "entity_type", "VARCHAR(30)")
+    add_column(cur, "embedding_record", "entity_id", "INTEGER")
+    add_column(cur, "embedding_record", "embedding_json", "TEXT")
+    add_column(cur, "embedding_record", "embedding_dim", "INTEGER")
+    add_column(cur, "embedding_record", "source_hash", "VARCHAR(64)")
+    add_column(cur, "embedding_record", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "embedding_record", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_unique "
+        "ON embedding_record(user_id, entity_type, entity_id)"
+    )
+
+
 def ensure_notification_tables(cur):
     if not table_exists(cur, "notification"):
         cur.execute(
@@ -533,6 +575,7 @@ def main():
         ensure_recurrence_exception_table(cur)
         ensure_recall_table(cur)
         ensure_bookmark_table(cur)
+        ensure_embedding_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)
         conn.commit()

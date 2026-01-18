@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
+<div class="list-view{% if todo_list.type == 'light' %} light-list-view{% endif %}">
 {# Phase headers: anything marked is_phase or legacy status == 'phase' #}
 {% set phases = items|selectattr('is_phase', 'equalto', True)|list + items|selectattr('status', 'equalto', 'phase')|list %}
 {% set tag_ns = namespace(all=[]) %}
@@ -68,6 +69,19 @@
                 </button>
             </div>
         </div>
+        {% elif todo_list.type == 'light' %}
+        <div class="header-add-menu">
+            <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
+                <i class="fa-solid fa-plus"></i>
+                <span>Add</span>
+                <i class="fa-solid fa-caret-down"></i>
+            </button>
+            <div class="header-menu-dropdown header-add-dropdown" id="header-add-dropdown">
+                <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderAddMenu(event);">
+                    <i class="fa-solid fa-plus"></i> Add Task
+                </button>
+            </div>
+        </div>
         {% else %}
         <div class="header-add-menu">
             <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
@@ -106,6 +120,7 @@
     </div>
 </div>
 
+{% if todo_list.type != 'light' %}
 <div class="task-filter-row">
     <div class="task-filter-dropdown" id="task-filter-dropdown">
         <button class="btn btn-secondary btn-filter-trigger" type="button" onclick="toggleTaskFilterMenu(event)">
@@ -140,6 +155,7 @@
     </div>
     <div class="task-filter-pills" id="task-filter-pills"></div>
 </div>
+{% endif %}
 
 <div class="bulk-actions" id="bulk-actions" style="display: none;">
     <div class="bulk-left">
@@ -171,6 +187,7 @@
                         <i class="fa-solid fa-check"></i> Done
                     </button>
                 </div>
+                {% if todo_list.type == 'list' %}
                 <button class="bulk-menu-item bulk-menu-parent" onclick="toggleBulkSubmenu('tag', event)">
                     <span><i class="fa-solid fa-tag"></i> Add tag</span>
                     <i class="fa-solid fa-chevron-right"></i>
@@ -179,6 +196,7 @@
                     <input type="text" id="bulk-tag-input" class="form-control" placeholder="Tag">
                     <button class="btn btn-secondary btn-small" type="button" onclick="bulkAddTag(); toggleBulkMenu(event, true);">Add</button>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -186,9 +204,9 @@
 
 <div class="task-list" id="items-container">
 {% for item in items %}
-    {% set parent_phase_id = item.phase_id if item.phase_id else '' %}
+    {% set parent_phase_id = item.phase_id if (item.phase_id and todo_list.type == 'list') else '' %}
     {% set tag_list = item.tag_list() %}
-    {% if item.is_phase %}
+    {% if todo_list.type == 'list' and item.is_phase %}
         {% set phase_tasks = item.phase_tasks
             |selectattr('is_phase', 'equalto', False)
             |selectattr('status', 'ne', 'phase')
@@ -196,7 +214,7 @@
         {% set phase_done = phase_tasks|selectattr('status', 'equalto', 'done')|list|length %}
         {% set phase_not_done = (phase_tasks|length) - phase_done %}
     {% endif %}
-    <div class="task-item {{ 'phase' if item.is_phase else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if item.is_phase else '' }}" data-phase-parent="{{ parent_phase_id }}" data-tags="{{ tag_list|join(',') }}">
+    <div class="task-item {{ 'phase' if (todo_list.type == 'list' and item.is_phase) else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if (todo_list.type == 'list' and item.is_phase) else '' }}" data-phase-parent="{{ parent_phase_id }}" data-tags="{{ tag_list|join(',') if todo_list.type == 'list' else '' }}">
         <div class="task-content">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
@@ -204,20 +222,20 @@
 
             <div class="task-body" style="flex: 1;">
                 <div class="task-title-row">
-                    {% if item.is_phase %}
+                    {% if todo_list.type == 'list' and item.is_phase %}
                     <button class="btn-icon phase-toggle" onclick="togglePhaseVisibility({{ item.id }})" aria-label="Toggle phase visibility">
                         <i class="fa-solid fa-chevron-up"></i>
                     </button>
                     {% endif %}
                     <div class="task-text">{{ item.content }}</div>
-                    {% if item.is_phase %}
+                    {% if todo_list.type == 'list' and item.is_phase %}
                     <span class="phase-count">{{ phase_not_done }} not done / {{ phase_done }} done</span>
                     {% endif %}
                     {% if item.linked_list and item.linked_list.type == 'hub' %}
                     <div class="hub-pill">Hub</div>
                     {% endif %}
                 </div>
-                {% if item.is_phase %}
+                {% if todo_list.type == 'list' and item.is_phase %}
                 <div class="phase-pill">Phase</div>
                 {% endif %}
                 {% if item.description %}
@@ -229,7 +247,7 @@
                     style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; font-style: italic;">{{
                     item.notes|linkify_text }}</div>
                 {% endif %}
-                {% if tag_list %}
+                {% if todo_list.type == 'list' and tag_list %}
                 <div class="task-tags">
                     {% for tag in tag_list %}
                     <span class="tag-chip" data-tag="{{ tag }}">{{ tag }}</span>
@@ -285,7 +303,7 @@
                 </div>
                 {% endif %}
 
-                {% if item.is_phase %}
+                {% if todo_list.type == 'list' and item.is_phase %}
                 <button class="btn btn-secondary phase-inline-add" onclick="openAddItemModal({{ item.id }}, 'task')">
                     <i class="fa-solid fa-plus"></i> Add Task
                 </button>
@@ -304,7 +322,7 @@
                 </div>
                 {% endif %}
 
-                {% if todo_list.type == 'list' and not item.is_phase %}
+                {% if todo_list.type in ['list', 'light'] and not item.is_phase %}
                 <div class="status-buttons">
                     <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
                     <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
@@ -315,7 +333,7 @@
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                            <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
                         </button>
                         <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
@@ -367,6 +385,8 @@
                 {% endfor %}
             </select>
         </div>
+        {% endif %}
+        {% if todo_list.type in ['list', 'light'] %}
         <div class="form-group">
             <label>Description</label>
             <textarea id="item-description" class="form-control" placeholder="Brief description..." rows="2"></textarea>
@@ -375,6 +395,8 @@
             <label>Notes</label>
             <textarea id="item-notes" class="form-control" placeholder="Additional notes..." rows="3"></textarea>
         </div>
+        {% endif %}
+        {% if todo_list.type == 'list' %}
         <div class="form-group">
             <label>Tags (comma separated)</label>
             <input type="text" id="item-tags" class="form-control" placeholder="e.g. home, errands">
@@ -408,10 +430,12 @@
             <label>Notes</label>
             <textarea id="edit-item-notes" class="form-control" rows="3"></textarea>
         </div>
+        {% if todo_list.type == 'list' %}
         <div class="form-group">
             <label>Tags (comma separated)</label>
             <input type="text" id="edit-item-tags" class="form-control">
         </div>
+        {% endif %}
         <div class="modal-actions">
             <button class="btn" onclick="closeEditItemModal()">Cancel</button>
             <button class="btn btn-primary" onclick="saveItemChanges()">Save</button>
@@ -433,6 +457,11 @@
   - [>] Task 2
 # Project Two :: with description
   - [x] Completed Task"></textarea>
+            {% elif todo_list.type == 'light' %}
+            <label>Task Outline</label>
+            <textarea id="bulk-import-text" class="form-control" rows="10" placeholder="- [ ] Task 1 :: with description
+- [x] Task 2
+Task 3 ::: notes"></textarea>
             {% else %}
             <label>Task Outline</label>
             <textarea id="bulk-import-text" class="form-control" rows="10" placeholder="# Phase One
@@ -445,6 +474,8 @@
             <div><strong>Projects:</strong> Start with <code># </code>. To create a nested hub, add <code>[hub]</code> at the end (e.g., <code># Q4 Initiatives [hub]</code>).</div>
             <div><strong>Phases:</strong> Indent under a project and use <code>## </code> (e.g., <code>  ## Discovery</code>).</div>
             <div><strong>Tasks:</strong> Indent under a project or phase and use <code>- </code>, <code>- [ ]</code>, <code>- [>]</code>, or <code>- [x]</code>.</div>
+            {% elif todo_list.type == 'light' %}
+            <div><strong>Tasks:</strong> Use <code>- </code>, <code>- [ ]</code>, <code>- [>]</code>, or <code>- [x]</code>.</div>
             {% else %}
             <div><strong>Phases:</strong> Start a line with <code># </code> (e.g., <code># My Phase</code>).</div>
             <div><strong>Tasks:</strong> Use <code>- [ ]</code>, <code>- [>]</code>, or <code>- [x]</code>.</div>
@@ -553,4 +584,5 @@
     });
     {% endif %}
 </script>
+</div>
 {% endblock %}

@@ -9,7 +9,16 @@ import threading
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
-from ai_service import run_ai_chat, get_openai_client
+from ai_service import run_ai_chat
+from ai_embeddings import get_openai_client
+from embedding_service import (
+    ENTITY_BOOKMARK,
+    ENTITY_CALENDAR,
+    ENTITY_RECALL,
+    ENTITY_TODO_ITEM,
+    ENTITY_TODO_LIST,
+    refresh_embedding_for_entity,
+)
 from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
@@ -312,6 +321,25 @@ def start_recall_processing(recall_id):
     thread.start()
 
 
+def start_embedding_job(user_id, entity_type, entity_id):
+    """Start background embedding refresh for a single entity."""
+    def _run():
+        with app.app_context():
+            try:
+                refresh_embedding_for_entity(user_id, entity_type, entity_id)
+            except Exception as exc:
+                app.logger.warning(
+                    "Embedding refresh failed for %s:%s user=%s (%s)",
+                    entity_type,
+                    entity_id,
+                    user_id,
+                    exc,
+                )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+
 def parse_outline(outline_text, list_type='list'):
     """Parse a pasted outline into item dicts with content/status/description/notes."""
 
@@ -332,6 +360,7 @@ def parse_outline(outline_text, list_type='list'):
         return parse_hub_outline(outline_text) # This was missing the return
 
     # --- Default parsing for simple lists ---
+    allow_phases = list_type != 'light'
     items = []
     for raw_line in outline_text.splitlines():
         line = raw_line.rstrip()
@@ -339,14 +368,19 @@ def parse_outline(outline_text, list_type='list'):
             continue
 
         stripped = line.strip()
+        if not allow_phases:
+            if stripped.startswith('#'):
+                stripped = stripped.lstrip('#').strip()
+            if stripped.endswith(':') and len(stripped) > 1:
+                stripped = stripped[:-1].strip()
 
         # Headers / phases: markdown-style "#" or trailing colon
-        if stripped.startswith('#'):
+        if allow_phases and stripped.startswith('#'):
             title, description, notes = split_fields(stripped.lstrip('#').strip())
             if title:
                 items.append({'content': title, 'status': 'not_started', 'is_phase': True, 'description': description, 'notes': notes})
             continue
-        if stripped.endswith(':') and len(stripped) > 1:
+        if allow_phases and stripped.endswith(':') and len(stripped) > 1:
             title, description, notes = split_fields(stripped[:-1].strip())
             if title:
                 items.append({'content': title, 'status': 'not_started', 'is_phase': True, 'description': description, 'notes': notes})
@@ -482,6 +516,13 @@ def export_list_outline(todo_list, indent=0):
                 continue
             line_prefix = prefix + ('  ' if item.phase_id else '')
             lines.append(f"{line_prefix}- [{_status_mark(item.status)}] {_format_metadata(item.content, item.description, item.notes)}")
+        return lines
+    if todo_list.type == 'light':
+        for item in ordered_items:
+            if is_phase_header(item):
+                lines.append(f"{prefix}- [{_status_mark('not_started')}] {_format_metadata(item.content, item.description, item.notes)}")
+                continue
+            lines.append(f"{prefix}- [{_status_mark(item.status)}] {_format_metadata(item.content, item.description, item.notes)}")
         return lines
 
     # Hub: export each project (linked list) and its children
@@ -797,6 +838,7 @@ def _ensure_recurring_instances(user_id, start_day, end_day):
         for ev in created_events:
             if ev.reminder_minutes_before is not None and ev.start_time:
                 _schedule_reminder_job(ev)
+            start_embedding_job(user_id, ENTITY_CALENDAR, ev.id)
 
 
 def _rollover_incomplete_events():
@@ -869,6 +911,8 @@ def _rollover_incomplete_events():
             for uid in user_ids:
                 created_events = 0
                 created_phases = 0
+                created_calendar_events = []
+                created_calendar_phases = []
 
                 # Track already created rollovers so reruns stay idempotent
                 existing_rollovers = CalendarEvent.query.filter(
@@ -937,6 +981,7 @@ def _rollover_incomplete_events():
                                 )
                                 db.session.add(copy_phase)
                                 db.session.flush()
+                                created_calendar_phases.append(copy_phase)
                                 phase_map[orig_phase.id] = copy_phase.id
                                 created_phases += 1
                         new_phase_id = phase_map.get(ev.phase_id)
@@ -971,6 +1016,7 @@ def _rollover_incomplete_events():
                         item_note=ev.item_note
                     )
                     db.session.add(copy_event)
+                    created_calendar_events.append(copy_event)
                     created_events += 1
                     events_to_delete[ev.id] = ev
                     if ev.todo_item_id:
@@ -989,6 +1035,8 @@ def _rollover_incomplete_events():
                         f"Rollover user {uid}: created {created_events} events, "
                         f"created {created_phases} phases, removed {len(duplicates_to_delete)} duplicates"
                     )
+                for created in created_calendar_phases + created_calendar_events:
+                    start_embedding_job(uid, ENTITY_CALENDAR, created.id)
             app.logger.info(f"Rollover finished (worker {worker_id})")
         finally:
             # Release the lock
@@ -1805,6 +1853,7 @@ def handle_lists():
         new_list = TodoList(title=data['title'], type=list_type, user_id=user.id, order_index=next_order)
         db.session.add(new_list)
         db.session.commit()
+        start_embedding_job(user.id, ENTITY_TODO_LIST, new_list.id)
         return jsonify(new_list.to_dict()), 201
 
     # Filter out lists that are children (linked to an item)
@@ -1833,7 +1882,7 @@ def reorder_lists():
         return jsonify({'error': 'ids array required'}), 400
 
     query = TodoList.query.filter(TodoList.user_id == user.id, TodoList.id.in_(ids))
-    if list_type in ['hub', 'list']:
+    if list_type in ['hub', 'list', 'light']:
         query = query.filter(TodoList.type == list_type)
     lists = query.all()
     list_map = {l.id: l for l in lists}
@@ -2038,13 +2087,13 @@ def note_folder_detail(folder_id):
     if request.method == 'GET':
         return jsonify(folder.to_dict())
 
-    # Block DELETE on protected folders - require PIN
+    # Block DELETE on protected folders - require notes PIN
     if request.method == 'DELETE':
         if folder.is_pin_protected:
             data = request.json or {}
             pin = str(data.get('pin', '')).strip()
-            if not pin or not user.check_pin(pin):
-                return jsonify({'error': 'Folder is protected. Please enter PIN.'}), 403
+            if not pin or not user.check_notes_pin(pin):
+                return jsonify({'error': 'Folder is protected. Please enter notes PIN.'}), 403
         parent_id = folder.parent_id
         NoteFolder.query.filter_by(user_id=user.id, parent_id=folder.id).update(
             {'parent_id': parent_id}
@@ -2057,11 +2106,11 @@ def note_folder_detail(folder_id):
         return jsonify({'deleted': True})
 
     data = request.json or {}
-    # For protected folders, require PIN for any modification
+    # For protected folders, require notes PIN for any modification
     if folder.is_pin_protected:
         pin = str(data.get('pin', '')).strip()
-        if not pin or not user.check_pin(pin):
-            return jsonify({'error': 'Folder is protected. Please enter PIN.'}), 403
+        if not pin or not user.check_notes_pin(pin):
+            return jsonify({'error': 'Folder is protected. Please enter notes PIN.'}), 403
     if 'name' in data:
         name_val = (data.get('name') or '').strip()
         if name_val:
@@ -2074,11 +2123,11 @@ def note_folder_detail(folder_id):
             if not parent:
                 return jsonify({'error': 'Parent folder not found'}), 404
         folder.parent_id = parent_id_int
-    # Handle PIN protection toggle
+    # Handle notes PIN protection toggle
     if 'is_pin_protected' in data:
         is_protected = str(data.get('is_pin_protected')).lower() in ['1', 'true', 'yes', 'on']
-        if is_protected and not user.pin_hash:
-            return jsonify({'error': 'Set a PIN first before protecting folders'}), 400
+        if is_protected and not user.has_notes_pin():
+            return jsonify({'error': 'Set a notes PIN first before protecting folders'}), 400
         folder.is_pin_protected = is_protected
     folder.updated_at = _now_local()
     db.session.commit()
@@ -2147,6 +2196,8 @@ def handle_recalls():
         db.session.add(recall)
         db.session.commit()
 
+        start_embedding_job(user.id, ENTITY_RECALL, recall.id)
+
         # Start background AI processing
         start_recall_processing(recall.id)
 
@@ -2204,6 +2255,7 @@ def recall_detail(recall_id):
 
     recall.updated_at = _now_local()
     db.session.commit()
+    start_embedding_job(user.id, ENTITY_RECALL, recall.id)
     return jsonify(recall.to_dict())
 
 
@@ -2223,6 +2275,7 @@ def regenerate_recall(recall_id):
     recall.summary = None
     db.session.commit()
 
+    start_embedding_job(user.id, ENTITY_RECALL, recall.id)
     start_recall_processing(recall.id)
     return jsonify(recall.to_dict())
 
@@ -2236,24 +2289,24 @@ def handle_note(note_id):
 
     note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
 
-    # Block DELETE on protected notes - require PIN
+    # Block DELETE on protected notes - require notes PIN
     if request.method == 'DELETE':
         if note.is_pin_protected:
             data = request.json or {}
             pin = str(data.get('pin', '')).strip()
-            if not pin or not user.check_pin(pin):
-                return jsonify({'error': 'Note is protected. Please enter PIN.'}), 403
+            if not pin or not user.check_notes_pin(pin):
+                return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
         db.session.delete(note)
         db.session.commit()
         return '', 204
 
     if request.method == 'PUT':
         data = request.json or {}
-        # For protected notes, require PIN for any modification
+        # For protected notes, require notes PIN for any modification
         if note.is_pin_protected:
             pin = str(data.get('pin', '')).strip()
-            if not pin or not user.check_pin(pin):
-                return jsonify({'error': 'Note is protected. Please enter PIN.'}), 403
+            if not pin or not user.check_notes_pin(pin):
+                return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
         if 'title' in data:
             fallback = 'Untitled List' if note.note_type == 'list' else 'Untitled Note'
             note.title = (data.get('title') or '').strip() or fallback
@@ -2317,11 +2370,11 @@ def handle_note(note_id):
                 if not folder:
                     return jsonify({'error': 'Folder not found for this user'}), 404
                 note.folder_id = folder_id_int
-        # Handle PIN protection toggle
+        # Handle notes PIN protection toggle
         if 'is_pin_protected' in data:
             is_protected = str(data.get('is_pin_protected')).lower() in ['1', 'true', 'yes', 'on']
-            if is_protected and not user.pin_hash:
-                return jsonify({'error': 'Set a PIN first before protecting notes'}), 400
+            if is_protected and not user.has_notes_pin():
+                return jsonify({'error': 'Set a notes PIN first before protecting notes'}), 400
             note.is_pin_protected = is_protected
         db.session.commit()
         payload = note.to_dict()
@@ -2623,6 +2676,40 @@ def verify_pin():
         return jsonify({'error': 'Incorrect PIN'}), 403
 
 
+@app.route('/api/notes-pin/status', methods=['GET'])
+def notes_pin_status():
+    """Check if user has a notes PIN set."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    return jsonify({'has_notes_pin': user.has_notes_pin()})
+
+
+@app.route('/api/notes-pin', methods=['POST'])
+def set_notes_pin():
+    """Set or update the notes PIN."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    pin = str(data.get('pin', '')).strip()
+    confirm_pin = str(data.get('confirm_pin', '')).strip()
+
+    if not pin or len(pin) != 4 or not pin.isdigit():
+        return jsonify({'error': 'PIN must be exactly 4 digits'}), 400
+
+    if pin != confirm_pin:
+        return jsonify({'error': 'PINs do not match'}), 400
+
+    try:
+        user.set_notes_pin(pin)
+        db.session.commit()
+        return jsonify({'success': True})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @app.route('/api/notes/<int:note_id>/unlock', methods=['POST'])
 def unlock_note(note_id):
     """Verify PIN and return full note content (one-time, no session persistence)."""
@@ -2642,10 +2729,10 @@ def unlock_note(note_id):
     data = request.json or {}
     pin = str(data.get('pin', '')).strip()
 
-    if not user.pin_hash:
-        return jsonify({'error': 'No PIN is set'}), 400
+    if not user.has_notes_pin():
+        return jsonify({'error': 'No notes PIN is set'}), 400
 
-    if not user.check_pin(pin):
+    if not user.check_notes_pin(pin):
         return jsonify({'error': 'Incorrect PIN'}), 403
 
     # PIN correct - return full note content
@@ -2671,10 +2758,10 @@ def unlock_folder(folder_id):
     data = request.json or {}
     pin = str(data.get('pin', '')).strip()
 
-    if not user.pin_hash:
-        return jsonify({'error': 'No PIN is set'}), 400
+    if not user.has_notes_pin():
+        return jsonify({'error': 'No notes PIN is set'}), 400
 
-    if not user.check_pin(pin):
+    if not user.check_notes_pin(pin):
         return jsonify({'error': 'Incorrect PIN'}), 403
 
     # PIN correct - return success
@@ -2691,7 +2778,32 @@ def handle_quick_access():
 
     if request.method == 'GET':
         items = QuickAccessItem.query.filter_by(user_id=user.id).order_by(QuickAccessItem.order_index).all()
-        return jsonify([item.to_dict() for item in items])
+        result = []
+        for item in items:
+            item_dict = item.to_dict()
+            # Add protection status for notes and folders
+            item_dict['is_protected'] = False
+            item_dict['protected_type'] = None  # 'note', 'folder', or 'parent_folder'
+            if item.item_type == 'note' and item.reference_id:
+                note = Note.query.filter_by(id=item.reference_id, user_id=user.id).first()
+                if note:
+                    if note.is_pin_protected:
+                        item_dict['is_protected'] = True
+                        item_dict['protected_type'] = 'note'
+                    elif note.folder_id:
+                        # Check if parent folder is protected
+                        folder = NoteFolder.query.filter_by(id=note.folder_id, user_id=user.id).first()
+                        if folder and folder.is_pin_protected:
+                            item_dict['is_protected'] = True
+                            item_dict['protected_type'] = 'parent_folder'
+                            item_dict['protected_folder_id'] = folder.id
+            elif item.item_type == 'folder' and item.reference_id:
+                folder = NoteFolder.query.filter_by(id=item.reference_id, user_id=user.id).first()
+                if folder and folder.is_pin_protected:
+                    item_dict['is_protected'] = True
+                    item_dict['protected_type'] = 'folder'
+            result.append(item_dict)
+        return jsonify(result)
 
     if request.method == 'POST':
         data = request.json
@@ -2833,6 +2945,7 @@ def handle_bookmarks():
     )
     db.session.add(new_item)
     db.session.commit()
+    start_embedding_job(user.id, ENTITY_BOOKMARK, new_item.id)
     return jsonify(new_item.to_dict()), 201
 
 
@@ -2878,6 +2991,7 @@ def bookmark_detail(item_id):
             item.pinned = pinned
 
         db.session.commit()
+        start_embedding_job(user.id, ENTITY_BOOKMARK, item.id)
         return jsonify(item.to_dict())
 
     db.session.delete(item)
@@ -3161,6 +3275,7 @@ def calendar_events():
     if new_event.reminder_minutes_before is not None and new_event.start_time:
         _schedule_reminder_job(new_event)
 
+    start_embedding_job(user.id, ENTITY_CALENDAR, new_event.id)
     return jsonify(new_event.to_dict()), 201
 
 
@@ -3524,6 +3639,7 @@ def calendar_event_detail(event_id):
         elif old_status == 'done':
             event.reminder_sent = False
     db.session.commit()
+    start_embedding_job(user.id, ENTITY_CALENDAR, event.id)
 
     # Reschedule reminder if relevant fields changed
     if event.status != 'done':
@@ -3961,6 +4077,7 @@ def handle_list(list_id):
         data = request.json
         todo_list.title = data.get('title', todo_list.title)
         db.session.commit()
+        start_embedding_job(user.id, ENTITY_TODO_LIST, todo_list.id)
         return jsonify(todo_list.to_dict())
         
     return jsonify(todo_list.to_dict())
@@ -3978,6 +4095,8 @@ def list_items_in_list(list_id):
     status_filter = request.args.get('status')
     phase_id = request.args.get('phase_id')
     include_phases = request.args.get('include_phases', 'true').lower() in ['1', 'true', 'yes', 'on']
+    if todo_list.type == 'light':
+        include_phases = False
 
     allowed_statuses = {'not_started', 'in_progress', 'done'}
     if status_filter and status_filter not in allowed_statuses:
@@ -4021,8 +4140,13 @@ def create_item(list_id):
         status = 'not_started'
     if is_phase_item or is_project:
         status = 'not_started'
+    if todo_list.type == 'light':
+        is_project = False
+        is_phase_item = False
+        phase_id = None
+        tags_raw = None
     next_order = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=list_id).scalar() + 1
-    tags = _tags_to_string(tags_raw)
+    tags = _tags_to_string(tags_raw) if todo_list.type != 'light' else None
     new_item = TodoItem(
         list_id=list_id,
         content=content,
@@ -4031,7 +4155,7 @@ def create_item(list_id):
         tags=tags if tags else None,
         status=status,
         order_index=next_order,
-        phase_id=int(phase_id) if (phase_id and not is_phase_item) else None,
+        phase_id=int(phase_id) if (phase_id and not is_phase_item and todo_list.type == 'list') else None,
         is_phase=is_phase_item,
         due_date=due_date
     )
@@ -4064,6 +4188,9 @@ def create_item(list_id):
         insert_item_in_order(todo_list, new_item)
 
     db.session.commit()
+    start_embedding_job(user.id, ENTITY_TODO_ITEM, new_item.id)
+    if is_project and new_item.linked_list_id:
+        start_embedding_job(user.id, ENTITY_TODO_LIST, new_item.linked_list_id)
     return jsonify(new_item.to_dict()), 201
 
 @app.route('/api/items/<int:item_id>', methods=['PUT', 'DELETE'])
@@ -4094,6 +4221,7 @@ def handle_item(item_id):
         data = request.json
         old_due_date = item.due_date
         old_status = item.status
+        calendar_event_to_refresh = None
         new_status = data.get('status', item.status)
         allowed_statuses = {'not_started', 'in_progress', 'done'}
         if new_status not in allowed_statuses:
@@ -4108,8 +4236,11 @@ def handle_item(item_id):
         item.description = data.get('description', item.description)
         item.notes = data.get('notes', item.notes)
         if 'tags' in data:
-            tags_value = _tags_to_string(data.get('tags'))
-            item.tags = tags_value if tags_value else None
+            if item.list and item.list.type == 'light':
+                item.tags = None
+            else:
+                tags_value = _tags_to_string(data.get('tags'))
+                item.tags = tags_value if tags_value else None
         if 'due_date' in data:
             due_date_raw = data.get('due_date')
             item.due_date = _parse_day_value(due_date_raw) if due_date_raw else None
@@ -4121,6 +4252,7 @@ def handle_item(item_id):
                         linked_event.order_index = _next_calendar_order(item.due_date, user.id)
                         if linked_event.reminder_minutes_before is not None and linked_event.start_time:
                             _schedule_reminder_job(linked_event)
+                        calendar_event_to_refresh = linked_event.id
                     else:
                         _cancel_reminder_job(linked_event)
                         db.session.delete(linked_event)
@@ -4144,6 +4276,9 @@ def handle_item(item_id):
                 phase_item.update_phase_status()
 
         db.session.commit()
+        start_embedding_job(user.id, ENTITY_TODO_ITEM, item.id)
+        if calendar_event_to_refresh:
+            start_embedding_job(user.id, ENTITY_CALENDAR, calendar_event_to_refresh)
         return jsonify(item.to_dict())
 
 
@@ -4328,13 +4463,17 @@ def move_item(item_id):
     except (ValueError, TypeError):
         return jsonify({'error': 'Invalid destination list ID'}), 400
 
-    dest_list = TodoList.query.filter_by(id=dest_list_id, user_id=user.id, type='list').first()
+    dest_list = TodoList.query.filter(
+        TodoList.id == dest_list_id,
+        TodoList.user_id == user.id,
+        TodoList.type.in_(['list', 'light'])
+    ).first()
     if not dest_list:
-        return jsonify({'error': 'Destination is not a valid project list'}), 404
+        return jsonify({'error': 'Destination is not a valid task list'}), 404
 
     # Validate destination phase (optional)
     phase_obj = None
-    if dest_phase_id is not None:
+    if dest_phase_id is not None and dest_list.type == 'list':
         try:
             dest_phase_id_int = int(dest_phase_id)
         except (ValueError, TypeError):
@@ -4344,6 +4483,8 @@ def move_item(item_id):
             return jsonify({'error': 'Destination phase not found in that project'}), 404
         dest_phase_id = dest_phase_id_int
     else:
+        dest_phase_id = None
+    if dest_list.type == 'light':
         dest_phase_id = None
 
     old_list = item.list
@@ -4375,14 +4516,18 @@ def move_destinations(list_id):
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    project_lists = TodoList.query.filter_by(user_id=user.id, type='list').all()
+    project_lists = TodoList.query.filter(
+        TodoList.user_id == user.id,
+        TodoList.type.in_(['list', 'light'])
+    ).all()
     payload = []
     for l in project_lists:
         canonicalize_phase_flags(l)
         payload.append({
             'id': l.id,
             'title': l.title,
-            'phases': [{'id': i.id, 'content': i.content} for i in l.items if is_phase_header(i)]
+            'type': l.type,
+            'phases': [{'id': i.id, 'content': i.content} for i in l.items if is_phase_header(i)] if l.type == 'list' else []
         })
     return jsonify(payload)
 
@@ -4461,6 +4606,7 @@ def bulk_import(list_id):
 
     parsed_items = parse_outline(outline, list_type=todo_list.type)
     created_items = []
+    created_lists = []
 
     if todo_list.type == 'hub':
         # For hubs, parsed_items is a list of projects
@@ -4480,6 +4626,7 @@ def bulk_import(list_id):
             project_item.linked_list_id = child_list.id
             db.session.add(project_item)
             created_items.append(project_item)
+            created_lists.append(child_list)
 
             # Add phases and tasks to the child list
             for item_data in project_data.get('items', []):
@@ -4534,6 +4681,10 @@ def bulk_import(list_id):
     for item in created_items:
         insert_item_in_order(item.list, item)
     db.session.commit()
+    for item in created_items:
+        start_embedding_job(user.id, ENTITY_TODO_ITEM, item.id)
+    for child_list in created_lists:
+        start_embedding_job(user.id, ENTITY_TODO_LIST, child_list.id)
     return jsonify([item.to_dict() for item in created_items]), 201
 
 
@@ -4618,6 +4769,8 @@ def bulk_items():
         for item in items:
             if is_phase_header(item):
                 continue
+            if item.list and item.list.type == 'light':
+                continue
             current_tags = _normalize_tags(item.tags)
             changed = False
             for tag in tags_to_add:
@@ -4650,12 +4803,16 @@ def bulk_items():
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid destination list ID'}), 400
 
-        dest_list = TodoList.query.filter_by(id=dest_list_id, user_id=user.id, type='list').first()
+        dest_list = TodoList.query.filter(
+            TodoList.id == dest_list_id,
+            TodoList.user_id == user.id,
+            TodoList.type.in_(['list', 'light'])
+        ).first()
         if not dest_list:
-            return jsonify({'error': 'Destination is not a valid project list'}), 404
+            return jsonify({'error': 'Destination is not a valid task list'}), 404
 
         dest_phase_obj = None
-        if dest_phase_id is not None:
+        if dest_phase_id is not None and dest_list.type == 'list':
             try:
                 dest_phase_id_int = int(dest_phase_id)
             except (ValueError, TypeError):
@@ -4665,6 +4822,8 @@ def bulk_items():
                 return jsonify({'error': 'Destination phase not found in that project'}), 404
             dest_phase_id = dest_phase_id_int
         else:
+            dest_phase_id = None
+        if dest_list.type == 'light':
             dest_phase_id = None
 
         # Only move regular tasks (no phases or linked projects)
