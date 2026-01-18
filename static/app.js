@@ -86,7 +86,8 @@ let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null };
+let pinState = { hasPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
 let noteAutoSaveTimer = null;
@@ -3174,7 +3175,8 @@ function initNotesListPage() {
     // Initialize FAB
     initNotesFab();
 
-    // Load notes and folders
+    // Check PIN status and load notes
+    checkPinStatus();
     loadNotesUnified();
 }
 
@@ -3326,9 +3328,13 @@ function createSectionHeader(title) {
 
 function createNoteItem(note, isPinned) {
     const item = document.createElement('div');
-    item.className = 'notes-item' + (isPinned ? ' pinned-item' : '');
+    const isProtected = note.is_pin_protected;
+    const isLocked = note.locked;
+    item.className = 'notes-item' + (isPinned ? ' pinned-item' : '') + (isProtected ? ' protected' : '') + (isLocked ? ' locked' : '');
     item.dataset.itemId = note.id;
     item.dataset.itemType = 'note';
+    item.dataset.protected = isProtected ? 'true' : 'false';
+    item.dataset.locked = isLocked ? 'true' : 'false';
     if (isPinned) {
         item.draggable = true;
     }
@@ -3337,6 +3343,7 @@ function createNoteItem(note, isPinned) {
     const iconName = note.note_type === 'list' ? 'fa-list' : 'fa-note-sticky';
     const displayTitle = getNoteDisplayTitle(note);
     const pinLabel = isPinned ? 'Unpin' : 'Pin';
+    const lockIcon = isProtected ? '<i class="notes-item-lock fa-solid fa-lock"></i>' : '';
 
     item.innerHTML = `
         <div class="notes-item-swipe-layer swipe-right">
@@ -3353,6 +3360,7 @@ function createNoteItem(note, isPinned) {
                 <i class="fa-solid ${iconName}"></i>
             </div>
             <span class="notes-item-title">${escapeHtml(displayTitle)}</span>
+            ${lockIcon}
             ${isPinned ? '<i class="notes-item-pinned fa-solid fa-thumbtack"></i>' : ''}
             <div class="notes-item-dropdown">
                 <button class="btn-icon" data-note-id="${note.id}" data-pin-label="${pinLabel}" onclick="toggleNoteActionsMenu(${note.id}, event)" title="More actions">
@@ -3367,9 +3375,13 @@ function createNoteItem(note, isPinned) {
 
 function createFolderItem(folder) {
     const item = document.createElement('div');
-    item.className = 'notes-item';
+    const isProtected = folder.is_pin_protected;
+    item.className = 'notes-item' + (isProtected ? ' protected locked' : '');
     item.dataset.itemId = folder.id;
     item.dataset.itemType = 'folder';
+    item.dataset.locked = isProtected ? 'true' : 'false';
+
+    const lockIcon = isProtected ? '<i class="notes-item-lock fa-solid fa-lock"></i>' : '';
 
     item.innerHTML = `
         <div class="notes-item-content">
@@ -3377,6 +3389,7 @@ function createFolderItem(folder) {
                 <i class="fa-solid fa-folder"></i>
             </div>
             <span class="notes-item-title">${escapeHtml(folder.name)}</span>
+            ${lockIcon}
             <i class="notes-item-chevron fa-solid fa-chevron-right"></i>
             <div class="notes-item-dropdown">
                 <button class="btn-icon" data-folder-id="${folder.id}" data-folder-name="${escapeHtml(folder.name)}" onclick="toggleFolderActionsMenu(${folder.id}, event)" title="More actions">
@@ -3422,6 +3435,15 @@ function initNoteSwipeHandlers() {
                 return;
             }
 
+            // Check if note is locked (protected)
+            const isLocked = item.dataset.locked === 'true';
+            if (isLocked) {
+                pinState.pendingNoteId = noteId;
+                pinState.pendingAction = null; // View action, not unprotect
+                openPinModal();
+                return;
+            }
+
             // Otherwise navigate to editor
             openNoteInEditor(noteId);
         });
@@ -3447,6 +3469,16 @@ function initNoteSwipeHandlers() {
                 } else if (action === 'delete' && folder) {
                     deleteNoteFolder(folderId, folder.name);
                 }
+                return;
+            }
+
+            // Check if folder is locked (protected)
+            const isLocked = item.dataset.locked === 'true';
+            if (isLocked) {
+                pinState.pendingFolderId = folderId;
+                pinState.pendingNoteId = null;
+                pinState.pendingAction = 'unlock_folder';
+                openPinModal();
                 return;
             }
 
@@ -3665,8 +3697,11 @@ function toggleNoteActionsMenu(noteId, event) {
 
     // Get pin label from note state
     const note = notesState.notes.find(n => n.id === noteId);
-    const pinLabel = note && note.is_pinned ? 'Unpin' : 'Pin';
+    const pinLabel = note && note.pinned ? 'Unpin' : 'Pin';
     const isListNote = note && note.note_type === 'list';
+    const isProtected = note && note.is_pin_protected;
+    const protectLabel = isProtected ? 'Unprotect' : 'Protect';
+    const protectIcon = isProtected ? 'fa-lock-open' : 'fa-lock';
     const convertOption = isListNote ? '' : `
         <button class="notes-item-menu-option" data-action="convert">
             <i class="fa-solid fa-list-check"></i> Convert to list
@@ -3680,6 +3715,9 @@ function toggleNoteActionsMenu(noteId, event) {
     dropdown.innerHTML = `
         <button class="notes-item-menu-option" data-action="pin">
             <i class="fa-solid fa-thumbtack"></i> ${pinLabel}
+        </button>
+        <button class="notes-item-menu-option" data-action="protect">
+            <i class="fa-solid ${protectIcon}"></i> ${protectLabel}
         </button>
         <button class="notes-item-menu-option" data-action="share">
             <i class="fa-solid fa-share-nodes"></i> Share
@@ -3703,6 +3741,7 @@ function toggleNoteActionsMenu(noteId, event) {
             const action = opt.dataset.action;
             closeNotesDropdown();
             if (action === 'pin') handleNoteMenuPin(noteId);
+            else if (action === 'protect') handleNoteMenuProtect(noteId);
             else if (action === 'share') handleNoteMenuShare(noteId);
             else if (action === 'convert') handleNoteMenuConvert(noteId);
             else if (action === 'move') handleNoteMenuMove(noteId);
@@ -3733,6 +3772,12 @@ function toggleFolderActionsMenu(folderId, event) {
     // Close any existing dropdown
     closeNotesDropdown();
 
+    // Get protection status from folder state
+    const folder = noteFolderState.folders.find(f => f.id === folderId);
+    const isProtected = folder && folder.is_pin_protected;
+    const protectLabel = isProtected ? 'Unprotect' : 'Protect';
+    const protectIcon = isProtected ? 'fa-lock-open' : 'fa-lock';
+
     // Create dropdown
     const dropdown = document.createElement('div');
     dropdown.className = 'notes-item-menu active';
@@ -3740,6 +3785,9 @@ function toggleFolderActionsMenu(folderId, event) {
     dropdown.innerHTML = `
         <button class="notes-item-menu-option" data-action="rename">
             <i class="fa-solid fa-pen"></i> Rename
+        </button>
+        <button class="notes-item-menu-option" data-action="protect">
+            <i class="fa-solid ${protectIcon}"></i> ${protectLabel}
         </button>
         <button class="notes-item-menu-option danger" data-action="delete">
             <i class="fa-solid fa-trash"></i> Delete
@@ -3753,6 +3801,7 @@ function toggleFolderActionsMenu(folderId, event) {
             const action = opt.dataset.action;
             closeNotesDropdown();
             if (action === 'rename') handleFolderMenuRename(folderId, folderName);
+            else if (action === 'protect') handleFolderMenuProtect(folderId);
             else if (action === 'delete') handleFolderMenuDelete(folderId);
         });
     });
@@ -3774,6 +3823,50 @@ document.addEventListener('click', (e) => {
  */
 async function handleNoteMenuPin(noteId) {
     await handleSwipePin(noteId);
+}
+
+async function handleNoteMenuProtect(noteId) {
+    // Check if user has PIN set
+    if (!pinState.hasPin) {
+        openSetPinModal();
+        return;
+    }
+
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    // If note is protected, require PIN to unprotect
+    if (note.is_pin_protected) {
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'unprotect';
+        openPinModal();
+        return;
+    }
+
+    // Protecting an unprotected note - no PIN needed
+    await doProtectNote(noteId, true);
+}
+
+async function doProtectNote(noteId, newProtectedState) {
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_pin_protected: newProtectedState })
+        });
+
+        if (!res.ok) {
+            const data = await res.json();
+            showToast(data.error || 'Failed to update protection', 'error', 3000);
+            return;
+        }
+
+        showToast(newProtectedState ? 'Note protected' : 'Protection removed', 'success', 2000);
+        await loadNotesUnified();
+    } catch (e) {
+        console.error('Error toggling protection:', e);
+        showToast('Error updating protection', 'error', 3000);
+    }
 }
 
 function handleNoteMenuMove(noteId) {
@@ -3920,8 +4013,17 @@ function handleFolderMenuRename(folderId, currentName) {
 }
 
 async function handleFolderMenuDelete(folderId) {
-    const folder = notesState.folders.find(f => f.id === folderId);
+    const folder = noteFolderState.folders.find(f => f.id === folderId);
     if (!folder) return;
+
+    // If folder is protected, require PIN to delete
+    if (folder.is_pin_protected) {
+        pinState.pendingFolderId = folderId;
+        pinState.pendingNoteId = null;
+        pinState.pendingAction = 'delete_folder';
+        openPinModal();
+        return;
+    }
 
     openConfirmModal(`Delete folder "${folder.name}"? Notes inside will be moved out.`, async () => {
         try {
@@ -3936,6 +4038,51 @@ async function handleFolderMenuDelete(folderId) {
             showToast('Failed to delete folder', 'error');
         }
     });
+}
+
+async function handleFolderMenuProtect(folderId) {
+    // Check if user has PIN set
+    if (!pinState.hasPin) {
+        openSetPinModal();
+        return;
+    }
+
+    const folder = noteFolderState.folders.find(f => f.id === folderId);
+    if (!folder) return;
+
+    // If folder is protected, require PIN to unprotect
+    if (folder.is_pin_protected) {
+        pinState.pendingFolderId = folderId;
+        pinState.pendingNoteId = null;
+        pinState.pendingAction = 'unprotect_folder';
+        openPinModal();
+        return;
+    }
+
+    // Protecting an unprotected folder - no PIN needed
+    await doProtectFolder(folderId, true);
+}
+
+async function doProtectFolder(folderId, newProtectedState) {
+    try {
+        const res = await fetch(`/api/note-folders/${folderId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_pin_protected: newProtectedState })
+        });
+
+        if (!res.ok) {
+            const data = await res.json();
+            showToast(data.error || 'Failed to update protection', 'error', 3000);
+            return;
+        }
+
+        showToast(newProtectedState ? 'Folder protected' : 'Protection removed', 'success', 2000);
+        await loadNotesUnified();
+    } catch (e) {
+        console.error('Error toggling folder protection:', e);
+        showToast('Error updating protection', 'error', 3000);
+    }
 }
 
 /**
@@ -4205,12 +4352,18 @@ function initNoteEditorPage() {
     const actionsMenu = document.getElementById('note-actions-menu');
     const noteId = getNoteEditorNoteId();
 
+    const protectBtn = document.getElementById('note-protect-btn');
+
     if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
     if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
     if (convertBtn) convertBtn.addEventListener('click', () => convertCurrentNoteToList());
+    if (protectBtn) protectBtn.addEventListener('click', () => toggleNoteProtection());
     if (backBtn) backBtn.addEventListener('click', () => handleNoteBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleNoteExit());
+
+    // Check PIN status
+    checkPinStatus();
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -4262,6 +4415,7 @@ function initListEditorPage() {
     const saveBtn = document.getElementById('list-save-btn');
     const deleteBtn = document.getElementById('list-delete-btn');
     const shareBtn = document.getElementById('list-share-btn');
+    const protectBtn = document.getElementById('list-protect-btn');
     const backBtn = document.getElementById('list-back-btn');
     const notesBtn = document.getElementById('list-notes-btn');
     const actionsToggle = document.getElementById('list-actions-toggle');
@@ -4271,8 +4425,12 @@ function initListEditorPage() {
     if (saveBtn) saveBtn.addEventListener('click', () => saveListMetadata({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
     if (shareBtn) shareBtn.addEventListener('click', () => shareCurrentList());
+    if (protectBtn) protectBtn.addEventListener('click', () => toggleListProtection());
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
+
+    // Check PIN status
+    checkPinStatus();
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -4360,13 +4518,41 @@ function getListReturnUrl() {
 
 async function loadListForEditor(listId) {
     try {
-        const res = await fetch(`/api/notes/${listId}`);
-        if (!res.ok) throw new Error('Failed to load list');
-        const list = await res.json();
+        let list;
+
+        // Check for pre-fetched unlocked list data (from PIN unlock)
+        const unlockedDataStr = sessionStorage.getItem('unlocked_note_data');
+        if (unlockedDataStr) {
+            sessionStorage.removeItem('unlocked_note_data');
+            const unlockedData = JSON.parse(unlockedDataStr);
+            if (unlockedData.id === listId && unlockedData.data) {
+                list = unlockedData.data;
+            }
+        }
+
+        // If no pre-fetched data, fetch from API
+        if (!list) {
+            const res = await fetch(`/api/notes/${listId}`);
+            if (!res.ok) {
+                const data = await res.json();
+                if (data.locked) {
+                    showToast('This list is protected. Please unlock from the notes list.', 'warning', 3000);
+                    setTimeout(() => { window.location.href = '/notes'; }, 1500);
+                    return;
+                }
+                throw new Error('Failed to load list');
+            }
+            list = await res.json();
+        }
+
         if (list.note_type !== 'list') {
             window.location.href = `/notes/${listId}`;
             return;
         }
+
+        // Store in notesState for protection toggle to reference
+        notesState.notes = [list];
+
         listState.listId = list.id;
         listState.items = list.items || [];
         listState.checkboxMode = !!list.checkbox_mode;
@@ -4377,6 +4563,7 @@ async function loadListForEditor(listId) {
         listState.dirty = false;
         listState.insertionIndex = null;
         listState.editingItemId = null;
+        listState.expandedItemId = null;
         const titleInput = document.getElementById('list-title');
         const checkboxToggle = document.getElementById('list-checkbox-toggle');
         const updatedLabel = document.getElementById('list-updated-label');
@@ -4385,6 +4572,7 @@ async function loadListForEditor(listId) {
         if (updatedLabel) updatedLabel.textContent = list.updated_at ? formatNoteDate(list.updated_at) : 'New list';
         renderListItems();
         setListDirty(false);
+        updateProtectButton(list.is_pin_protected); // Update protect button state
     } catch (err) {
         console.error('Error loading list:', err);
         showToast('Could not load that list.', 'error');
@@ -4760,7 +4948,8 @@ function createListGap(insertIndex) {
 function createListPill(item) {
     const pill = document.createElement('div');
     const hasNote = !!(item.note && item.note.trim());
-    pill.className = `list-pill${hasNote ? ' has-note' : ''}`;
+    const isExpanded = hasNote && listState.expandedItemId === item.id;
+    pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}`;
     const content = document.createElement('div');
     content.className = 'list-pill-content';
     const textValue = (item.text || '').trim();
@@ -4808,11 +4997,19 @@ function createListPill(item) {
         const note = document.createElement('div');
         note.className = 'list-pill-note';
         note.textContent = item.note;
-        note.style.display = 'none';
+        note.style.display = isExpanded ? 'block' : 'none';
         pill.appendChild(note);
     }
 
     pill.addEventListener('click', () => {
+        if (hasNote && listState.expandedItemId !== item.id) {
+            listState.expandedItemId = item.id;
+            listState.editingItemId = null;
+            listState.insertionIndex = null;
+            renderListItems();
+            return;
+        }
+        listState.expandedItemId = null;
         listState.editingItemId = item.id;
         listState.insertionIndex = null;
         renderListItems();
@@ -4893,11 +5090,12 @@ function createListInputRow(options) {
         }
     };
 
-    const resetListInputState = () => {
-        listState.insertionIndex = null;
-        listState.editingItemId = null;
-        loadListItems();
-    };
+      const resetListInputState = () => {
+          listState.insertionIndex = null;
+          listState.editingItemId = null;
+          listState.expandedItemId = null;
+          loadListItems();
+      };
 
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -5147,8 +5345,30 @@ function prepareNewNoteEditor() {
 
 async function loadNoteForEditor(noteId) {
     try {
+        // Check for pre-fetched unlocked note data (from PIN unlock)
+        const unlockedDataStr = sessionStorage.getItem('unlocked_note_data');
+        if (unlockedDataStr) {
+            sessionStorage.removeItem('unlocked_note_data');
+            const unlockedData = JSON.parse(unlockedDataStr);
+            if (unlockedData.id === noteId && unlockedData.data) {
+                const note = unlockedData.data;
+                notesState.notes = [note];
+                await setActiveNote(note.id, { skipAutosave: true });
+                return;
+            }
+        }
+
         const res = await fetch(`/api/notes/${noteId}`);
-        if (!res.ok) throw new Error('Failed to load note');
+        if (!res.ok) {
+            const data = await res.json();
+            if (data.locked) {
+                // Note is protected and locked - redirect back
+                showToast('This note is protected. Please unlock from the notes list.', 'warning', 3000);
+                setTimeout(() => { window.location.href = '/notes'; }, 1500);
+                return;
+            }
+            throw new Error('Failed to load note');
+        }
         const note = await res.json();
         notesState.notes = [note];
         await setActiveNote(note.id, { skipAutosave: true });
@@ -5226,6 +5446,14 @@ function handleNewNoteClick() {
 }
 
 function openNoteInEditor(noteId) {
+    const returnTo = window.location.pathname;
+    const suffix = returnTo ? `?return=${encodeURIComponent(returnTo)}` : '';
+    window.location.href = `/notes/${noteId}${suffix}`;
+}
+
+function openNoteInEditorWithData(noteId, noteData) {
+    // Store the pre-fetched note data for the editor to use
+    sessionStorage.setItem('unlocked_note_data', JSON.stringify({ id: noteId, data: noteData }));
     const returnTo = window.location.pathname;
     const suffix = returnTo ? `?return=${encodeURIComponent(returnTo)}` : '';
     window.location.href = `/notes/${noteId}${suffix}`;
@@ -6543,6 +6771,7 @@ async function setActiveNote(noteId, options = {}) {
     renderNotesList();
     updateNoteToolbarStates(); // Update toolbar button states
     bindNoteCheckboxes(); // Bind checkbox event handlers
+    updateProtectButton(note.is_pin_protected); // Update protect button state
 }
 
 async function toggleNotePin(noteId, pinned) {
@@ -12215,13 +12444,20 @@ function renderModalEditMode(recall) {
 
     if (titleText) titleText.textContent = 'Edit Recall';
 
-    // Payload field - only editable for text type
+    // Payload field - editable for text and url types
     let payloadHtml = '';
     if (recall.payload_type === 'text') {
         payloadHtml = `
             <div class="recall-modal-field">
                 <label>Content</label>
                 <textarea class="recall-modal-payload" id="recall-modal-payload">${recallEscape(recall.payload)}</textarea>
+            </div>
+        `;
+    } else if (recall.payload_type === 'url') {
+        payloadHtml = `
+            <div class="recall-modal-field">
+                <label>URL</label>
+                <input type="text" class="recall-modal-input" id="recall-modal-payload" value="${recallEscape(recall.payload)}" placeholder="https://...">
             </div>
         `;
     }
@@ -13073,4 +13309,388 @@ function initAIPage() {
             sendAIPrompt('page');
         }
     });
+}
+
+// --- PIN Protection Functions ---
+
+async function checkPinStatus() {
+    try {
+        const res = await fetch('/api/pin');
+        if (!res.ok) return;
+        const data = await res.json();
+        pinState.hasPin = data.has_pin;
+    } catch (e) {
+        console.error('Error checking PIN status:', e);
+    }
+}
+
+async function verifyPin(pin) {
+    const noteId = pinState.pendingNoteId;
+    const folderId = pinState.pendingFolderId;
+    const pendingAction = pinState.pendingAction;
+
+    // Handle folder-related actions
+    if (folderId && (pendingAction === 'unlock_folder' || pendingAction === 'unprotect_folder' || pendingAction === 'delete_folder')) {
+        return await verifyFolderPin(pin, folderId, pendingAction);
+    }
+
+    if (!noteId) {
+        showToast('No note selected', 'error', 2000);
+        return false;
+    }
+
+    try {
+        // Handle unprotect action - send PIN with the unprotect request
+        if (pendingAction === 'unprotect') {
+            const res = await fetch(`/api/notes/${noteId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin, is_pin_protected: false })
+            });
+
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingNoteId = null;
+                pinState.pendingAction = null;
+                showToast('Protection removed', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        // Handle unlock to view - use the unlock endpoint
+        const res = await fetch(`/api/notes/${noteId}/unlock`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin })
+        });
+
+        if (res.ok) {
+            const noteData = await res.json();
+            closePinModal();
+            pinState.pendingNoteId = null;
+            pinState.pendingAction = null;
+            // Open the note with the unlocked content
+            openNoteInEditorWithData(noteId, noteData);
+            return true;
+        } else {
+            const data = await res.json();
+            showToast(data.error || 'Incorrect PIN', 'error', 3000);
+            const input = document.getElementById('pin-input');
+            if (input) input.value = '';
+            return false;
+        }
+    } catch (e) {
+        console.error('Error verifying PIN:', e);
+        showToast('Error verifying PIN', 'error', 3000);
+        return false;
+    }
+}
+
+async function verifyFolderPin(pin, folderId, action) {
+    try {
+        if (action === 'unlock_folder') {
+            // Verify PIN and navigate to folder
+            const res = await fetch(`/api/note-folders/${folderId}/unlock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingFolderId = null;
+                pinState.pendingAction = null;
+                // Navigate to the folder
+                window.location.href = `/notes/folder/${folderId}`;
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (action === 'unprotect_folder') {
+            // Send PIN with the unprotect request
+            const res = await fetch(`/api/note-folders/${folderId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin, is_pin_protected: false })
+            });
+
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingFolderId = null;
+                pinState.pendingAction = null;
+                showToast('Protection removed', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (action === 'delete_folder') {
+            // Verify PIN and then delete
+            const res = await fetch(`/api/note-folders/${folderId}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingFolderId = null;
+                pinState.pendingAction = null;
+                showToast('Folder deleted', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        return false;
+    } catch (e) {
+        console.error('Error verifying folder PIN:', e);
+        showToast('Error verifying PIN', 'error', 3000);
+        return false;
+    }
+}
+
+function openPinModal() {
+    const modal = document.getElementById('pin-modal');
+    if (modal) {
+        modal.classList.add('active');
+        const input = document.getElementById('pin-input');
+        if (input) {
+            input.value = '';
+            setTimeout(() => input.focus(), 100);
+        }
+    }
+}
+
+function closePinModal() {
+    const modal = document.getElementById('pin-modal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+    pinState.pendingNoteId = null;
+    pinState.pendingAction = null;
+}
+
+function submitPin() {
+    const input = document.getElementById('pin-input');
+    const pin = input ? input.value.trim() : '';
+    if (pin.length === 4 && /^\d{4}$/.test(pin)) {
+        verifyPin(pin);
+    } else {
+        showToast('PIN must be 4 digits', 'warning', 2000);
+    }
+}
+
+function openSetPinModal() {
+    const modal = document.getElementById('set-pin-modal');
+    if (modal) {
+        modal.classList.add('active');
+        const input = document.getElementById('new-pin-input');
+        if (input) {
+            input.value = '';
+            setTimeout(() => input.focus(), 100);
+        }
+        const confirmInput = document.getElementById('confirm-pin-input');
+        if (confirmInput) confirmInput.value = '';
+    }
+}
+
+function closeSetPinModal() {
+    const modal = document.getElementById('set-pin-modal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+async function submitSetPin() {
+    const newPinInput = document.getElementById('new-pin-input');
+    const confirmPinInput = document.getElementById('confirm-pin-input');
+    const newPin = newPinInput ? newPinInput.value.trim() : '';
+    const confirmPin = confirmPinInput ? confirmPinInput.value.trim() : '';
+
+    if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) {
+        showToast('PIN must be 4 digits', 'warning', 2000);
+        return;
+    }
+
+    if (newPin !== confirmPin) {
+        showToast('PINs do not match', 'warning', 2000);
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: newPin })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            pinState.hasPin = true;
+            closeSetPinModal();
+            showToast('PIN set successfully', 'success', 2000);
+        } else {
+            showToast(data.error || 'Failed to set PIN', 'error', 3000);
+        }
+    } catch (e) {
+        showToast('Error setting PIN', 'error', 3000);
+    }
+}
+
+async function toggleNoteProtection(noteId) {
+    if (!noteId) {
+        noteId = notesState.activeNoteId;
+    }
+    if (!noteId) {
+        showToast('No note selected', 'warning', 2000);
+        return;
+    }
+
+    // Check if user has PIN set
+    if (!pinState.hasPin) {
+        openSetPinModal();
+        return;
+    }
+
+    const note = notesState.notes.find(n => n.id === noteId);
+    if (!note) return;
+
+    // If unprotecting, require PIN first
+    if (note.is_pin_protected) {
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'unprotect';
+        openPinModal();
+        return;
+    }
+
+    // Protecting an unprotected note
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_pin_protected: true })
+        });
+
+        if (!res.ok) {
+            const data = await res.json();
+            showToast(data.error || 'Failed to update protection', 'error', 3000);
+            return;
+        }
+
+        // Update local state
+        note.is_pin_protected = true;
+
+        // Update UI
+        updateProtectButton(true);
+        showToast('Note protected', 'success', 2000);
+    } catch (e) {
+        console.error('Error toggling protection:', e);
+        showToast('Error updating protection', 'error', 3000);
+    }
+}
+
+function updateProtectButton(isProtected) {
+    // Update note protect button
+    const noteBtn = document.getElementById('note-protect-btn');
+    if (noteBtn) {
+        const icon = noteBtn.querySelector('i');
+        const label = noteBtn.querySelector('span');
+        if (isProtected) {
+            if (icon) icon.className = 'fa-solid fa-lock-open';
+            if (label) label.textContent = ' Unprotect';
+        } else {
+            if (icon) icon.className = 'fa-solid fa-lock';
+            if (label) label.textContent = ' Protect';
+        }
+    }
+
+    // Update list protect button
+    const listBtn = document.getElementById('list-protect-btn');
+    if (listBtn) {
+        const icon = listBtn.querySelector('i');
+        const label = listBtn.querySelector('span');
+        if (isProtected) {
+            if (icon) icon.className = 'fa-solid fa-lock-open';
+            if (label) label.textContent = ' Unprotect';
+        } else {
+            if (icon) icon.className = 'fa-solid fa-lock';
+            if (label) label.textContent = ' Protect';
+        }
+    }
+}
+
+async function toggleListProtection() {
+    const listId = listState.listId;
+    if (!listId) {
+        showToast('No list selected', 'warning', 2000);
+        return;
+    }
+
+    // Check if user has PIN set
+    if (!pinState.hasPin) {
+        openSetPinModal();
+        return;
+    }
+
+    // Check current protection state from notesState or protectButton state
+    const note = notesState.notes.find(n => n.id === listId);
+    const isCurrentlyProtected = note ? note.is_pin_protected : false;
+
+    // If unprotecting, require PIN first
+    if (isCurrentlyProtected) {
+        pinState.pendingNoteId = listId;
+        pinState.pendingAction = 'unprotect';
+        openPinModal();
+        return;
+    }
+
+    // Protecting an unprotected list
+    try {
+        const updateRes = await fetch(`/api/notes/${listId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_pin_protected: true })
+        });
+
+        if (!updateRes.ok) {
+            const data = await updateRes.json();
+            showToast(data.error || 'Failed to update protection', 'error', 3000);
+            return;
+        }
+
+        // Update local state if note exists
+        if (note) note.is_pin_protected = true;
+
+        // Update UI
+        updateProtectButton(true);
+        showToast('List protected', 'success', 2000);
+    } catch (e) {
+        console.error('Error toggling list protection:', e);
+        showToast('Error updating protection', 'error', 3000);
+    }
 }

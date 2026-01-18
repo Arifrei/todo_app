@@ -1,13 +1,13 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<header>
+<header class="header-row tasks-header">
     <div>
         <h1>Tasks</h1>
         <p style="color: var(--text-muted);">Manage your projects and tasks</p>
     </div>
-    <button class="btn btn-primary btn-secondary" onclick="openCreateModal()">
-        <i class="fa-solid fa-plus"></i> New List
+    <button class="btn btn-primary tasks-add-btn header-add-circle" onclick="openCreateModal()" aria-label="Add list" title="Add list">
+        <i class="fa-solid fa-plus"></i>
     </button>
 </header>
 

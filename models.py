@@ -223,6 +223,7 @@ class Note(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     share_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
     is_public = db.Column(db.Boolean, default=False, nullable=False)
+    is_pin_protected = db.Column(db.Boolean, default=False, nullable=False)
     list_items = db.relationship('NoteListItem', backref='parent_note', lazy=True, cascade="all, delete-orphan", order_by="NoteListItem.order_index")
 
     def to_dict(self):
@@ -242,6 +243,7 @@ class Note(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_public': self.is_public,
             'share_token': self.share_token,
+            'is_pin_protected': bool(self.is_pin_protected),
         }
 
 
@@ -280,6 +282,7 @@ class NoteFolder(db.Model):
     parent_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
     name = db.Column(db.String(120), nullable=False)
     order_index = db.Column(db.Integer, default=0)
+    is_pin_protected = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -289,6 +292,7 @@ class NoteFolder(db.Model):
             'parent_id': self.parent_id,
             'name': self.name,
             'order_index': self.order_index or 0,
+            'is_pin_protected': bool(self.is_pin_protected),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

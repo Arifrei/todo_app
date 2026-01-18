@@ -7,8 +7,8 @@
             <h1>Quick Access</h1>
             <p style="color: var(--text-muted);">Your frequently accessed items</p>
         </div>
-        <button class="btn btn-primary" onclick="openAddQuickAccessModal()">
-            <i class="fa-solid fa-plus"></i> Add Item
+        <button class="btn btn-primary header-add-circle" onclick="openAddQuickAccessModal()" aria-label="Add quick access item" title="Add quick access item">
+            <i class="fa-solid fa-plus"></i>
         </button>
     </header>
 
@@ -74,9 +74,14 @@
         </div>
         <div class="form-group" id="qa-note-group" style="display: none;">
             <label>Select Note</label>
-            <select id="qa-note-select" class="form-control">
-                <option value="">Loading...</option>
-            </select>
+            <div class="qa-nav-header">
+                <button class="btn btn-secondary btn-small" id="qa-note-back-button" style="display:none;" onclick="qaNoteNavBack()">
+                    <i class="fa-solid fa-arrow-left"></i> Back
+                </button>
+            </div>
+            <div id="qa-note-nav-container" class="qa-nav-container">
+                <!-- Note navigation options populated by JS -->
+            </div>
         </div>
         <div class="form-group" id="qa-date-group" style="display: none;">
             <label>Select Date</label>
@@ -158,6 +163,8 @@ function openAddQuickAccessModal() {
     document.getElementById('qa-date').value = '';
 
     resetQANavState();
+    resetQANoteNavState();
+    resetQANoteNavState();
     handleQuickAccessTypeChange();
 
     // Load lists and notes for dropdowns
@@ -170,6 +177,7 @@ function closeAddQuickAccessModal() {
     qaEditingId = null;
     setQuickAccessModalMode('add');
     resetQANavState();
+    resetQANoteNavState();
 }
 
 // Close modal when clicking outside
@@ -204,6 +212,29 @@ function resetQANavState() {
         allLists: [],
         selectedListId: null,
         selectedListTitle: ''
+    };
+}
+
+// Quick Access note navigation state
+let qaNoteNavState = {
+    currentFolderId: null,
+    stack: [],
+    folders: [],
+    notes: [],
+    selectedNoteId: null,
+    selectedNoteTitle: '',
+    selectedNoteType: ''
+};
+
+function resetQANoteNavState() {
+    qaNoteNavState = {
+        currentFolderId: null,
+        stack: [],
+        folders: [],
+        notes: [],
+        selectedNoteId: null,
+        selectedNoteTitle: '',
+        selectedNoteType: ''
     };
 }
 
@@ -438,21 +469,155 @@ function highlightSelectedQAList() {
 
 async function loadNotesForQuickAccess(selectedNoteId = '') {
     try {
-        const response = await fetch('/api/notes?all=1');
-        const notes = await response.json();
-        const select = document.getElementById('qa-note-select');
-        select.innerHTML = '<option value="">-- Select a note --</option>';
-        notes.forEach(note => {
-            const option = document.createElement('option');
-            option.value = note.id;
-            option.textContent = note.title;
-            select.appendChild(option);
-        });
-        if (selectedNoteId) {
-            select.value = String(selectedNoteId);
+        const folderReq = fetch('/api/note-folders');
+        const noteReq = selectedNoteId ? fetch(`/api/notes/${selectedNoteId}`) : null;
+
+        const [foldersRes, noteRes] = await Promise.all([folderReq, noteReq]);
+        const folders = foldersRes.ok ? await foldersRes.json() : [];
+        let selectedNote = null;
+        if (noteRes && noteRes.ok) {
+            selectedNote = await noteRes.json();
         }
+
+        qaNoteNavState.folders = folders || [];
+        qaNoteNavState.selectedNoteId = selectedNote ? selectedNote.id : null;
+        qaNoteNavState.selectedNoteTitle = selectedNote ? (selectedNote.title || '') : '';
+        qaNoteNavState.selectedNoteType = selectedNote ? (selectedNote.note_type || 'note') : '';
+
+        const initialFolderId = selectedNote ? (selectedNote.folder_id || null) : null;
+        qaNoteNavState.currentFolderId = initialFolderId;
+        qaNoteNavState.stack = buildNoteFolderStack(initialFolderId, qaNoteNavState.folders);
+
+        await renderQANoteNavigation();
     } catch (error) {
         console.error('Failed to load notes:', error);
+    }
+}
+
+function buildNoteFolderStack(folderId, folders) {
+    if (!folderId) return [];
+    const folderMap = new Map((folders || []).map(folder => [folder.id, folder]));
+    const path = [];
+    let current = folderId;
+    while (current) {
+        path.unshift(current);
+        const folder = folderMap.get(current);
+        if (!folder) break;
+        current = folder.parent_id || null;
+    }
+    return [null, ...path.slice(0, -1)];
+}
+
+function updateQANoteBackButton() {
+    const backButton = document.getElementById('qa-note-back-button');
+    if (!backButton) return;
+    backButton.style.display = qaNoteNavState.stack.length ? 'inline-flex' : 'none';
+}
+
+async function renderQANoteNavigation() {
+    const container = document.getElementById('qa-note-nav-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+    updateQANoteBackButton();
+
+    const folderId = qaNoteNavState.currentFolderId;
+    let notes = [];
+    try {
+        const query = folderId ? `?folder_id=${folderId}` : '';
+        const res = await fetch(`/api/notes${query}`);
+        notes = res.ok ? await res.json() : [];
+    } catch (err) {
+        console.error('Failed to load notes for navigation:', err);
+        notes = [];
+    }
+
+    qaNoteNavState.notes = notes || [];
+
+    const folders = (qaNoteNavState.folders || [])
+        .filter(folder => (folder.parent_id || null) === (folderId || null))
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+    const hasItems = folders.length || qaNoteNavState.notes.length;
+    if (!hasItems) {
+        const empty = document.createElement('div');
+        empty.className = 'qa-nav-empty';
+        empty.textContent = 'No notes here.';
+        container.appendChild(empty);
+        return;
+    }
+
+    folders.forEach(folder => {
+        const item = document.createElement('button');
+        item.className = 'qa-nav-item';
+        item.dataset.folderId = folder.id;
+        item.innerHTML = `
+            <i class="fa-solid fa-folder"></i>
+            <span>${escapeHtml(folder.name)}</span>
+            <span class="qa-nav-type">Folder</span>
+            <i class="fa-solid fa-chevron-right"></i>
+        `;
+        item.onclick = () => navigateQANoteFolder(folder.id);
+        container.appendChild(item);
+    });
+
+    qaNoteNavState.notes.forEach(note => {
+        const item = document.createElement('button');
+        item.className = 'qa-nav-item';
+        item.dataset.noteId = note.id;
+
+        const isList = note.note_type === 'list';
+        const icon = isList ? 'fa-list' : 'fa-note-sticky';
+        const typeLabel = isList ? 'List' : 'Note';
+
+        item.innerHTML = `
+            <i class="fa-solid ${icon}"></i>
+            <span>${escapeHtml(note.title || 'Untitled')}</span>
+            <span class="qa-nav-type">${typeLabel}</span>
+        `;
+
+        item.onclick = () => selectQANote(note);
+        container.appendChild(item);
+    });
+
+    highlightSelectedQANote();
+}
+
+function navigateQANoteFolder(folderId) {
+    qaNoteNavState.stack.push(qaNoteNavState.currentFolderId);
+    qaNoteNavState.currentFolderId = folderId;
+    renderQANoteNavigation();
+}
+
+function qaNoteNavBack() {
+    if (!qaNoteNavState.stack.length) return;
+    const previousParent = qaNoteNavState.stack.pop();
+    qaNoteNavState.currentFolderId = previousParent === undefined ? null : previousParent;
+    renderQANoteNavigation();
+}
+
+function selectQANote(note) {
+    qaNoteNavState.selectedNoteId = note.id;
+    qaNoteNavState.selectedNoteTitle = note.title || '';
+    qaNoteNavState.selectedNoteType = note.note_type || 'note';
+
+    const titleInput = document.getElementById('qa-title');
+    if (titleInput && !titleInput.value.trim()) {
+        titleInput.value = note.title || '';
+    }
+
+    highlightSelectedQANote();
+}
+
+function highlightSelectedQANote() {
+    if (!qaNoteNavState.selectedNoteId) return;
+    const container = document.getElementById('qa-note-nav-container');
+    if (!container) return;
+    const items = container.querySelectorAll('.qa-nav-item');
+    items.forEach(item => item.classList.remove('selected'));
+    const selectedItem = container.querySelector(`[data-note-id="${qaNoteNavState.selectedNoteId}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
     }
 }
 
@@ -525,7 +690,7 @@ async function saveQuickAccessItem() {
         url = `/list/${qaNavState.selectedListId}`;
         referenceId = qaNavState.selectedListId;
     } else if (type === 'note') {
-        const noteId = document.getElementById('qa-note-select').value;
+        const noteId = qaNoteNavState.selectedNoteId;
         if (!noteId) {
             alert('Please select a note');
             return;

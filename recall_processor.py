@@ -54,7 +54,19 @@ def get_youtube_content(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         meta = soup.find('meta', attrs={'name': 'description'})
         if meta and meta.get('content'):
-            return f"Video description: {meta.get('content')}"
+            desc = meta.get('content')
+            # Detect generic YouTube consent/block page descriptions
+            generic_phrases = [
+                'enjoy the videos and music you love',
+                'upload original content',
+                'share it all with friends, family',
+                'on youtube',
+            ]
+            desc_lower = desc.lower()
+            if sum(1 for phrase in generic_phrases if phrase in desc_lower) >= 2:
+                # This is YouTube's generic page, not the actual video
+                return "[YouTube video - blocked by consent page, transcript unavailable]"
+            return f"Video description: {desc}"
     except Exception:
         pass
 

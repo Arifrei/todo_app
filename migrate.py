@@ -147,7 +147,8 @@ def ensure_note_table(cur):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 share_token VARCHAR(64) UNIQUE,
-                is_public BOOLEAN DEFAULT 0 NOT NULL
+                is_public BOOLEAN DEFAULT 0 NOT NULL,
+                is_pin_protected BOOLEAN DEFAULT 0 NOT NULL
             )
             """
         )
@@ -168,6 +169,7 @@ def ensure_note_table(cur):
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "share_token", "VARCHAR(64)")
     add_column(cur, "note", "is_public", "BOOLEAN DEFAULT 0 NOT NULL")
+    add_column(cur, "note", "is_pin_protected", "BOOLEAN DEFAULT 0 NOT NULL")
     # Create index on share_token if it doesn't exist
     cur.execute("CREATE INDEX IF NOT EXISTS idx_note_share_token ON note(share_token)")
 

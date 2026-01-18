@@ -1924,8 +1924,15 @@ def handle_notes():
         Note.pin_order.asc(),
         Note.updated_at.desc()
     ).all()
-    note_payload = [n.to_dict() for n in notes]
-    list_ids = [n.id for n in notes if n.note_type == 'list']
+    note_payload = []
+    for n in notes:
+        note_dict = n.to_dict()
+        # Hide content from protected notes (always locked in list view)
+        if n.is_pin_protected:
+            note_dict['content'] = ''
+            note_dict['locked'] = True
+        note_payload.append(note_dict)
+    list_ids = [n.id for n in notes if n.note_type == 'list' and not n.is_pin_protected]
     if list_ids:
         items = NoteListItem.query.filter(NoteListItem.note_id.in_(list_ids)).order_by(
             NoteListItem.note_id.asc(),
@@ -1942,7 +1949,11 @@ def handle_notes():
                 previews.append(label)
         for payload in note_payload:
             if payload.get('note_type') == 'list':
-                payload['list_preview'] = preview_map.get(payload['id'], [])
+                # Don't show list preview for locked protected notes
+                if payload.get('locked'):
+                    payload['list_preview'] = []
+                else:
+                    payload['list_preview'] = preview_map.get(payload['id'], [])
     return jsonify(note_payload)
 
 
@@ -2027,7 +2038,13 @@ def note_folder_detail(folder_id):
     if request.method == 'GET':
         return jsonify(folder.to_dict())
 
+    # Block DELETE on protected folders - require PIN
     if request.method == 'DELETE':
+        if folder.is_pin_protected:
+            data = request.json or {}
+            pin = str(data.get('pin', '')).strip()
+            if not pin or not user.check_pin(pin):
+                return jsonify({'error': 'Folder is protected. Please enter PIN.'}), 403
         parent_id = folder.parent_id
         NoteFolder.query.filter_by(user_id=user.id, parent_id=folder.id).update(
             {'parent_id': parent_id}
@@ -2040,6 +2057,11 @@ def note_folder_detail(folder_id):
         return jsonify({'deleted': True})
 
     data = request.json or {}
+    # For protected folders, require PIN for any modification
+    if folder.is_pin_protected:
+        pin = str(data.get('pin', '')).strip()
+        if not pin or not user.check_pin(pin):
+            return jsonify({'error': 'Folder is protected. Please enter PIN.'}), 403
     if 'name' in data:
         name_val = (data.get('name') or '').strip()
         if name_val:
@@ -2052,6 +2074,12 @@ def note_folder_detail(folder_id):
             if not parent:
                 return jsonify({'error': 'Parent folder not found'}), 404
         folder.parent_id = parent_id_int
+    # Handle PIN protection toggle
+    if 'is_pin_protected' in data:
+        is_protected = str(data.get('is_pin_protected')).lower() in ['1', 'true', 'yes', 'on']
+        if is_protected and not user.pin_hash:
+            return jsonify({'error': 'Set a PIN first before protecting folders'}), 400
+        folder.is_pin_protected = is_protected
     folder.updated_at = _now_local()
     db.session.commit()
     return jsonify(folder.to_dict())
@@ -2208,13 +2236,24 @@ def handle_note(note_id):
 
     note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
 
+    # Block DELETE on protected notes - require PIN
     if request.method == 'DELETE':
+        if note.is_pin_protected:
+            data = request.json or {}
+            pin = str(data.get('pin', '')).strip()
+            if not pin or not user.check_pin(pin):
+                return jsonify({'error': 'Note is protected. Please enter PIN.'}), 403
         db.session.delete(note)
         db.session.commit()
         return '', 204
 
     if request.method == 'PUT':
         data = request.json or {}
+        # For protected notes, require PIN for any modification
+        if note.is_pin_protected:
+            pin = str(data.get('pin', '')).strip()
+            if not pin or not user.check_pin(pin):
+                return jsonify({'error': 'Note is protected. Please enter PIN.'}), 403
         if 'title' in data:
             fallback = 'Untitled List' if note.note_type == 'list' else 'Untitled Note'
             note.title = (data.get('title') or '').strip() or fallback
@@ -2278,10 +2317,31 @@ def handle_note(note_id):
                 if not folder:
                     return jsonify({'error': 'Folder not found for this user'}), 404
                 note.folder_id = folder_id_int
+        # Handle PIN protection toggle
+        if 'is_pin_protected' in data:
+            is_protected = str(data.get('is_pin_protected')).lower() in ['1', 'true', 'yes', 'on']
+            if is_protected and not user.pin_hash:
+                return jsonify({'error': 'Set a PIN first before protecting notes'}), 400
+            note.is_pin_protected = is_protected
         db.session.commit()
         payload = note.to_dict()
         if note.note_type == 'list':
             payload['items'] = [item.to_dict() for item in note.list_items]
+        return jsonify(payload)
+
+    # GET: Return limited data for protected notes (always locked)
+    if note.is_pin_protected:
+        payload = {
+            'id': note.id,
+            'title': note.title,
+            'is_pin_protected': True,
+            'locked': True,
+            'note_type': note.note_type,
+            'pinned': note.pinned,
+            'folder_id': note.folder_id,
+            'created_at': note.created_at.isoformat() if note.created_at else None,
+            'updated_at': note.updated_at.isoformat() if note.updated_at else None,
+        }
         return jsonify(payload)
 
     payload = note.to_dict()
@@ -2483,6 +2543,142 @@ def view_shared_note(token):
             updated_at = pytz.UTC.localize(updated_at)
         updated_local = updated_at.astimezone(tz)
     return render_template('shared_note.html', note=note, note_updated_at_local=updated_local)
+
+
+# PIN Protection API
+@app.route('/api/pin', methods=['GET'])
+def check_pin_status():
+    """Check if current user has a PIN set."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    return jsonify({
+        'has_pin': bool(user.pin_hash)
+    })
+
+
+@app.route('/api/pin', methods=['POST'])
+def set_pin():
+    """Set or update the master PIN."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    new_pin = str(data.get('pin', '')).strip()
+    current_pin = str(data.get('current_pin', '')).strip()
+
+    # If PIN already exists, require current PIN verification
+    if user.pin_hash and not user.check_pin(current_pin):
+        return jsonify({'error': 'Current PIN is incorrect'}), 403
+
+    try:
+        user.set_pin(new_pin)
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'PIN set successfully'})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/pin', methods=['DELETE'])
+def remove_pin():
+    """Remove the master PIN (requires current PIN)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    current_pin = str(data.get('pin', '')).strip()
+
+    if not user.pin_hash:
+        return jsonify({'error': 'No PIN is set'}), 400
+
+    if not user.check_pin(current_pin):
+        return jsonify({'error': 'PIN is incorrect'}), 403
+
+    user.pin_hash = None
+    # Unprotect all notes when PIN is removed
+    Note.query.filter_by(user_id=user.id, is_pin_protected=True).update({'is_pin_protected': False})
+    db.session.commit()
+    session.pop('unlocked_note_ids', None)
+    return jsonify({'success': True, 'message': 'PIN removed'})
+
+
+@app.route('/api/pin/verify', methods=['POST'])
+def verify_pin():
+    """Verify PIN only (no persistent unlock)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    data = request.json or {}
+    pin = str(data.get('pin', '')).strip()
+
+    if not user.pin_hash:
+        return jsonify({'error': 'No PIN is set'}), 400
+
+    if user.check_pin(pin):
+        return jsonify({'success': True, 'valid': True})
+    else:
+        return jsonify({'error': 'Incorrect PIN'}), 403
+
+
+@app.route('/api/notes/<int:note_id>/unlock', methods=['POST'])
+def unlock_note(note_id):
+    """Verify PIN and return full note content (one-time, no session persistence)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+
+    if not note.is_pin_protected:
+        # Not protected, just return the content
+        payload = note.to_dict()
+        if note.note_type == 'list':
+            payload['items'] = [item.to_dict() for item in note.list_items]
+        return jsonify(payload)
+
+    data = request.json or {}
+    pin = str(data.get('pin', '')).strip()
+
+    if not user.pin_hash:
+        return jsonify({'error': 'No PIN is set'}), 400
+
+    if not user.check_pin(pin):
+        return jsonify({'error': 'Incorrect PIN'}), 403
+
+    # PIN correct - return full note content
+    payload = note.to_dict()
+    if note.note_type == 'list':
+        payload['items'] = [item.to_dict() for item in note.list_items]
+    return jsonify(payload)
+
+
+@app.route('/api/note-folders/<int:folder_id>/unlock', methods=['POST'])
+def unlock_folder(folder_id):
+    """Verify PIN for a protected folder (one-time, no session persistence)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    folder = NoteFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+
+    if not folder.is_pin_protected:
+        # Not protected, just return success
+        return jsonify({'unlocked': True, 'folder': folder.to_dict()})
+
+    data = request.json or {}
+    pin = str(data.get('pin', '')).strip()
+
+    if not user.pin_hash:
+        return jsonify({'error': 'No PIN is set'}), 400
+
+    if not user.check_pin(pin):
+        return jsonify({'error': 'Incorrect PIN'}), 403
+
+    # PIN correct - return success
+    return jsonify({'unlocked': True, 'folder': folder.to_dict()})
 
 
 # Quick Access API

@@ -257,6 +257,61 @@
     <script src="{{ url_for('static', filename='capacitor-notifications.js') }}"></script>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <!-- PIN Entry Modal -->
+    <div class="modal" id="pin-modal">
+        <div class="modal-content pin-modal-content">
+            <h2><i class="fa-solid fa-lock"></i> Enter PIN</h2>
+            <p class="pin-modal-subtitle">Enter your 4-digit PIN to unlock protected notes</p>
+            <div class="form-group">
+                <input type="password"
+                       id="pin-input"
+                       class="form-control pin-input"
+                       maxlength="4"
+                       pattern="\d{4}"
+                       inputmode="numeric"
+                       placeholder="----"
+                       onkeyup="if(event.key === 'Enter') submitPin()">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closePinModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitPin()">Unlock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Set PIN Modal -->
+    <div class="modal" id="set-pin-modal">
+        <div class="modal-content pin-modal-content">
+            <h2><i class="fa-solid fa-lock"></i> Set PIN</h2>
+            <p class="pin-modal-subtitle">Create a 4-digit PIN to protect your notes</p>
+            <div class="form-group">
+                <label for="new-pin-input">New PIN</label>
+                <input type="password"
+                       id="new-pin-input"
+                       class="form-control pin-input"
+                       maxlength="4"
+                       pattern="\d{4}"
+                       inputmode="numeric"
+                       placeholder="----">
+            </div>
+            <div class="form-group">
+                <label for="confirm-pin-input">Confirm PIN</label>
+                <input type="password"
+                       id="confirm-pin-input"
+                       class="form-control pin-input"
+                       maxlength="4"
+                       pattern="\d{4}"
+                       inputmode="numeric"
+                       placeholder="----"
+                       onkeyup="if(event.key === 'Enter') submitSetPin()">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeSetPinModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitSetPin()">Set PIN</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Disable all service workers to avoid caching issues (not needed in native app)
         if ('serviceWorker' in navigator && !window.isNativeApp?.()) {

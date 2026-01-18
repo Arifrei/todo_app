@@ -7,8 +7,8 @@
             <h1>Bookmarks</h1>
             <p style="color: var(--text-muted);">Quick-reference snippets, links, and commands in one place.</p>
         </div>
-        <button class="btn btn-primary" type="button" onclick="openAddBookmarkModal()">
-            <i class="fa-solid fa-plus"></i> Add Bookmark
+        <button class="btn btn-primary header-add-circle" type="button" onclick="openAddBookmarkModal()" aria-label="Add bookmark" title="Add bookmark">
+            <i class="fa-solid fa-plus"></i>
         </button>
     </header>
 
@@ -320,7 +320,11 @@ async function saveBookmarkFromModal() {
         }
 
         renderBookmarkGrid();
-        renderBookmarkModalView(saved);
+        if (bookmarkState.mode === 'add') {
+            closeBookmarkModal();
+        } else {
+            renderBookmarkModalView(saved);
+        }
         showToast('Bookmark saved', 'success');
     } catch (err) {
         console.error(err);
