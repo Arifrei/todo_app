@@ -323,7 +323,6 @@ class RecallItem(db.Model):
     title = db.Column(db.String(120), nullable=False)
     payload_type = db.Column(db.String(10), nullable=False)  # 'url' or 'text'
     payload = db.Column(db.Text, nullable=False)
-    when_context = db.Column(db.String(30), nullable=False)
 
     # AI-generated fields (populated in background)
     why = db.Column(db.String(500), nullable=True)
@@ -342,7 +341,6 @@ class RecallItem(db.Model):
             'ai_status': self.ai_status,
             'payload_type': self.payload_type,
             'payload': self.payload,
-            'when_context': self.when_context,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }
@@ -539,6 +537,32 @@ class BookmarkItem(db.Model):
             'value': self.value,
             'pinned': bool(self.pinned),
             'pin_order': self.pin_order or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class DoFeedItem(db.Model):
+    """Minimal saved links to revisit in specific contexts."""
+    __tablename__ = 'do_feed_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    url = db.Column(db.String(600), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    state = db.Column(db.String(40), nullable=False, default='free')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'url': self.url,
+            'description': self.description,
+            'state': self.state,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

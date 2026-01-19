@@ -97,8 +97,6 @@ let noteFolderState = { folders: [], currentFolderId: null };
 let noteMoveState = { ids: [], destinationFolderId: null, navStack: [] };
 let recallState = {
     items: [],
-    selectedWhen: null,
-    lastUsedWhen: null,
     modalRecallId: null,
     modalEditMode: false,
     pollingIds: [],
@@ -12089,7 +12087,6 @@ function initTaskSelectionUI() {
 }
 
 // --- Recalls ---
-const recallWhenDefaults = ['bored', 'free', 'work', 'travel'];
 
 function initRecallsPage() {
     const cardsEl = document.getElementById('recall-cards');
@@ -12115,17 +12112,13 @@ function initRecallsPage() {
         });
     }
 
-    // Setup add input - Enter key submits with last used when
+    // Setup add input - Enter key submits immediately
     if (addInput) {
         addInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 const val = addInput.value.trim();
-                if (val && recallState.lastUsedWhen) {
-                    handleAddRecall(val, recallState.lastUsedWhen);
-                } else if (val) {
-                    showToast('Select a context first', 'info');
-                }
+                if (val) handleAddRecall(val);
             }
         });
     }
@@ -12138,23 +12131,6 @@ function initRecallsPage() {
         });
     }
 
-    // Setup filter dropdown
-    const filterBtn = document.getElementById('recall-filter-btn');
-    if (filterBtn) {
-        filterBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleFilterDropdown();
-        });
-    }
-
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        const dropdown = document.getElementById('recall-filter-dropdown');
-        if (dropdown && !dropdown.contains(e.target)) {
-            closeFilterDropdown();
-        }
-    });
-
     loadAllRecalls();
 }
 
@@ -12165,8 +12141,6 @@ async function loadAllRecalls() {
         const res = await fetch('/api/recalls');
         if (!res.ok) throw new Error('Failed to load recalls');
         recallState.items = await res.json();
-        renderWhenTabs();
-        renderWhenChipsForAdd();
         renderRecallCards();
         startPollingPendingAI();
     } catch (err) {
@@ -12175,185 +12149,11 @@ async function loadAllRecalls() {
     }
 }
 
-function getWhenOptions() {
-    const values = new Set(recallWhenDefaults);
-    recallState.items.forEach(item => {
-        if (item.when_context) values.add(item.when_context);
-    });
-    return Array.from(values);
-}
-
-function renderFilterDropdown() {
-    const menu = document.getElementById('recall-filter-menu');
-    const label = document.getElementById('recall-filter-label');
-    if (!menu) return;
-
-    const options = getWhenOptions();
-    menu.innerHTML = '';
-
-    // "All" option
-    const allBtn = document.createElement('button');
-    allBtn.type = 'button';
-    allBtn.className = `recall-filter-option ${recallState.selectedWhen === null ? 'active' : ''}`;
-    allBtn.textContent = 'All';
-    allBtn.addEventListener('click', () => {
-        filterByWhen(null);
-        closeFilterDropdown();
-    });
-    menu.appendChild(allBtn);
-
-    // Context options
-    options.forEach(when => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `recall-filter-option ${recallState.selectedWhen === when ? 'active' : ''}`;
-        btn.textContent = when;
-        btn.addEventListener('click', () => {
-            filterByWhen(when);
-            closeFilterDropdown();
-        });
-        menu.appendChild(btn);
-    });
-
-    // Update label
-    if (label) {
-        label.textContent = recallState.selectedWhen || 'All';
-    }
-}
-
-function toggleFilterDropdown() {
-    const btn = document.getElementById('recall-filter-btn');
-    const menu = document.getElementById('recall-filter-menu');
-    if (!btn || !menu) return;
-
-    const isOpen = menu.classList.contains('open');
-    if (isOpen) {
-        closeFilterDropdown();
-    } else {
-        btn.classList.add('open');
-        menu.classList.add('open');
-    }
-}
-
-function closeFilterDropdown() {
-    const btn = document.getElementById('recall-filter-btn');
-    const menu = document.getElementById('recall-filter-menu');
-    if (btn) btn.classList.remove('open');
-    if (menu) menu.classList.remove('open');
-}
-
-// Keep old name as alias for compatibility
-function renderWhenTabs() {
-    renderFilterDropdown();
-}
-
-function renderWhenChipsForAdd() {
-    const container = document.getElementById('recall-when-chips');
-    if (!container) return;
-
-    const options = getWhenOptions();
-    container.innerHTML = '';
-
-    options.forEach(when => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = `recall-when-chip ${recallState.lastUsedWhen === when ? 'active' : ''}`;
-        chip.textContent = when;
-        chip.addEventListener('click', () => {
-            const input = document.getElementById('recall-add-input');
-            const val = input ? input.value.trim() : '';
-            if (val) {
-                handleAddRecall(val, when);
-            } else {
-                // Just select this as the default
-                recallState.lastUsedWhen = when;
-                renderWhenChipsForAdd();
-            }
-        });
-        container.appendChild(chip);
-    });
-
-    // Add "+" button for custom context
-    const addChip = document.createElement('button');
-    addChip.type = 'button';
-    addChip.className = 'recall-when-chip recall-when-chip-add';
-    addChip.innerHTML = '<i class="fa-solid fa-plus"></i>';
-    addChip.title = 'Add custom context';
-    addChip.addEventListener('click', () => {
-        showAddWhenInput(container);
-    });
-    container.appendChild(addChip);
-}
-
-function showAddWhenInput(container) {
-    // Check if input already exists
-    if (container.querySelector('.recall-when-add-input')) return;
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'recall-when-add-wrapper';
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'recall-when-add-input';
-    input.placeholder = 'New context...';
-    input.maxLength = 20;
-
-    const confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = 'recall-when-add-confirm';
-    confirmBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'recall-when-add-cancel';
-    cancelBtn.innerHTML = '<i class="fa-solid fa-times"></i>';
-
-    const addCustomWhen = () => {
-        const val = input.value.trim().toLowerCase();
-        if (val && val.length <= 20) {
-            // Add to defaults so it persists in this session
-            if (!recallWhenDefaults.includes(val)) {
-                recallWhenDefaults.push(val);
-            }
-            recallState.lastUsedWhen = val;
-            renderWhenChipsForAdd();
-            renderFilterDropdown();
-        }
-    };
-
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            addCustomWhen();
-        } else if (e.key === 'Escape') {
-            renderWhenChipsForAdd();
-        }
-    });
-
-    confirmBtn.addEventListener('click', addCustomWhen);
-    cancelBtn.addEventListener('click', () => renderWhenChipsForAdd());
-
-    wrapper.appendChild(input);
-    wrapper.appendChild(confirmBtn);
-    wrapper.appendChild(cancelBtn);
-    container.appendChild(wrapper);
-
-    input.focus();
-}
-
-function filterByWhen(when) {
-    recallState.selectedWhen = when;
-    renderWhenTabs();
-    renderRecallCards();
-}
-
 function renderRecallCards() {
     const container = document.getElementById('recall-cards');
     if (!container) return;
 
-    const items = recallState.selectedWhen
-        ? recallState.items.filter(item => item.when_context === recallState.selectedWhen)
-        : recallState.items;
+    const items = recallState.items;
 
     if (!items.length) {
         container.innerHTML = '<div class="recall-empty">No recalls yet. Click Add to create one.</div>';
@@ -12371,8 +12171,6 @@ function renderRecallCards() {
         if (item.payload_type === 'url') {
             metaHtml += `<a href="${recallEscape(item.payload)}" target="_blank" rel="noopener" class="recall-card-url" onclick="event.stopPropagation()"><i class="fa-solid fa-link"></i> URL</a>`;
         }
-        metaHtml += `<span class="recall-card-when" data-when="${recallEscape(item.when_context)}">${recallEscape(item.when_context)}</span>`;
-
         // Why display
         let whyHtml = '';
         if (item.ai_status === 'pending' || item.ai_status === 'processing') {
@@ -12474,7 +12272,6 @@ function renderModalViewMode(recall) {
         <div class="recall-view-section">
             <div class="recall-view-title">${recallEscape(recall.title)}</div>
             <div class="recall-view-meta">
-                <span class="recall-view-when" data-when="${recallEscape(recall.when_context)}">${recallEscape(recall.when_context)}</span>
                 ${urlHtml}
             </div>
         </div>
@@ -12558,10 +12355,6 @@ function renderModalEditMode(recall) {
         </div>
         ${payloadHtml}
         <div class="recall-modal-field">
-            <label>Context</label>
-            <div class="recall-when-chips" id="recall-modal-when-chips"></div>
-        </div>
-        <div class="recall-modal-field">
             <label>Why</label>
             <input type="text" class="recall-modal-input" id="recall-modal-why" value="${recallEscape(recall.why || '')}" placeholder="${recall.ai_status === 'pending' || recall.ai_status === 'processing' ? 'Generating...' : ''}">
         </div>
@@ -12571,23 +12364,6 @@ function renderModalEditMode(recall) {
             <button type="button" class="recall-modal-save" id="recall-modal-save">Save</button>
         </div>
     `;
-
-    // Setup when chips
-    const chipsContainer = document.getElementById('recall-modal-when-chips');
-    if (chipsContainer) {
-        const options = getWhenOptions();
-        options.forEach(when => {
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = `recall-when-chip ${recall.when_context === when ? 'active' : ''}`;
-            chip.textContent = when;
-            chip.addEventListener('click', () => {
-                chipsContainer.querySelectorAll('.recall-when-chip').forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-            });
-            chipsContainer.appendChild(chip);
-        });
-    }
 
     // Setup cancel button
     const cancelBtn = document.getElementById('recall-modal-cancel');
@@ -12626,14 +12402,12 @@ async function saveRecallFromModal(id) {
     const whyInput = document.getElementById('recall-modal-why');
     const payloadInput = document.getElementById('recall-modal-payload');
     const summaryInput = document.getElementById('recall-modal-summary');
-    const activeChip = document.querySelector('#recall-modal-when-chips .recall-when-chip.active');
 
     const fields = {};
     if (titleInput) fields.title = titleInput.value.trim();
     if (whyInput) fields.why = whyInput.value.trim();
     if (payloadInput) fields.payload = payloadInput.value.trim();
     if (summaryInput) fields.summary = summaryInput.value.trim();
-    if (activeChip) fields.when_context = activeChip.textContent;
 
     try {
         const res = await fetch(`/api/recalls/${id}`, {
@@ -12645,7 +12419,6 @@ async function saveRecallFromModal(id) {
         const updated = await res.json();
         const idx = recallState.items.findIndex(item => item.id === id);
         if (idx !== -1) recallState.items[idx] = updated;
-        renderWhenTabs();
         renderRecallCards();
         closeRecallModal();
         showToast('Recall updated', 'success');
@@ -12670,7 +12443,7 @@ function parseRecallInput(input) {
     return { title, content };
 }
 
-async function handleAddRecall(input, whenContext) {
+async function handleAddRecall(input) {
     const parsed = parseRecallInput(input);
     if (!parsed) {
         showToast('Use format: Title; Content or URL', 'error');
@@ -12686,14 +12459,12 @@ async function handleAddRecall(input, whenContext) {
             body: JSON.stringify({
                 title: parsed.title,
                 payload: parsed.content,
-                payload_type,
-                when_context: whenContext
+                payload_type
             })
         });
         if (!res.ok) throw new Error('Save failed');
         const saved = await res.json();
 
-        recallState.lastUsedWhen = whenContext;
         recallState.items.unshift(saved);
 
         // Start polling for this item if AI is pending
@@ -12713,8 +12484,6 @@ async function handleAddRecall(input, whenContext) {
             addBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add';
         }
 
-        renderWhenTabs();
-        renderWhenChipsForAdd();
         renderRecallCards();
         showToast('Recall saved', 'success');
     } catch (err) {
@@ -12793,7 +12562,6 @@ function deleteRecall(id) {
             if (!res.ok) throw new Error('Delete failed');
             recallState.items = recallState.items.filter(item => item.id !== id);
             recallState.pollingIds = recallState.pollingIds.filter(i => i !== id);
-            renderWhenTabs();
             renderRecallCards();
             closeConfirmModal();
             showToast('Recall deleted', 'success');

@@ -186,7 +186,6 @@ def _recall_dict(item: RecallItem, similarity: Optional[float] = None) -> Dict[s
         "why": item.why,
         "payload_type": item.payload_type,
         "payload": item.payload,
-        "when_context": item.when_context,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
@@ -198,12 +197,9 @@ def _recall_dict(item: RecallItem, similarity: Optional[float] = None) -> Dict[s
 def _list_recalls(
     user_id: int,
     search: Optional[str] = None,
-    when_context: Optional[str] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     query = RecallItem.query.filter(RecallItem.user_id == user_id)
-    if when_context:
-        query = query.filter(RecallItem.when_context == when_context)
     if search:
         like_expr = f"%{search}%"
         query = query.filter(
@@ -224,15 +220,13 @@ def _create_recall(
     why: str,
     payload_type: str,
     payload: str,
-    when_context: str,
 ) -> Dict[str, Any]:
     safe_title = (title or "").strip()
     safe_why = (why or "").strip()
     safe_payload = (payload or "").strip()
-    safe_when = (when_context or "").strip()
     safe_payload_type = (payload_type or "").strip().lower()
-    if not safe_title or not safe_why or not safe_payload or not safe_when:
-        raise ValueError("title, why, payload, and when_context are required")
+    if not safe_title or not safe_why or not safe_payload:
+        raise ValueError("title, why, and payload are required")
     if safe_payload_type not in {"url", "text"}:
         raise ValueError("payload_type must be url or text")
     recall = RecallItem(
@@ -241,7 +235,6 @@ def _create_recall(
         why=safe_why,
         payload_type=safe_payload_type,
         payload=safe_payload,
-        when_context=safe_when,
     )
     db.session.add(recall)
     db.session.commit()
@@ -288,7 +281,6 @@ def _search_recalls_semantic(user_id: int, query: str, limit: int = 6) -> List[D
             "summary": item.summary,
             "payload_type": item.payload_type,
             "payload": item.payload,
-            "when_context": item.when_context,
             "similarity": score,
         })
     reranked_ids = _rerank_with_ai(query, candidates, limit)
@@ -707,6 +699,7 @@ def _move_item(
     item.order_index = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=dest_list.id).scalar() + 1
 
     db.session.commit()
+    _start_embedding_job(user_id, ENTITY_TODO_ITEM, item.id)
     return _item_dict(item)
 
 
@@ -1133,12 +1126,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_recalls",
-            "description": "List recall items with optional search or when_context filter",
+            "description": "List recall items with optional search",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "search": {"type": "string"},
-                    "when_context": {"type": "string"},
                     "limit": {"type": "integer", "default": 20},
                 },
             },
@@ -1148,7 +1140,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_recall",
-            "description": "Create a recall item with title, why, payload, and when_context",
+            "description": "Create a recall item with title, why, payload, and type",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1156,9 +1148,8 @@ TOOLS = [
                     "why": {"type": "string"},
                     "payload_type": {"type": "string", "description": "url or text"},
                     "payload": {"type": "string"},
-                    "when_context": {"type": "string"},
                 },
-                "required": ["title", "why", "payload_type", "payload", "when_context"],
+                "required": ["title", "why", "payload_type", "payload"],
             },
         },
     },
@@ -1262,23 +1253,23 @@ def _build_system_prompt(today_iso: str, timezone: str, user_id: int) -> str:
 - Today's date is {today_iso} (timezone: {timezone}). When the user says things like "today", "tomorrow", "next Monday", convert them to an explicit YYYY-MM-DD in that timezone before calling tools. If ambiguous, ask a short clarifying question.
 - Determine intent: list tasks/projects; add tasks/phases/projects; move tasks; update status/content; add/find recall items with fuzzy matching.
 - You can also manage the calendar: list calendar entries by day/range and create new entries (tasks/events/phases/groups). Always set day (YYYY-MM-DD) and use precise fields (start_time/end_time HH:MM 24h, status, priority, flags is_event/is_phase/is_group, phase_id/group_id when nesting, reminder_minutes_before, description).
-- For recall capture: when the user wants to remember something, call create_recall with title, why, payload_type (url or text), payload, and when_context.
-- For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for filtered lists use list_recalls with when_context filters.
+- For recall capture: when the user wants to remember something, call create_recall with title, why, payload_type (url or text), and payload.
+- For recall retrieval: start with search_recalls_semantic(query) to find fuzzy matches even with vague hints; if user asks for a list use list_recalls with search filters.
 - For bookmark capture: when the user wants to save quick-reference info, call create_bookmark with title, value, and optional description/pinned.
 - For bookmark retrieval: start with search_bookmarks_semantic(query); if user asks for lists or pinned-only, use list_bookmarks with pinned filter.
 - For task retrieval: when the user has a vague memory or fuzzy description, start with search_tasks_semantic(query); when they want a list by project/status, use list_items/list_hub_tasks.
 - For calendar retrieval: when the user has a vague memory, start with search_calendar_semantic(query); when they specify dates or ranges, use list_calendar/list_calendar_range.
 - Recall response format (concise markdown with clickable links):
   * Header: "**Recall matches**" (only when showing results)
-  * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) - <when_context> - <payload_type> - <why>"
+  * Each match MUST use this EXACT format: "- [<title>](/recalls?note=<id>) - <payload_type> - <why>"
   * CRITICAL RULES FOR RECALL LINKS:
     - The markdown link href MUST ALWAYS be: /recalls?note=<id>
     - The <id> is the "id" field from the search_recalls_semantic result
     - NEVER EVER use any external URL as the link href
     - NEVER use https:// or http:// URLs in the recall title link
-  * Example: recall with id=42, title="ML Research", when_context="work"
-    - CORRECT: "- [ML Research](/recalls?note=42) - work - url - Might help with future ML reading."
-    - WRONG: "- [ML Research](https://example.com) - work - url - Might help with future ML reading."
+  * Example: recall with id=42, title="ML Research"
+    - CORRECT: "- [ML Research](/recalls?note=42) - url - Might help with future ML reading."
+    - WRONG: "- [ML Research](https://example.com) - url - Might help with future ML reading."
 - Bookmark response format (concise markdown with clickable links):
   * Header: "**Bookmark matches**" (only when showing results)
   * Each match MUST use this EXACT format: "- [<title>](/bookmarks?item=<id>) - <pinned|unpinned> - <value>"
@@ -1425,7 +1416,6 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
         return _list_recalls(
             user_id=user_id,
             search=args.get("search"),
-            when_context=args.get("when_context"),
             limit=args.get("limit", 20),
         )
     if name == "create_recall":
@@ -1435,7 +1425,6 @@ def _call_tool(user_id: int, name: str, args: Dict[str, Any]) -> Any:
             why=args.get("why", ""),
             payload_type=args.get("payload_type", ""),
             payload=args.get("payload", ""),
-            when_context=args.get("when_context", ""),
         )
     if name == "search_recalls_semantic":
         return _search_recalls_semantic(

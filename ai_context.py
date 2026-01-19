@@ -10,8 +10,8 @@ def get_recalls_context(user_id):
 
     lines = []
     for r in recalls:
-        # Basic info: context, title, why
-        line = f"- [{r.when_context}] {r.title}"
+        # Basic info: title, why
+        line = f"- {r.title}"
         if r.why:
             line += f": {r.why}"
 

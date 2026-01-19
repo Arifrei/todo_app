@@ -159,6 +159,12 @@
                             <span class="nav-label">Bookmarks</span>
                         </a>
                     </li>
+                    <li data-nav-id="feed">
+                        <a href="/feed" class="{{ 'active' if request.path.startswith('/feed') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-bolt"></i></span>
+                            <span class="nav-label">Feed</span>
+                        </a>
+                    </li>
                     <li data-nav-id="quick-access">
                         <a href="/quick-access" class="{{ 'active' if request.path.startswith('/quick-access') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-star"></i></span>

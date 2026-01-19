@@ -34,7 +34,6 @@ def build_embedding_text(entity_type: str, item) -> str:
             "[RECALL]",
             "module: recall",
             f"payload_type: {item.payload_type}" if getattr(item, "payload_type", None) else None,
-            f"when: {item.when_context}" if getattr(item, "when_context", None) else None,
             item.title,
             item.why,
             item.summary,
@@ -250,3 +249,11 @@ def refresh_embedding_for_entity(user_id: int, entity_type: str, entity_id: int)
     if not text:
         return False
     return bool(upsert_embedding(user_id, entity_type, entity_id, text))
+
+
+def delete_embedding_for_entity(user_id: int, entity_type: str, entity_id: int) -> int:
+    return EmbeddingRecord.query.filter_by(
+        user_id=user_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+    ).delete()

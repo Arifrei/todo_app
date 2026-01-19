@@ -11,6 +11,7 @@ Idempotent updates:
 - Ensure note has todo_item_id, calendar_event_id, title/content timestamps
 - Ensure calendar_event table exists with all current columns (is_event, is_group, group_id, priority, status, reminder_minutes_before, rollover_enabled, timestamps)
 - Ensure recall_items exists with new schema
+- Ensure do_feed_item exists for the Do-Feed module
 """
 import sqlite3
 from pathlib import Path
@@ -314,7 +315,6 @@ def ensure_recalls(cur):
                 title VARCHAR(120) NOT NULL,
                 payload_type VARCHAR(10) NOT NULL,
                 payload TEXT NOT NULL,
-                when_context VARCHAR(30) NOT NULL,
                 why VARCHAR(500),
                 summary TEXT,
                 ai_status VARCHAR(20) DEFAULT 'pending',
@@ -334,7 +334,6 @@ def ensure_recalls(cur):
     add_column(cur, "recall_items", "ai_status", "VARCHAR(20) DEFAULT 'pending'")
     add_column(cur, "recall_items", "payload_type", "VARCHAR(10) NOT NULL DEFAULT 'text'")
     add_column(cur, "recall_items", "payload", "TEXT NOT NULL DEFAULT ''")
-    add_column(cur, "recall_items", "when_context", "VARCHAR(30) NOT NULL DEFAULT 'free'")
     add_column(cur, "recall_items", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "recall_items", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
@@ -476,6 +475,33 @@ def ensure_bookmark_item(cur):
     add_column(cur, "bookmark_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_do_feed_item(cur):
+    if not table_exists(cur, "do_feed_item"):
+        cur.execute(
+            """
+            CREATE TABLE do_feed_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                url VARCHAR(600) NOT NULL,
+                description TEXT,
+                state VARCHAR(40) NOT NULL DEFAULT 'free',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] do_feed_item table created")
+        return
+    add_column(cur, "do_feed_item", "user_id", "INTEGER")
+    add_column(cur, "do_feed_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "do_feed_item", "url", "VARCHAR(600) NOT NULL DEFAULT ''")
+    add_column(cur, "do_feed_item", "description", "TEXT")
+    add_column(cur, "do_feed_item", "state", "VARCHAR(40) NOT NULL DEFAULT 'free'")
+    add_column(cur, "do_feed_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "do_feed_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
 def main():
     if not DB_PATH.exists():
         print("Database not found. Run baseline migrate.py first.")
@@ -497,6 +523,7 @@ def main():
         ensure_notifications(cur)
         ensure_quick_access(cur)
         ensure_bookmark_item(cur)
+        ensure_do_feed_item(cur)
         conn.commit()
         print("Global migrations complete.")
     finally:

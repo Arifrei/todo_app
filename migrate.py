@@ -11,6 +11,8 @@ Creates/aligns all core tables to the current models:
 - note
 - calendar_event
 - recall_items
+- bookmark_item
+- do_feed_item
 The script is idempotent: it only adds missing tables/columns and backfills
 order indexes and legacy statuses.
 """
@@ -369,7 +371,6 @@ def ensure_recall_table(cur):
                 title VARCHAR(120) NOT NULL,
                 payload_type VARCHAR(10) NOT NULL,
                 payload TEXT NOT NULL,
-                when_context VARCHAR(30) NOT NULL,
                 why VARCHAR(500),
                 summary TEXT,
                 ai_status VARCHAR(20) DEFAULT 'pending',
@@ -389,7 +390,6 @@ def ensure_recall_table(cur):
     add_column(cur, "recall_items", "ai_status", "VARCHAR(20) DEFAULT 'pending'")
     add_column(cur, "recall_items", "payload_type", "VARCHAR(10) NOT NULL DEFAULT 'text'")
     add_column(cur, "recall_items", "payload", "TEXT NOT NULL DEFAULT ''")
-    add_column(cur, "recall_items", "when_context", "VARCHAR(30) NOT NULL DEFAULT 'free'")
     add_column(cur, "recall_items", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "recall_items", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
@@ -422,6 +422,34 @@ def ensure_bookmark_table(cur):
     add_column(cur, "bookmark_item", "pin_order", "INTEGER DEFAULT 0")
     add_column(cur, "bookmark_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "bookmark_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_do_feed_table(cur):
+    """Create or align the do-feed table used for the Do-Feed module."""
+    if not table_exists(cur, "do_feed_item"):
+        cur.execute(
+            """
+            CREATE TABLE do_feed_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                url VARCHAR(600) NOT NULL,
+                description TEXT,
+                state VARCHAR(40) NOT NULL DEFAULT 'free',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] do_feed_item table created")
+        return
+    add_column(cur, "do_feed_item", "user_id", "INTEGER")
+    add_column(cur, "do_feed_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "do_feed_item", "url", "VARCHAR(600) NOT NULL DEFAULT ''")
+    add_column(cur, "do_feed_item", "description", "TEXT")
+    add_column(cur, "do_feed_item", "state", "VARCHAR(40) NOT NULL DEFAULT 'free'")
+    add_column(cur, "do_feed_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "do_feed_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
 def ensure_embedding_table(cur):
@@ -575,6 +603,7 @@ def main():
         ensure_recurrence_exception_table(cur)
         ensure_recall_table(cur)
         ensure_bookmark_table(cur)
+        ensure_do_feed_table(cur)
         ensure_embedding_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)

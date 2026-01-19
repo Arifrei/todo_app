@@ -17,9 +17,10 @@ from embedding_service import (
     ENTITY_RECALL,
     ENTITY_TODO_ITEM,
     ENTITY_TODO_LIST,
+    delete_embedding_for_entity,
     refresh_embedding_for_entity,
 )
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -50,8 +51,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'quick-access', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
@@ -339,6 +340,35 @@ def start_embedding_job(user_id, entity_type, entity_id):
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
+
+def delete_embedding(user_id, entity_type, entity_id):
+    """Delete a stored embedding for a single entity."""
+    try:
+        delete_embedding_for_entity(user_id, entity_type, entity_id)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.warning(
+            "Embedding delete failed for %s:%s user=%s (%s)",
+            entity_type,
+            entity_id,
+            user_id,
+            exc,
+        )
+
+
+def start_list_children_embedding_job(user_id, list_id):
+    """Refresh embeddings for items inside a list after a list rename."""
+    def _run():
+        with app.app_context():
+            todo_list = TodoList.query.filter_by(id=list_id, user_id=user_id).first()
+            if not todo_list:
+                return
+            for item in todo_list.items:
+                refresh_embedding_for_entity(user_id, ENTITY_TODO_ITEM, item.id)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
 
 def parse_outline(outline_text, list_type='list'):
     """Parse a pasted outline into item dicts with content/status/description/notes."""
@@ -1807,6 +1837,13 @@ def bookmarks_page():
         return redirect(url_for('select_user'))
     return render_template('bookmarks.html')
 
+@app.route('/feed')
+def feed_page():
+    """Feed module page."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('feed.html')
+
 @app.route('/list/<int:list_id>')
 def list_view(list_id):
     user = get_current_user()
@@ -2177,10 +2214,9 @@ def handle_recalls():
         title = (data.get('title') or '').strip()
         payload_type = (data.get('payload_type') or '').strip().lower()
         payload = (data.get('payload') or '').strip()
-        when_context = (data.get('when_context') or '').strip()
 
-        if not title or not payload or not when_context:
-            return jsonify({'error': 'title, payload, and when_context are required'}), 400
+        if not title or not payload:
+            return jsonify({'error': 'title and payload are required'}), 400
         if payload_type not in ['url', 'text']:
             return jsonify({'error': 'payload_type must be url or text'}), 400
 
@@ -2189,7 +2225,6 @@ def handle_recalls():
             title=title,
             payload_type=payload_type,
             payload=payload,
-            when_context=when_context,
             why='',  # Default empty, AI will populate
             ai_status='pending'
         )
@@ -2225,6 +2260,7 @@ def recall_detail(recall_id):
         return jsonify(recall.to_dict())
 
     if request.method == 'DELETE':
+        delete_embedding(user.id, ENTITY_RECALL, recall.id)
         db.session.delete(recall)
         db.session.commit()
         return jsonify({'deleted': True})
@@ -2248,10 +2284,6 @@ def recall_detail(recall_id):
         payload_val = (data.get('payload') or '').strip()
         if payload_val:
             recall.payload = payload_val
-    if 'when_context' in data:
-        when_val = (data.get('when_context') or '').strip()
-        if when_val:
-            recall.when_context = when_val
 
     recall.updated_at = _now_local()
     db.session.commit()
@@ -2850,6 +2882,7 @@ def delete_quick_access(item_id):
         return jsonify(item.to_dict())
     db.session.delete(item)
     db.session.commit()
+    delete_embedding(user.id, ENTITY_BOOKMARK, item.id)
     return jsonify({'message': 'Deleted'})
 
 
@@ -2992,6 +3025,88 @@ def bookmark_detail(item_id):
 
         db.session.commit()
         start_embedding_job(user.id, ENTITY_BOOKMARK, item.id)
+        return jsonify(item.to_dict())
+
+    delete_embedding(user.id, ENTITY_BOOKMARK, item.id)
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({'message': 'Deleted'})
+
+
+@app.route('/api/feed', methods=['GET', 'POST'])
+def handle_feed():
+    """List or create feed items."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        state_filter = (request.args.get('state') or '').strip().lower()
+        query = DoFeedItem.query.filter_by(user_id=user.id)
+        if state_filter and state_filter != 'all':
+            query = query.filter(DoFeedItem.state == state_filter)
+        items = query.order_by(
+            DoFeedItem.updated_at.desc(),
+            DoFeedItem.created_at.desc()
+        ).all()
+        return jsonify([item.to_dict() for item in items])
+
+    data = request.json or {}
+    title = (data.get('title') or '').strip()
+    url = (data.get('url') or '').strip()
+    description = (data.get('description') or '').strip() or None
+    raw_state = data.get('state') or 'free'
+    state = re.sub(r'\s+', ' ', str(raw_state)).strip().lower()
+    if not state:
+        state = 'free'
+
+    if not title or not url:
+        return jsonify({'error': 'Title and URL are required'}), 400
+
+    new_item = DoFeedItem(
+        user_id=user.id,
+        title=title,
+        url=url,
+        description=description,
+        state=state
+    )
+    db.session.add(new_item)
+    db.session.commit()
+    return jsonify(new_item.to_dict()), 201
+
+
+@app.route('/api/feed/<int:item_id>', methods=['GET', 'PUT', 'DELETE'])
+def feed_detail(item_id):
+    """Get, update, or delete a feed item."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    item = DoFeedItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+
+    if request.method == 'GET':
+        return jsonify(item.to_dict())
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        if 'title' in data:
+            title = (data.get('title') or '').strip()
+            if not title:
+                return jsonify({'error': 'Title is required'}), 400
+            item.title = title
+        if 'url' in data:
+            url = (data.get('url') or '').strip()
+            if not url:
+                return jsonify({'error': 'URL is required'}), 400
+            item.url = url
+        if 'description' in data:
+            description = (data.get('description') or '').strip()
+            item.description = description or None
+        if 'state' in data:
+            raw_state = data.get('state') or 'free'
+            state = re.sub(r'\s+', ' ', str(raw_state)).strip().lower()
+            item.state = state or 'free'
+        db.session.commit()
         return jsonify(item.to_dict())
 
     db.session.delete(item)
@@ -3523,6 +3638,7 @@ def calendar_event_detail(event_id):
     if request.method == 'DELETE':
         # Cancel reminder job if exists
         _cancel_reminder_job(event)
+        delete_embedding(user.id, ENTITY_CALENDAR, event.id)
         if event.recurrence_id:
             db.session.add(RecurrenceException(
                 user_id=user.id,
@@ -4068,8 +4184,11 @@ def handle_list(list_id):
         # Delete any child lists linked from this list (for hubs)
         for item in todo_list.items:
             if item.linked_list:
+                delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)
                 db.session.delete(item.linked_list)
+            delete_embedding(user.id, ENTITY_TODO_ITEM, item.id)
         db.session.delete(todo_list)
+        delete_embedding(user.id, ENTITY_TODO_LIST, todo_list.id)
         db.session.commit()
         return '', 204
     
@@ -4078,6 +4197,7 @@ def handle_list(list_id):
         todo_list.title = data.get('title', todo_list.title)
         db.session.commit()
         start_embedding_job(user.id, ENTITY_TODO_LIST, todo_list.id)
+        start_list_children_embedding_job(user.id, todo_list.id)
         return jsonify(todo_list.to_dict())
         
     return jsonify(todo_list.to_dict())
@@ -4211,8 +4331,10 @@ def handle_item(item_id):
         # models.py has cascade="all, delete-orphan" on the parent list side, 
         # but the linked_list is a separate relationship.
         if item.linked_list:
+            delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)
             db.session.delete(item.linked_list)
             
+        delete_embedding(user.id, ENTITY_TODO_ITEM, item.id)
         db.session.delete(item)
         db.session.commit()
         return '', 204
@@ -4432,6 +4554,7 @@ def move_item(item_id):
             ).outerjoin(TodoItem, TodoList.id == TodoItem.linked_list_id).filter(TodoItem.id == None)
             child_list.order_index = (order_query.scalar() or 0) + 1
             hub_list = item.list
+            delete_embedding(user.id, ENTITY_TODO_ITEM, item.id)
             db.session.delete(item)
             db.session.flush()
             if hub_list:
@@ -4452,6 +4575,7 @@ def move_item(item_id):
         db.session.flush()
         insert_item_in_order(dest_hub, item)
         db.session.commit()
+        start_embedding_job(user.id, ENTITY_TODO_ITEM, item.id)
         return jsonify({'message': f'Moved to {dest_hub.title}'})
 
     # --- Moving a Task to another list/phase ---
@@ -4508,6 +4632,7 @@ def move_item(item_id):
             new_phase.update_phase_status()
 
     db.session.commit()
+    start_embedding_job(user.id, ENTITY_TODO_ITEM, item.id)
     return jsonify({'message': 'Task moved successfully'})
 
 @app.route('/api/move-destinations/<int:list_id>', methods=['GET'])
@@ -4787,7 +4912,9 @@ def bulk_items():
     if action == 'delete':
         for item in items:
             if item.linked_list:
+                delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)
                 db.session.delete(item.linked_list)
+            delete_embedding(user.id, ENTITY_TODO_ITEM, item.id)
             db.session.delete(item)
         db.session.commit()
         return jsonify({'deleted': len(items)})
@@ -4867,6 +4994,8 @@ def bulk_items():
                 dest_phase_obj.update_phase_status()
 
         db.session.commit()
+        for item in movable_items:
+            start_embedding_job(user.id, ENTITY_TODO_ITEM, item.id)
         return jsonify({'moved': len(movable_items), 'skipped': skipped})
 
 

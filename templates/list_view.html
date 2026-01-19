@@ -70,18 +70,10 @@
             </div>
         </div>
         {% elif todo_list.type == 'light' %}
-        <div class="header-add-menu">
-            <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
-                <i class="fa-solid fa-plus"></i>
-                <span>Add</span>
-                <i class="fa-solid fa-caret-down"></i>
-            </button>
-            <div class="header-menu-dropdown header-add-dropdown" id="header-add-dropdown">
-                <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderAddMenu(event);">
-                    <i class="fa-solid fa-plus"></i> Add Task
-                </button>
-            </div>
-        </div>
+        <button class="btn btn-primary" onclick="openAddItemModal(null, 'task')" title="Add Task">
+            <i class="fa-solid fa-plus"></i>
+            <span>Add</span>
+        </button>
         {% else %}
         <div class="header-add-menu">
             <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
