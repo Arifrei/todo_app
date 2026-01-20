@@ -21,6 +21,9 @@
                     <i class="fa-solid fa-ellipsis-vertical"></i>
                 </button>
                 <div class="dropdown-menu notes-actions-menu" id="list-actions-menu">
+                    <button class="dropdown-item" id="list-select-toggle">
+                        <i class="fa-solid fa-check-square"></i> Select
+                    </button>
                     <button class="dropdown-item" id="list-share-btn">
                         <i class="fa-solid fa-share-nodes"></i> Share
                     </button>
@@ -51,5 +54,46 @@
             <div class="list-pill-stack" id="list-pill-stack"></div>
         </div>
     </section>
+
+    <div class="list-bulk-bar" id="list-bulk-bar">
+        <div class="list-bulk-left">
+            <span class="list-bulk-count" id="list-bulk-count">0 selected</span>
+        </div>
+        <div class="list-bulk-actions">
+            <div class="list-bulk-dropdown">
+                <button class="btn btn-secondary btn-icon" id="list-bulk-more-toggle" title="Bulk actions">
+                    <i class="fa-solid fa-ellipsis"></i>
+                </button>
+                <div class="list-bulk-menu" id="list-bulk-more-menu">
+                    <button class="dropdown-item" id="list-bulk-move-btn">
+                        <i class="fa-solid fa-layer-group"></i> Move to section
+                    </button>
+                    <button class="dropdown-item" id="list-bulk-section-btn">
+                        <i class="fa-solid fa-plus"></i> New section
+                    </button>
+                </div>
+            </div>
+            <button class="btn btn-danger btn-icon" id="list-bulk-delete-btn" title="Delete selected" aria-label="Delete selected">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+            <button class="btn btn-ghost btn-icon" id="list-bulk-done-btn" title="Done" aria-label="Done">
+                <i class="fa-solid fa-check"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="modal" id="list-section-modal">
+        <div class="modal-content">
+            <h2>New Section</h2>
+            <div class="form-group">
+                <label for="list-section-title">Section title</label>
+                <input type="text" id="list-section-title" class="form-control" placeholder="Optional">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="list-section-cancel-btn">Cancel</button>
+                <button class="btn btn-primary" id="list-section-save-btn">Create</button>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

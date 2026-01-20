@@ -323,6 +323,7 @@ class RecallItem(db.Model):
     title = db.Column(db.String(120), nullable=False)
     payload_type = db.Column(db.String(10), nullable=False)  # 'url' or 'text'
     payload = db.Column(db.Text, nullable=False)
+    when_context = db.Column(db.String(30), nullable=False, default='future')
 
     # AI-generated fields (populated in background)
     why = db.Column(db.String(500), nullable=True)
@@ -341,6 +342,7 @@ class RecallItem(db.Model):
             'ai_status': self.ai_status,
             'payload_type': self.payload_type,
             'payload': self.payload,
+            'when_context': self.when_context,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }
@@ -362,6 +364,7 @@ class CalendarEvent(db.Model):
     priority = db.Column(db.String(10), default='medium')  # low | medium | high
     is_phase = db.Column(db.Boolean, default=False)
     is_event = db.Column(db.Boolean, default=False)  # informational event (not a task)
+    allow_overlap = db.Column(db.Boolean, default=False)  # allow tasks to overlap this event
     is_group = db.Column(db.Boolean, default=False)  # grouping header
     phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     phase = db.relationship('CalendarEvent', remote_side=[id], backref='phase_events', foreign_keys=[phase_id])
@@ -398,6 +401,7 @@ class CalendarEvent(db.Model):
             'priority': self.priority,
             'is_phase': self.is_phase,
             'is_event': self.is_event,
+            'allow_overlap': self.allow_overlap,
             'is_group': self.is_group,
             'phase_id': self.phase_id,
             'group_id': self.group_id,

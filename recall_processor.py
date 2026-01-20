@@ -288,6 +288,75 @@ def generate_fallback(title, content):
     return {"why": "Worth revisiting later.", "summary": summary}
 
 
+def generate_summary_only(title, content):
+    """Generate summary only for recalls that already have a why."""
+    if is_content_unreachable(content):
+        return {"summary": "Content unreachable."}
+
+    system_prompt = """You are analyzing content for a personal recall system.
+
+Generate ONLY a SUMMARY (2-3 sentences):
+- Only include facts explicitly stated in the content
+- Key details: names, numbers, techniques actually mentioned
+- Do NOT add information not present in the source
+
+Return ONLY valid JSON:
+{"summary": "factual summary here"}"""
+
+    user_message = f"""Title: {title}
+
+Content:
+{content[:4000]}"""
+
+    response = call_openai(system_prompt, user_message)
+    result = try_parse_json(response)
+    if result and 'summary' in result:
+        return result
+
+    response = call_openai(system_prompt, user_message, retry=True)
+    result = try_parse_json(response)
+    if result and 'summary' in result:
+        return result
+
+    clean = re.sub(r'\s+', ' ', content).strip()
+    summary = clean[:300] + "..." if len(clean) > 300 else clean
+    return {"summary": summary or "Content unreachable."}
+
+
+def generate_why_only(title, content):
+    """Generate why only for recalls that already have a summary."""
+    if is_content_unreachable(content):
+        return {"why": generate_why_from_title(title)}
+
+    system_prompt = """You are analyzing content for a personal recall system.
+
+Generate ONLY a WHY (5-12 words, natural phrasing):
+- State the actual takeaway from this specific content
+- ONLY mention topics/techniques that are explicitly covered
+- Do NOT infer, assume, or hallucinate topics not in the content
+- Be literal and accurate to what's actually there
+
+Return ONLY valid JSON:
+{"why": "specific takeaway here"}"""
+
+    user_message = f"""Title: {title}
+
+Content:
+{content[:4000]}"""
+
+    response = call_openai(system_prompt, user_message)
+    result = try_parse_json(response)
+    if result and 'why' in result:
+        return result
+
+    response = call_openai(system_prompt, user_message, retry=True)
+    result = try_parse_json(response)
+    if result and 'why' in result:
+        return result
+
+    return {"why": generate_why_from_title(title)}
+
+
 def process_recall(recall_id):
     """
     Background job to process a recall: scrape URL (if needed), generate why + summary.
@@ -305,17 +374,37 @@ def process_recall(recall_id):
         db.session.commit()
 
         try:
+            existing_why = (recall.why or '').strip()
+            existing_summary = (recall.summary or '').strip()
+
             # Get content to analyze
             if recall.payload_type == 'url':
                 content = scrape_url_content(recall.payload)
             else:
                 content = recall.payload
 
-            # Generate why + summary
-            result = generate_why_and_summary(recall.title, content)
+            if existing_why and existing_summary:
+                recall.ai_status = 'done'
+                db.session.commit()
+                try:
+                    from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
+                    refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
+                except Exception as exc:
+                    print(f"Embedding refresh failed for recall {recall_id}: {exc}")
+                return
 
-            recall.why = result.get('why', 'Worth revisiting later.')
-            recall.summary = result.get('summary', '')
+            if existing_why and not existing_summary:
+                result = generate_summary_only(recall.title, content)
+                recall.summary = result.get('summary', '')
+                recall.why = existing_why
+            elif existing_summary and not existing_why:
+                result = generate_why_only(recall.title, content)
+                recall.why = result.get('why', 'Worth revisiting later.')
+                recall.summary = existing_summary
+            else:
+                result = generate_why_and_summary(recall.title, content)
+                recall.why = result.get('why', 'Worth revisiting later.')
+                recall.summary = result.get('summary', '')
             recall.ai_status = 'done'
             db.session.commit()
             try:
@@ -326,8 +415,10 @@ def process_recall(recall_id):
 
         except Exception as e:
             print(f"Error processing recall {recall_id}: {e}")
-            recall.why = "Worth revisiting later."
-            recall.summary = f"[Processing failed: {str(e)}]"
+            if not (recall.why or '').strip():
+                recall.why = "Worth revisiting later."
+            if not (recall.summary or '').strip():
+                recall.summary = f"[Processing failed: {str(e)}]"
             recall.ai_status = 'failed'
             db.session.commit()
             try:

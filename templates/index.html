@@ -6,9 +6,31 @@
         <h1>Tasks</h1>
         <p style="color: var(--text-muted);">Manage your projects and tasks</p>
     </div>
-    <button class="btn btn-primary tasks-add-btn header-add-circle" onclick="openCreateModal()" aria-label="Add list" title="Add list">
-        <i class="fa-solid fa-plus"></i>
-    </button>
+    <div class="tasks-fab-container" id="tasks-fab">
+        <button class="tasks-fab-main" id="tasks-fab-main">
+            <i class="fa-solid fa-plus"></i>
+        </button>
+        <div class="tasks-fab-options" id="tasks-fab-options">
+            <button class="tasks-fab-option" data-type="hub">
+                <i class="fa-solid fa-cubes"></i>
+                <span>Hub</span>
+            </button>
+            <button class="tasks-fab-option" data-type="list">
+                <i class="fa-solid fa-list-check"></i>
+                <span>List</span>
+            </button>
+            <button class="tasks-fab-option" data-type="light">
+                <i class="fa-solid fa-feather"></i>
+                <span>Light</span>
+            </button>
+        </div>
+        <div class="tasks-fab-input-container" id="tasks-fab-input-container">
+            <input type="text" class="tasks-fab-input" id="tasks-fab-input" placeholder="Enter title...">
+            <button class="tasks-fab-submit" id="tasks-fab-submit">
+                <i class="fa-solid fa-check"></i>
+            </button>
+        </div>
+    </div>
 </header>
 
 <div id="hubs-container" style="display: none; margin-bottom: 2rem;">
@@ -32,27 +54,4 @@
     </div>
 </div>
 
-<!-- Create List Modal -->
-<div class="modal" id="create-modal">
-    <div class="modal-content">
-        <h2>Create New List</h2>
-        <br>
-        <div class="form-group">
-            <label>Title</label>
-            <input type="text" id="list-title" class="form-control" placeholder="e.g., Work Projects">
-        </div>
-        <div class="form-group">
-            <label>Type</label>
-            <select id="list-type" class="form-control">
-                <option value="hub">Project Hub (Parent List)</option>
-                <option value="list">Simple Task List</option>
-                <option value="light">Light Task List</option>
-            </select>
-        </div>
-        <div class="modal-actions">
-            <button class="btn" onclick="closeCreateModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="createList()">Create</button>
-        </div>
-    </div>
-</div>
 {% endblock %}

@@ -106,20 +106,19 @@
                 <button class="hamburger-btn" id="mobile-menu-btn" aria-label="Open navigation">
                     <span></span><span></span><span></span>
                 </button>
+            </div>
+            <div class="mobile-brand">
+                <img src="{{ url_for('static', filename='myo.png') }}" alt="TaskFlow">
+            </div>
+            <div class="mobile-topbar-actions">
                 <button class="btn-icon-mobile" onclick="window.location.href='/quick-access'" aria-label="Quick Access" title="Quick Access">
                     <i class="fa-solid fa-star"></i>
                 </button>
             </div>
-            <div class="mobile-brand">
-                <i class="fa-solid fa-layer-group"></i>
-                <span>TaskFlow</span>
-            </div>
-            <div class="mobile-topbar-actions"></div>
         </div>
         <nav class="sidebar">
             <div class="logo">
-                <i class="fa-solid fa-layer-group"></i>
-                <span>TaskFlow</span>
+                <img src="{{ url_for('static', filename='cards.png') }}" alt="TaskFlow">
             </div>
             <div class="nav-row">
                 <ul class="nav-links">
@@ -162,7 +161,7 @@
                     <li data-nav-id="feed">
                         <a href="/feed" class="{{ 'active' if request.path.startswith('/feed') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-bolt"></i></span>
-                            <span class="nav-label">Feed</span>
+                            <span class="nav-label">EverFeed</span>
                         </a>
                     </li>
                     <li data-nav-id="quick-access">
@@ -220,6 +219,18 @@
             <div class="modal-actions">
                 <button class="btn" onclick="closeConfirmModal()">Cancel</button>
                 <button class="btn btn-danger" id="confirm-yes-button">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Overlap Warning Modal -->
+    <div class="modal" id="overlap-warning-modal">
+        <div class="modal-content">
+            <h2><i class="fa-solid fa-triangle-exclamation" style="color: var(--warning-color); margin-right: 0.5rem;"></i>Event Conflict</h2>
+            <p id="overlap-warning-message" style="color: var(--text-muted); margin: 0.5rem 0 1rem 0;"></p>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeOverlapWarningModal()">Cancel</button>
+                <button class="btn btn-primary" id="overlap-add-anyway-button">Add Anyway</button>
             </div>
         </div>
     </div>

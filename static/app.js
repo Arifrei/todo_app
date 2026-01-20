@@ -95,6 +95,10 @@ let noteAutoSaveInFlight = false;
 let noteExitInProgress = false;
 let noteFolderState = { folders: [], currentFolderId: null };
 let noteMoveState = { ids: [], destinationFolderId: null, navStack: [] };
+let activeListItemMenu = null;
+let activeListItemActionPill = null;
+let listSelectionState = { active: false, ids: new Set() };
+let listSectionModalState = { onSubmit: null };
 let recallState = {
     items: [],
     modalRecallId: null,
@@ -165,6 +169,7 @@ async function loadDashboard() {
         }
 
         initDashboardReorder();
+        initTasksFab();
     } catch (e) {
         console.error('Error loading lists:', e);
     }
@@ -1355,12 +1360,14 @@ window.addEventListener('click', function (e) {
 // --- Modal Functions ---
 
 function openCreateModal() {
-    createModal.classList.add('active');
+    if (createModal) createModal.classList.add('active');
 }
 
 function closeCreateModal() {
+    if (!createModal) return;
     createModal.classList.remove('active');
-    document.getElementById('list-title').value = '';
+    const titleInput = document.getElementById('list-title');
+    if (titleInput) titleInput.value = '';
 }
 
 function openAddItemModal(phaseId = null, mode = 'task') {
@@ -1861,6 +1868,33 @@ function openConfirmModal(message, onConfirm) {
 function closeConfirmModal() {
     pendingConfirm = null;
     if (confirmModal) confirmModal.classList.remove('active');
+}
+
+// --- Overlap Warning Modal ---
+const overlapWarningModal = document.getElementById('overlap-warning-modal');
+const overlapWarningMessage = document.getElementById('overlap-warning-message');
+const overlapAddAnywayButton = document.getElementById('overlap-add-anyway-button');
+let pendingOverlapAction = null;
+
+function openOverlapWarningModal(message, onAddAnyway) {
+    if (overlapWarningMessage) overlapWarningMessage.textContent = message || 'An event is scheduled during this time.';
+    pendingOverlapAction = onAddAnyway;
+    if (overlapWarningModal) overlapWarningModal.classList.add('active');
+}
+
+function closeOverlapWarningModal() {
+    pendingOverlapAction = null;
+    if (overlapWarningModal) overlapWarningModal.classList.remove('active');
+}
+
+// Initialize overlap warning modal button
+if (overlapAddAnywayButton) {
+    overlapAddAnywayButton.addEventListener('click', async () => {
+        if (pendingOverlapAction) {
+            await pendingOverlapAction();
+        }
+        closeOverlapWarningModal();
+    });
 }
 
 async function saveItemChanges() {
@@ -2621,6 +2655,7 @@ async function handleDrop(e) {
     // Re-organize done tasks after drag to maintain proper grouping
     normalizePhaseParents();
     organizePhaseDoneTasks();
+    organizeLightListDoneTasks();
 }
 
 async function refreshListView() {
@@ -2635,6 +2670,7 @@ async function refreshListView() {
         document.getElementById('items-container').innerHTML = newContainer.innerHTML;
         normalizePhaseParents();
         organizePhaseDoneTasks();
+        organizeLightListDoneTasks();
         initTaskSelectionUI();
         selectedItems.forEach(id => setTaskSelected(id, true, true));
         updateBulkBar();
@@ -2998,6 +3034,7 @@ async function touchHandleDragEnd(e) {
     // Re-organize done tasks after drag to maintain proper grouping
     normalizePhaseParents();
     organizePhaseDoneTasks();
+    organizeLightListDoneTasks();
     console.log('🔴 ===== DRAG COMPLETE =====');
 }
 // --- Phase Visibility ---
@@ -3166,6 +3203,63 @@ function organizePhaseDoneTasks() {
         container.insertBefore(bar, anchor);
         container.insertBefore(doneBox, anchor);
     });
+}
+
+function organizeLightListDoneTasks() {
+    const listView = document.querySelector('.light-list-view');
+    if (!listView) return; // Only run on light lists
+
+    const container = document.getElementById('items-container');
+    if (!container) return;
+
+    // Unwrap any previous containers to avoid duplicating bars
+    document.querySelectorAll('.light-done-container').forEach(box => {
+        while (box.firstChild) {
+            container.insertBefore(box.firstChild, box);
+        }
+        box.remove();
+    });
+    document.querySelectorAll('.light-done-bar').forEach(bar => bar.remove());
+
+    // Collect all done tasks
+    const allTasks = Array.from(container.querySelectorAll('.task-item'));
+    const doneTasks = allTasks.filter(task => task.dataset.status === 'done');
+
+    if (!doneTasks.length) return;
+
+    // Create the separator bar
+    const bar = document.createElement('div');
+    bar.className = 'light-done-bar phase-done-bar';
+
+    const label = document.createElement('span');
+    label.className = 'phase-done-label';
+    label.textContent = `${doneTasks.length} done task${doneTasks.length === 1 ? '' : 's'}`;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary btn-small phase-done-toggle';
+
+    // Create the collapsible container for done tasks
+    const doneBox = document.createElement('div');
+    doneBox.className = 'light-done-container phase-done-container collapsed';
+
+    const startOpen = currentTaskFilter === 'done';
+    if (startOpen) doneBox.classList.remove('collapsed');
+    btn.textContent = startOpen ? 'Hide' : 'Show';
+
+    btn.addEventListener('click', () => {
+        const isCollapsed = doneBox.classList.toggle('collapsed');
+        btn.textContent = isCollapsed ? 'Show' : 'Hide';
+    });
+
+    // Move done tasks into the container
+    doneTasks.forEach(task => doneBox.appendChild(task));
+
+    // Assemble and append to end of container
+    bar.appendChild(label);
+    bar.appendChild(btn);
+    container.appendChild(bar);
+    container.appendChild(doneBox);
 }
 
 function persistPhaseVisibility(phaseId, collapsed) {
@@ -4404,6 +4498,115 @@ function initNotesFab() {
     });
 }
 
+/**
+ * Initialize Tasks FAB button
+ */
+let tasksFabExpanded = false;
+let tasksFabSelectedType = null;
+
+function initTasksFab() {
+    const fab = document.getElementById('tasks-fab');
+    const mainBtn = document.getElementById('tasks-fab-main');
+    const options = document.querySelectorAll('.tasks-fab-option');
+    const inputContainer = document.getElementById('tasks-fab-input-container');
+    const input = document.getElementById('tasks-fab-input');
+    const submitBtn = document.getElementById('tasks-fab-submit');
+
+    if (!fab || !mainBtn) return;
+
+    // Toggle FAB expansion on main button click
+    mainBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (fab.classList.contains('input-mode')) {
+            // If in input mode, close everything
+            closeTasksFab();
+        } else {
+            tasksFabExpanded = !tasksFabExpanded;
+            fab.classList.toggle('expanded', tasksFabExpanded);
+        }
+    });
+
+    // Handle option button clicks
+    options.forEach(option => {
+        option.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tasksFabSelectedType = option.dataset.type;
+
+            // Switch to input mode
+            tasksFabExpanded = false;
+            fab.classList.remove('expanded');
+            fab.classList.add('input-mode');
+
+            // Focus the input
+            setTimeout(() => {
+                input.focus();
+                input.placeholder = `New ${tasksFabSelectedType} title...`;
+            }, 50);
+        });
+    });
+
+    // Handle submit button click
+    if (submitBtn) {
+        submitBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            createListFromFab();
+        });
+    }
+
+    // Handle Enter key in input
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                createListFromFab();
+            } else if (e.key === 'Escape') {
+                closeTasksFab();
+            }
+        });
+    }
+
+    // Close FAB when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!fab.contains(e.target)) {
+            closeTasksFab();
+        }
+    });
+}
+
+function closeTasksFab() {
+    const fab = document.getElementById('tasks-fab');
+    const input = document.getElementById('tasks-fab-input');
+    if (!fab) return;
+
+    tasksFabExpanded = false;
+    tasksFabSelectedType = null;
+    fab.classList.remove('expanded', 'input-mode');
+    if (input) input.value = '';
+}
+
+async function createListFromFab() {
+    const input = document.getElementById('tasks-fab-input');
+    const title = input ? input.value.trim() : '';
+
+    if (!title || !tasksFabSelectedType) return;
+
+    try {
+        const res = await fetch('/api/lists', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, type: tasksFabSelectedType })
+        });
+
+        if (res.ok) {
+            const newList = await res.json();
+            closeTasksFab();
+            window.location.href = `/list/${newList.id}`;
+        }
+    } catch (e) {
+        console.error('Error creating list:', e);
+    }
+}
+
 function initNoteEditorPage() {
     const editor = document.getElementById('note-editor');
     const titleInput = document.getElementById('note-title');
@@ -4489,6 +4692,17 @@ function initListEditorPage() {
     const actionsToggle = document.getElementById('list-actions-toggle');
     const actionsMenu = document.getElementById('list-actions-menu');
     const stack = document.getElementById('list-pill-stack');
+    const selectToggle = document.getElementById('list-select-toggle');
+    const bulkMoveBtn = document.getElementById('list-bulk-move-btn');
+    const bulkSectionBtn = document.getElementById('list-bulk-section-btn');
+    const bulkDeleteBtn = document.getElementById('list-bulk-delete-btn');
+    const bulkDoneBtn = document.getElementById('list-bulk-done-btn');
+    const bulkMoreToggle = document.getElementById('list-bulk-more-toggle');
+    const bulkMoreMenu = document.getElementById('list-bulk-more-menu');
+    const sectionModal = document.getElementById('list-section-modal');
+    const sectionTitleInput = document.getElementById('list-section-title');
+    const sectionSaveBtn = document.getElementById('list-section-save-btn');
+    const sectionCancelBtn = document.getElementById('list-section-cancel-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveListMetadata({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
@@ -4496,6 +4710,71 @@ function initListEditorPage() {
     if (protectBtn) protectBtn.addEventListener('click', () => toggleListProtection());
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
+    if (selectToggle) selectToggle.addEventListener('click', () => toggleListSelectionMode());
+    if (bulkMoveBtn) {
+        bulkMoveBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (bulkMoreMenu) bulkMoreMenu.classList.remove('open');
+            openListBulkMoveMenu(bulkMoveBtn);
+        });
+    }
+    if (bulkSectionBtn) {
+        bulkSectionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (bulkMoreMenu) bulkMoreMenu.classList.remove('open');
+            createSectionFromSelection();
+        });
+    }
+    if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', () => deleteSelectedListItems());
+    if (bulkDoneBtn) bulkDoneBtn.addEventListener('click', () => setListSelectionMode(false));
+    if (bulkMoreToggle && bulkMoreMenu) {
+        bulkMoreToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const nextOpen = !bulkMoreMenu.classList.contains('open');
+            if (nextOpen) {
+                bulkMoreMenu.style.visibility = 'hidden';
+                bulkMoreMenu.classList.add('open');
+                requestAnimationFrame(() => {
+                    positionBulkMenu(bulkMoreMenu, bulkMoreToggle);
+                    bulkMoreMenu.style.visibility = 'visible';
+                });
+            } else {
+                bulkMoreMenu.classList.remove('open');
+                bulkMoreMenu.style.visibility = '';
+            }
+        });
+        bulkMoreMenu.addEventListener('click', (e) => {
+            if (e.target.closest('button')) {
+                bulkMoreMenu.classList.remove('open');
+                bulkMoreMenu.style.visibility = '';
+            }
+        });
+        document.addEventListener('click', (e) => {
+            if (!bulkMoreMenu.contains(e.target) && !bulkMoreToggle.contains(e.target)) {
+                bulkMoreMenu.classList.remove('open');
+                bulkMoreMenu.style.visibility = '';
+            }
+        });
+    }
+    if (sectionSaveBtn) sectionSaveBtn.addEventListener('click', () => submitListSectionModal());
+    if (sectionCancelBtn) sectionCancelBtn.addEventListener('click', () => closeListSectionModal());
+    if (sectionTitleInput) {
+        sectionTitleInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submitListSectionModal();
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeListSectionModal();
+            }
+        });
+    }
+    if (sectionModal) {
+        sectionModal.addEventListener('click', (e) => {
+            if (e.target === sectionModal) closeListSectionModal();
+        });
+    }
 
     // Check PIN status
     checkPinStatus();
@@ -4516,6 +4795,7 @@ function initListEditorPage() {
     }
     if (stack) {
         stack.addEventListener('click', (e) => {
+            if (isListSelectionActive()) return;
             if (e.target.closest('.list-pill')) return;
             if (e.target.closest('.list-pill-input')) return;
             setListInsertionAtPosition(e.clientY);
@@ -4530,12 +4810,14 @@ function initListEditorPage() {
         renderListItems();
     });
 
+    updateListSelectionUI();
     loadListForEditor(listId);
 }
 
 function handleListEditorOutsideClick(e) {
     const page = document.getElementById('list-editor-page');
     if (!page) return;
+    if (isListSelectionActive()) return;
     if (listState.editingItemId !== null) return;
     if (listState.insertionIndex === null) return;
     const inputRow = page.querySelector('.list-pill-input');
@@ -4867,15 +5149,491 @@ function buildListSectionText(title) {
     return trimmed ? `${LIST_SECTION_PREFIX} ${trimmed}` : LIST_SECTION_PREFIX;
 }
 
-function renderListItems() {
-    const stack = document.getElementById('list-pill-stack');
-    if (!stack) return;
-    const items = (listState.items || []).slice().sort((a, b) => {
+function getSortedListItems() {
+    return (listState.items || []).slice().sort((a, b) => {
         const aOrder = a.order_index || 0;
         const bOrder = b.order_index || 0;
         if (aOrder !== bOrder) return aOrder - bOrder;
         return (a.id || 0) - (b.id || 0);
     });
+}
+
+function isListSelectionActive() {
+    return !!listSelectionState.active;
+}
+
+function clearListSelection() {
+    listSelectionState.ids.clear();
+}
+
+function setListSelectionMode(active) {
+    listSelectionState.active = !!active;
+    clearListSelection();
+    listState.insertionIndex = null;
+    listState.editingItemId = null;
+    listState.expandedItemId = null;
+    updateListSelectionUI();
+    renderListItems();
+}
+
+function toggleListSelectionMode() {
+    setListSelectionMode(!listSelectionState.active);
+}
+
+function updateListSelectionUI() {
+    const page = document.getElementById('list-editor-page');
+    if (page) page.classList.toggle('list-selection-mode', listSelectionState.active);
+    const bar = document.getElementById('list-bulk-bar');
+    if (bar) bar.classList.toggle('active', listSelectionState.active);
+    const toggleBtn = document.getElementById('list-select-toggle');
+    if (toggleBtn) {
+        toggleBtn.classList.toggle('active', listSelectionState.active);
+        toggleBtn.innerHTML = listSelectionState.active
+            ? '<i class="fa-solid fa-check"></i> Done'
+            : '<i class="fa-solid fa-check-square"></i> Select';
+    }
+    updateListBulkBar();
+}
+
+function toggleListItemSelection(itemId) {
+    if (!itemId) return;
+    const item = (listState.items || []).find(entry => entry.id === itemId);
+    if (item && isListSectionItem(item)) return;
+    if (listSelectionState.ids.has(itemId)) {
+        listSelectionState.ids.delete(itemId);
+    } else {
+        listSelectionState.ids.add(itemId);
+    }
+    updateListBulkBar();
+    renderListItems();
+}
+
+function getSelectedListItemIds() {
+    return Array.from(listSelectionState.ids);
+}
+
+function updateListBulkBar() {
+    const count = listSelectionState.ids.size;
+    const countEl = document.getElementById('list-bulk-count');
+    if (countEl) countEl.textContent = `${count} selected`;
+    const moveBtn = document.getElementById('list-bulk-move-btn');
+    const sectionBtn = document.getElementById('list-bulk-section-btn');
+    const deleteBtn = document.getElementById('list-bulk-delete-btn');
+    const moreToggle = document.getElementById('list-bulk-more-toggle');
+    const disabled = count === 0;
+    if (moveBtn) moveBtn.disabled = disabled;
+    if (sectionBtn) sectionBtn.disabled = disabled;
+    if (deleteBtn) deleteBtn.disabled = disabled;
+    if (moreToggle) moreToggle.disabled = disabled;
+}
+
+function openListSectionModal(onSubmit) {
+    const modal = document.getElementById('list-section-modal');
+    const input = document.getElementById('list-section-title');
+    if (!modal || !input) return;
+    listSectionModalState.onSubmit = onSubmit;
+    input.value = '';
+    modal.classList.add('active');
+    setTimeout(() => input.focus(), 0);
+}
+
+function closeListSectionModal() {
+    const modal = document.getElementById('list-section-modal');
+    if (modal) modal.classList.remove('active');
+    listSectionModalState.onSubmit = null;
+}
+
+function submitListSectionModal() {
+    const input = document.getElementById('list-section-title');
+    const handler = listSectionModalState.onSubmit;
+    closeListSectionModal();
+    if (typeof handler === 'function') {
+        handler(input ? input.value : '');
+    }
+}
+
+function closeListItemMenu() {
+    if (activeListItemMenu) {
+        activeListItemMenu.remove();
+        activeListItemMenu = null;
+    }
+}
+
+function showListItemActions(pill) {
+    if (isListSelectionActive()) return;
+    if (activeListItemActionPill && activeListItemActionPill !== pill) {
+        activeListItemActionPill.classList.remove('show-actions');
+    }
+    activeListItemActionPill = pill;
+    pill.classList.add('show-actions');
+}
+
+function clearListItemActions() {
+    if (!activeListItemActionPill) return;
+    activeListItemActionPill.classList.remove('show-actions');
+    activeListItemActionPill = null;
+}
+
+function positionListItemMenu(menu, anchor) {
+    const rect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const padding = 8;
+    let topPos = rect.bottom + padding;
+    if (window.innerHeight - rect.bottom < menuRect.height + padding && rect.top > menuRect.height + padding) {
+        topPos = rect.top - menuRect.height - padding;
+    }
+    let leftPos = rect.right - menuRect.width;
+    if (leftPos < padding) leftPos = padding;
+    if (leftPos + menuRect.width > window.innerWidth - padding) {
+        leftPos = window.innerWidth - menuRect.width - padding;
+    }
+    menu.style.top = `${topPos}px`;
+    menu.style.left = `${leftPos}px`;
+}
+
+function getListSectionOptions() {
+    return getSortedListItems()
+        .filter(isListSectionItem)
+        .map(section => ({
+            id: section.id,
+            title: getListSectionTitle(section) || 'Untitled section'
+        }));
+}
+
+function getListInsertIndexForSection(itemId, sectionId) {
+    const items = getSortedListItems();
+    const sectionIds = new Set(items.filter(isListSectionItem).map(item => item.id));
+    const ids = items.map(item => item.id);
+    const currentIndex = ids.indexOf(itemId);
+    if (currentIndex === -1) return null;
+    ids.splice(currentIndex, 1);
+    const sectionIndex = ids.indexOf(sectionId);
+    if (sectionIndex === -1) return null;
+    let insertIndex = ids.length;
+    for (let idx = sectionIndex + 1; idx < ids.length; idx += 1) {
+        if (sectionIds.has(ids[idx])) {
+            insertIndex = idx;
+            break;
+        }
+    }
+    return insertIndex;
+}
+
+function getListInsertIndexForSectionExcluding(sectionId, excludeIds = []) {
+    const excluded = new Set(excludeIds || []);
+    const items = getSortedListItems().filter(item => !excluded.has(item.id));
+    const sectionIds = new Set(items.filter(isListSectionItem).map(item => item.id));
+    const ids = items.map(item => item.id);
+    const sectionIndex = ids.indexOf(sectionId);
+    if (sectionIndex === -1) return null;
+    let insertIndex = ids.length;
+    for (let idx = sectionIndex + 1; idx < ids.length; idx += 1) {
+        if (sectionIds.has(ids[idx])) {
+            insertIndex = idx;
+            break;
+        }
+    }
+    return insertIndex;
+}
+
+function buildListReorderIdsForSection(selectedIds, sectionId) {
+    const selectedSet = new Set(selectedIds);
+    const sorted = getSortedListItems();
+    const selectedItems = sorted.filter(item => selectedSet.has(item.id));
+    const remaining = sorted.filter(item => !selectedSet.has(item.id));
+    const sectionIndex = remaining.findIndex(item => item.id === sectionId);
+    if (sectionIndex === -1) return null;
+    let insertIndex = remaining.length;
+    for (let idx = sectionIndex + 1; idx < remaining.length; idx += 1) {
+        if (isListSectionItem(remaining[idx])) {
+            insertIndex = idx;
+            break;
+        }
+    }
+    const remainingIds = remaining.map(item => item.id);
+    const selectedIdsOrdered = selectedItems.map(item => item.id);
+    return [
+        ...remainingIds.slice(0, insertIndex),
+        ...selectedIdsOrdered,
+        ...remainingIds.slice(insertIndex)
+    ];
+}
+
+function buildListReorderIdsForNewSection(selectedOrderedIds, newSectionId, targetSectionId) {
+    const selectedSet = new Set(selectedOrderedIds);
+    const sorted = getSortedListItems();
+    const remaining = sorted.filter(item => item.id !== newSectionId && !selectedSet.has(item.id));
+    let insertIndex = remaining.length;
+    if (targetSectionId) {
+        const sectionIndex = remaining.findIndex(item => item.id === targetSectionId);
+        if (sectionIndex !== -1) {
+            insertIndex = remaining.length;
+            for (let idx = sectionIndex + 1; idx < remaining.length; idx += 1) {
+                if (isListSectionItem(remaining[idx])) {
+                    insertIndex = idx;
+                    break;
+                }
+            }
+        }
+    } else {
+        insertIndex = remaining.length;
+    }
+    const remainingIds = remaining.map(item => item.id);
+    return [
+        ...remainingIds.slice(0, insertIndex),
+        newSectionId,
+        ...selectedOrderedIds,
+        ...remainingIds.slice(insertIndex)
+    ];
+}
+
+function buildListReorderIdsToTop(selectedIds) {
+    const selectedSet = new Set(selectedIds);
+    const sorted = getSortedListItems();
+    const selectedItems = sorted.filter(item => selectedSet.has(item.id));
+    const remaining = sorted.filter(item => !selectedSet.has(item.id));
+    return [...selectedItems.map(item => item.id), ...remaining.map(item => item.id)];
+}
+
+async function reorderListItems(orderIds) {
+    if (!listState.listId) return;
+    const res = await fetch(`/api/notes/${listState.listId}/list-items/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: orderIds })
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Reorder failed');
+    }
+    const updatedLabel = document.getElementById('list-updated-label');
+    if (updatedLabel) updatedLabel.textContent = formatNoteDate(new Date().toISOString());
+}
+
+async function moveListItemToSection(itemId, sectionId) {
+    const insertIndex = getListInsertIndexForSection(itemId, sectionId);
+    if (insertIndex === null) return;
+    await updateListItem(itemId, { insert_index: insertIndex });
+    await loadListItems();
+}
+
+async function moveListItemToTop(itemId) {
+    await updateListItem(itemId, { insert_index: 0 });
+    await loadListItems();
+}
+
+function openListItemMoveMenu(itemId, anchor) {
+    const sections = getListSectionOptions();
+    if (!sections.length) {
+        showToast('No sections yet. Type /section to add one.', 'warning', 2500);
+        return;
+    }
+    closeListItemMenu();
+    const menu = document.createElement('div');
+    menu.className = 'list-item-menu active';
+    menu.dataset.itemId = itemId;
+
+    const title = document.createElement('div');
+    title.className = 'list-item-menu-title';
+    title.textContent = 'Move to section';
+    menu.appendChild(title);
+
+    const topBtn = document.createElement('button');
+    topBtn.type = 'button';
+    topBtn.className = 'list-item-menu-option';
+    topBtn.dataset.action = 'top';
+    topBtn.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+    const topLabel = document.createElement('span');
+    topLabel.textContent = 'Top (no section)';
+    topBtn.appendChild(topLabel);
+    menu.appendChild(topBtn);
+
+    sections.forEach(section => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'list-item-menu-option';
+        btn.dataset.sectionId = section.id;
+        btn.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
+        const label = document.createElement('span');
+        label.textContent = section.title;
+        btn.appendChild(label);
+        menu.appendChild(btn);
+    });
+
+    menu.querySelectorAll('.list-item-menu-option').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            closeListItemMenu();
+            const action = btn.dataset.action;
+            const sectionId = btn.dataset.sectionId ? parseInt(btn.dataset.sectionId, 10) : null;
+            try {
+                if (action === 'top') {
+                    await moveListItemToTop(itemId);
+                } else if (sectionId) {
+                    await moveListItemToSection(itemId, sectionId);
+                }
+            } catch (err) {
+                console.error('Move list item failed:', err);
+                showToast('Could not move item', 'error');
+            }
+        });
+    });
+
+    document.body.appendChild(menu);
+    positionListItemMenu(menu, anchor);
+    activeListItemMenu = menu;
+}
+
+async function moveListItemsToSection(itemIds, sectionId) {
+    if (!itemIds.length || !sectionId) return;
+    const orderIds = buildListReorderIdsForSection(itemIds, sectionId);
+    if (!orderIds) return;
+    await reorderListItems(orderIds);
+    await loadListItems();
+}
+
+function openListBulkMoveMenu(anchor) {
+    const selectedIds = getSelectedListItemIds();
+    if (!selectedIds.length) return;
+    const sections = getListSectionOptions();
+    if (!sections.length) {
+        showToast('No sections yet. Type /section to add one.', 'warning', 2500);
+        return;
+    }
+    closeListItemMenu();
+    const menu = document.createElement('div');
+    menu.className = 'list-item-menu active';
+    menu.dataset.mode = 'bulk';
+
+    const title = document.createElement('div');
+    title.className = 'list-item-menu-title';
+    title.textContent = 'Move selected to section';
+    menu.appendChild(title);
+
+    const topBtn = document.createElement('button');
+    topBtn.type = 'button';
+    topBtn.className = 'list-item-menu-option';
+    topBtn.dataset.action = 'top';
+    topBtn.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+    const topLabel = document.createElement('span');
+    topLabel.textContent = 'Top (no section)';
+    topBtn.appendChild(topLabel);
+    menu.appendChild(topBtn);
+
+    sections.forEach(section => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'list-item-menu-option';
+        btn.dataset.sectionId = section.id;
+        btn.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
+        const label = document.createElement('span');
+        label.textContent = section.title;
+        btn.appendChild(label);
+        menu.appendChild(btn);
+    });
+
+    menu.querySelectorAll('.list-item-menu-option').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            closeListItemMenu();
+            const action = btn.dataset.action;
+            const sectionId = btn.dataset.sectionId ? parseInt(btn.dataset.sectionId, 10) : null;
+            try {
+                if (action === 'top') {
+                    const orderIds = buildListReorderIdsToTop(selectedIds);
+                    await reorderListItems(orderIds);
+                    await loadListItems();
+                } else if (sectionId) {
+                    await moveListItemsToSection(selectedIds, sectionId);
+                }
+                setListSelectionMode(false);
+            } catch (err) {
+                console.error('Bulk move failed:', err);
+                showToast('Could not move items', 'error');
+            }
+        });
+    });
+
+    document.body.appendChild(menu);
+    positionListItemMenu(menu, anchor);
+    activeListItemMenu = menu;
+}
+
+function positionBulkMenu(menu, button) {
+    const rect = button.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const padding = 8;
+    let topPos = rect.bottom + padding;
+    if (window.innerHeight - rect.bottom < menuRect.height + padding && rect.top > menuRect.height + padding) {
+        topPos = rect.top - menuRect.height - padding;
+    }
+    let leftPos = rect.right - menuRect.width;
+    if (leftPos < padding) leftPos = padding;
+    if (leftPos + menuRect.width > window.innerWidth - padding) {
+        leftPos = window.innerWidth - menuRect.width - padding;
+    }
+    menu.style.top = `${topPos}px`;
+    menu.style.left = `${leftPos}px`;
+}
+
+function createSectionFromSelection() {
+    const selectedIds = getSelectedListItemIds();
+    if (!selectedIds.length) return;
+    const sorted = getSortedListItems();
+    const orderedSelected = sorted.filter(item => selectedIds.includes(item.id));
+    const targetSectionId = null;
+    openListSectionModal(async (value) => {
+        try {
+            const section = await createListItem({ text: buildListSectionText(value || '') }, null);
+            await loadListItems();
+            if (section && section.id) {
+                const orderIds = buildListReorderIdsForNewSection(
+                    orderedSelected.map(item => item.id),
+                    section.id,
+                    targetSectionId
+                );
+                await reorderListItems(orderIds);
+                await loadListItems();
+            }
+            setListSelectionMode(false);
+        } catch (err) {
+            console.error('Create section failed:', err);
+            showToast('Could not create section', 'error');
+        }
+    });
+}
+
+function deleteSelectedListItems() {
+    const selectedIds = getSelectedListItemIds();
+    if (!selectedIds.length) return;
+    openConfirmModal(`Delete ${selectedIds.length} item(s)?`, async () => {
+        try {
+            await Promise.all(selectedIds.map(id => deleteListItem(id)));
+            await loadListItems();
+            setListSelectionMode(false);
+            showToast('Deleted', 'success', 2000);
+        } catch (err) {
+            console.error('Bulk delete failed:', err);
+            showToast('Could not delete items', 'error');
+        }
+    });
+}
+
+document.addEventListener('click', (e) => {
+    if (activeListItemMenu && !e.target.closest('.list-item-menu')) {
+        closeListItemMenu();
+    }
+    if (activeListItemActionPill && !e.target.closest('.list-pill')) {
+        clearListItemActions();
+    }
+});
+
+function renderListItems() {
+    const stack = document.getElementById('list-pill-stack');
+    if (!stack) return;
+    closeListItemMenu();
+    clearListItemActions();
+    const items = getSortedListItems();
     stack.innerHTML = '';
     const hasSections = items.some(isListSectionItem);
     let activeSectionBody = null;
@@ -5018,7 +5776,8 @@ function createListPill(item) {
     const pill = document.createElement('div');
     const hasNote = !!(item.note && item.note.trim());
     const isExpanded = hasNote && listState.expandedItemId === item.id;
-    pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}`;
+    const isSelected = listSelectionState.ids.has(item.id);
+    pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}${isSelected ? ' selected' : ''}`;
     const content = document.createElement('div');
     content.className = 'list-pill-content';
     const textValue = (item.text || '').trim();
@@ -5070,7 +5829,134 @@ function createListPill(item) {
         pill.appendChild(note);
     }
 
+    const actions = document.createElement('div');
+    actions.className = 'list-pill-actions';
+    const moveBtn = document.createElement('button');
+    moveBtn.type = 'button';
+    moveBtn.className = 'list-pill-action';
+    moveBtn.title = 'Move to section';
+    moveBtn.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
+    moveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isListSelectionActive()) return;
+        showListItemActions(pill);
+        openListItemMoveMenu(item.id, moveBtn);
+    });
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'list-pill-action danger';
+    deleteBtn.title = 'Delete item';
+    deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+    deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isListSelectionActive()) return;
+        openConfirmModal('Delete this item?', async () => {
+            try {
+                await deleteListItem(item.id);
+                await loadListItems();
+                showToast('Deleted', 'success', 2000);
+            } catch (err) {
+                console.error('Delete list item failed:', err);
+                showToast('Could not delete item', 'error');
+            }
+        });
+    });
+    actions.appendChild(moveBtn);
+    actions.appendChild(deleteBtn);
+    pill.appendChild(actions);
+
+    let longPressTimer = null;
+    let longPressTriggered = false;
+    let ignoreClick = false;
+    const supportsTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+    const longPressMs = 450;
+    const clearLongPress = () => {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+    };
+    let touchMoveHandler = null;
+    const handleTouchStart = (e) => {
+        if (!supportsTouch || isListSelectionActive()) return;
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        let startX = touch.clientX;
+        let startY = touch.clientY;
+        longPressTriggered = false;
+        clearLongPress();
+        longPressTimer = setTimeout(() => {
+            longPressTriggered = true;
+            ignoreClick = true;
+            showListItemActions(pill);
+        }, longPressMs);
+        touchMoveHandler = (moveEvent) => {
+            const moveTouch = moveEvent.touches && moveEvent.touches[0];
+            if (!moveTouch) return;
+            if (Math.abs(moveTouch.clientX - startX) > 10 || Math.abs(moveTouch.clientY - startY) > 10) {
+                clearLongPress();
+                if (touchMoveHandler) {
+                    pill.removeEventListener('touchmove', touchMoveHandler);
+                    touchMoveHandler = null;
+                }
+            }
+        };
+        pill.addEventListener('touchmove', touchMoveHandler, { passive: true });
+    };
+    const handleTouchEnd = () => {
+        if (!supportsTouch || isListSelectionActive()) return;
+        clearLongPress();
+        if (touchMoveHandler) {
+            pill.removeEventListener('touchmove', touchMoveHandler);
+            touchMoveHandler = null;
+        }
+        longPressTriggered = false;
+    };
+    pill.addEventListener('touchstart', handleTouchStart, { passive: true });
+    pill.addEventListener('touchend', handleTouchEnd);
+    pill.addEventListener('touchcancel', handleTouchEnd);
+
+    let selectionTouchMoved = false;
+    let selectionTouchStart = { x: 0, y: 0 };
+    const selectionTouchMoveHandler = (moveEvent) => {
+        const moveTouch = moveEvent.touches && moveEvent.touches[0];
+        if (!moveTouch) return;
+        if (Math.abs(moveTouch.clientX - selectionTouchStart.x) > 8 || Math.abs(moveTouch.clientY - selectionTouchStart.y) > 8) {
+            selectionTouchMoved = true;
+        }
+    };
+    pill.addEventListener('touchstart', (e) => {
+        if (!isListSelectionActive()) return;
+        const touch = e.touches && e.touches[0];
+        if (!touch) return;
+        selectionTouchMoved = false;
+        selectionTouchStart = { x: touch.clientX, y: touch.clientY };
+        pill.addEventListener('touchmove', selectionTouchMoveHandler, { passive: true });
+    }, { passive: true });
+    pill.addEventListener('touchend', () => {
+        if (!isListSelectionActive()) return;
+        pill.removeEventListener('touchmove', selectionTouchMoveHandler);
+        if (selectionTouchMoved) {
+            ignoreClick = true;
+            return;
+        }
+        ignoreClick = true;
+        toggleListItemSelection(item.id);
+    });
+    pill.addEventListener('touchcancel', () => {
+        if (!isListSelectionActive()) return;
+        pill.removeEventListener('touchmove', selectionTouchMoveHandler);
+    });
+
     pill.addEventListener('click', () => {
+        if (ignoreClick) {
+            ignoreClick = false;
+            return;
+        }
+        if (isListSelectionActive()) {
+            toggleListItemSelection(item.id);
+            return;
+        }
         if (hasNote && listState.expandedItemId !== item.id) {
             listState.expandedItemId = item.id;
             listState.editingItemId = null;
@@ -5327,8 +6213,10 @@ async function createListItem(payload, insertIndex) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Create failed');
     }
+    const created = await res.json().catch(() => null);
     const updatedLabel = document.getElementById('list-updated-label');
     if (updatedLabel) updatedLabel.textContent = formatNoteDate(new Date().toISOString());
+    return created;
 }
 
 async function updateListItem(itemId, payload, options = {}) {
@@ -8733,6 +9621,24 @@ function renderCalendarEvents() {
             }
         };
 
+        const allowOverlapMenuItem = document.createElement('button');
+        allowOverlapMenuItem.className = 'calendar-item-menu-option';
+        const overlapLabel = ev.is_event
+            ? (ev.allow_overlap ? 'Disallow' : 'Allow')
+            : (ev.allow_overlap ? 'Allow' : 'Disallow');
+        allowOverlapMenuItem.innerHTML = `<i class="fa-solid fa-layer-group ${ev.allow_overlap ? 'active-icon' : ''}"></i> ${overlapLabel} Overlap`;
+        allowOverlapMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const next = !ev.allow_overlap;
+            try {
+                await updateCalendarEvent(ev.id, { allow_overlap: next });
+                ev.allow_overlap = next;
+            } catch (err) {
+                console.error('Failed to toggle allow_overlap', err);
+            }
+        };
+
         const deleteMenuItem = document.createElement('button');
         deleteMenuItem.className = 'calendar-item-menu-option delete-option';
         deleteMenuItem.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
@@ -8742,8 +9648,8 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        // Order: reminder, rollover, note, move, delete
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        // Order: reminder, rollover, allow overlap, note, move, delete
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
@@ -8958,6 +9864,24 @@ function renderCalendarEvents() {
             }
         };
 
+        const allowOverlapMenuItem = document.createElement('button');
+        allowOverlapMenuItem.className = 'calendar-item-menu-option';
+        const overlapLabel = ev.is_event
+            ? (ev.allow_overlap ? 'Disallow' : 'Allow')
+            : (ev.allow_overlap ? 'Allow' : 'Disallow');
+        allowOverlapMenuItem.innerHTML = `<i class="fa-solid fa-layer-group ${ev.allow_overlap ? 'active-icon' : ''}"></i> ${overlapLabel} Overlap`;
+        allowOverlapMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const next = !ev.allow_overlap;
+            try {
+                await updateCalendarEvent(ev.id, { allow_overlap: next });
+                ev.allow_overlap = next;
+            } catch (err) {
+                console.error('Failed to toggle allow_overlap', err);
+            }
+        };
+
         const moveMenuItem = document.createElement('button');
         moveMenuItem.className = 'calendar-item-menu-option';
         moveMenuItem.innerHTML = '<i class="fa-solid fa-calendar-day"></i> Move to day';
@@ -8976,7 +9900,7 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -9566,6 +10490,7 @@ function parseCalendarQuickInput(text) {
     let phaseName = null;
     let rollover = true;
     let isEvent = false;
+    let allowOverlap = false;
     let groupName = null;
 
     // SYMBOL-BASED SYNTAX
@@ -9575,6 +10500,12 @@ function parseCalendarQuickInput(text) {
         isEvent = true;
         working = working.replace(/\$/g, '').trim();
         rollover = false;
+    }
+
+    // Overlap marker: ? (events allow overlap; tasks disallow overlap)
+    if (working.includes('?')) {
+        allowOverlap = true;
+        working = working.replace(/\?/g, '').trim();
     }
 
     // Time: @time or @time-time
@@ -9634,6 +10565,7 @@ function parseCalendarQuickInput(text) {
         title,
         is_phase: false,
         is_event: isEvent,
+        allow_overlap: allowOverlap,
         start_time: startTime,
         end_time: endTime,
         priority,
@@ -9997,6 +10929,7 @@ async function handleCalendarQuickAdd() {
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
+                allow_overlap: taskParsed.allow_overlap,
                 phase_id: phaseId,
                 start_time: taskParsed.start_time,
                 end_time: taskParsed.end_time,
@@ -10037,6 +10970,7 @@ async function handleCalendarQuickAdd() {
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
+                allow_overlap: taskParsed.allow_overlap,
                 group_id: groupId,
                 phase_id: phaseId,
                 start_time: taskParsed.start_time,
@@ -10108,6 +11042,7 @@ async function handleCalendarQuickAdd() {
         title: parsed.title,
         is_phase: false,
         is_event: isEvent,
+        allow_overlap: parsed.allow_overlap,
         group_id: finalGroupId,
         start_time: parsed.start_time,
         end_time: parsed.end_time,
@@ -10165,6 +11100,7 @@ async function handleMonthQuickAdd() {
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
+                allow_overlap: taskParsed.allow_overlap,
                 phase_id: phaseId,
                 group_id: groupId,
                 start_time: taskParsed.start_time,
@@ -10212,6 +11148,7 @@ async function handleMonthQuickAdd() {
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
+                allow_overlap: taskParsed.allow_overlap,
                 group_id: groupId,
                 phase_id: phaseId,
                 start_time: taskParsed.start_time,
@@ -10274,6 +11211,7 @@ async function handleMonthQuickAdd() {
         title: parsed.title,
         is_phase: false,
         is_event: isEvent,
+        allow_overlap: parsed.allow_overlap,
         group_id: finalGroupId,
         start_time: parsed.start_time,
         end_time: parsed.end_time,
@@ -10339,7 +11277,8 @@ function hideMonthAutocomplete() {
     autocompleteState.suggestions = [];
 }
 
-async function createCalendarEvent(payload) {
+async function createCalendarEvent(payload, options = {}) {
+    const { skipConflictWarning = false } = options;
     try {
         const res = await fetch('/api/calendar/events', {
             method: 'POST',
@@ -10348,9 +11287,31 @@ async function createCalendarEvent(payload) {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
+            // Check if this is a conflict warning (not a hard error)
+            if (res.status === 409 && err && err.conflict_warning && !skipConflictWarning) {
+                const conflictTitle = err.conflict_event_title;
+                const conflictMessage = err.message || (conflictTitle ? `"${conflictTitle}" is scheduled during this time. Add task anyway?` : null);
+                // Show modal and let user decide
+                return new Promise((resolve) => {
+                    openOverlapWarningModal(conflictMessage, async () => {
+                        // Retry with force_overlap
+                        const result = await createCalendarEvent({ ...payload, force_overlap: true }, { skipConflictWarning: true });
+                        if (result) {
+                            // Reload calendar to show the new item
+                            if (calendarState.detailsOpen && calendarState.selectedDay) {
+                                await loadCalendarDay(calendarState.selectedDay);
+                            }
+                            if (calendarState.monthCursor) {
+                                renderCalendarMonth();
+                            }
+                        }
+                        resolve(result);
+                    });
+                });
+            }
             if (err && err.error) {
                 showToast(err.error, 'warning');
-            } else {
+            } else if (!err.conflict_warning) {
                 showToast('Could not save calendar item.', 'error');
             }
             console.error(err);
@@ -10364,7 +11325,7 @@ async function createCalendarEvent(payload) {
 }
 
 async function updateCalendarEvent(id, payload, options = {}) {
-    const { skipReload = false, skipMonth = false } = options;
+    const { skipReload = false, skipMonth = false, skipConflictWarning = false } = options;
     const prevEvent = Array.isArray(calendarState.events) ? calendarState.events.find(e => e.id === id) : null;
     const prevDay = prevEvent?.day;
     try {
@@ -10375,9 +11336,20 @@ async function updateCalendarEvent(id, payload, options = {}) {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
+            // Check if this is a conflict warning (not a hard error)
+            if (res.status === 409 && err && err.conflict_warning && !skipConflictWarning) {
+                const conflictTitle = err.conflict_event_title;
+                const conflictMessage = err.message || (conflictTitle ? `"${conflictTitle}" is scheduled during this time. Update task anyway?` : null);
+                // Show modal and let user decide
+                openOverlapWarningModal(conflictMessage, async () => {
+                    // Retry with force_overlap
+                    await updateCalendarEvent(id, { ...payload, force_overlap: true }, { ...options, skipConflictWarning: true });
+                });
+                return;
+            }
             if (err && err.error) {
                 showToast(err.error, 'warning');
-            } else {
+            } else if (!err.conflict_warning) {
                 showToast('Could not update calendar item.', 'error');
             }
             console.error(err);
@@ -11818,8 +12790,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const editModal = document.getElementById('edit-item-modal');
         if (event.target == editModal) closeEditItemModal();
         if (event.target == confirmModal) closeConfirmModal();
+        if (event.target == overlapWarningModal) closeOverlapWarningModal();
         const editListModal = document.getElementById('edit-list-modal');
         if (event.target == editListModal) closeEditListModal();
+        const listSectionModal = document.getElementById('list-section-modal');
+        if (event.target == listSectionModal) closeListSectionModal();
 
         const mainMenu = document.getElementById('phase-menu-main');
         if (!event.target.closest('.phase-add-dropdown')) {
@@ -11845,6 +12820,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initDragAndDrop();
     normalizePhaseParents();
     organizePhaseDoneTasks();
+    organizeLightListDoneTasks();
     restorePhaseVisibility();
     initStickyListHeader();
     initTaskFilters();

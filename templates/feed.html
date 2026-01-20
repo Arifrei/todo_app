@@ -4,7 +4,7 @@
 <div class="feed-page">
     <header class="header-row">
         <div>
-            <h1>Feed</h1>
+            <h1>EverFeed</h1>
             <p style="color: var(--text-muted);">Tiny, context-tagged links to revisit when the moment fits.</p>
         </div>
         <button class="btn btn-primary header-add-circle" type="button" id="feed-add-btn" aria-label="Add item" title="Add item">
@@ -15,7 +15,6 @@
     <div class="feed-add-form" id="feed-add-form">
         <div class="feed-add-row">
             <input type="text" id="feed-add-input" class="feed-add-input" placeholder="Title; https://example.com; optional note">
-            <button class="feed-add-submit" type="button" id="feed-add-submit">Add</button>
         </div>
         <div class="feed-add-hint">Format: Title; URL; optional short description</div>
         <div class="feed-state-row">
@@ -50,7 +49,7 @@ const feedState = {
     items: [],
     expandedId: null,
     editingId: null,
-    selectedState: 'free',
+    selectedState: null,
     filterState: 'all',
     defaultStates: ['bored', 'work', 'free', 'travel'],
     customStates: [],
@@ -97,8 +96,7 @@ function renderStateChips() {
         btn.className = `feed-state-chip ${feedState.selectedState === state ? 'active' : ''}`;
         btn.textContent = formatStateLabel(state);
         btn.addEventListener('click', () => {
-            feedState.selectedState = state;
-            renderStateChips();
+            addFeedItemFromInput(state);
         });
         chipWrap.appendChild(btn);
     });
@@ -201,6 +199,8 @@ function handleFeedAction(event, action, id) {
         confirmDeleteFeed(id);
     } else if (action === 'edit') {
         startEditFeed(id);
+    } else if (action === 'recall') {
+        convertFeedToRecall(id);
     }
 }
 
@@ -307,6 +307,9 @@ function renderFeedGrid() {
                        <button class="feed-edit-btn" type="button" onclick="handleFeedAction(event, 'edit', ${item.id})" title="Edit">
                            <i class="fa-solid fa-pen"></i>
                        </button>
+                       <button class="feed-recall-btn" type="button" onclick="handleFeedAction(event, 'recall', ${item.id})" title="Move to Recalls">
+                           <i class="fa-solid fa-inbox"></i>
+                       </button>
                        <button class="feed-done-btn" type="button" onclick="handleFeedAction(event, 'done', ${item.id})">Done</button>
                    </div>`
                 : '';
@@ -352,12 +355,19 @@ async function loadFeedItems() {
     }
 }
 
-async function addFeedItemFromInput() {
+async function addFeedItemFromInput(stateOverride) {
     const input = document.getElementById('feed-add-input');
     if (!input) return;
     const parsed = parseFeedInput(input.value.trim());
     if (!parsed || !parsed.title || !parsed.url) {
         showToast('Use: Title; URL; optional description', 'error');
+        input.focus();
+        return;
+    }
+
+    const state = stateOverride || feedState.selectedState;
+    if (!state) {
+        showToast('Pick a state to add this item', 'error');
         return;
     }
 
@@ -365,7 +375,7 @@ async function addFeedItemFromInput() {
         title: parsed.title,
         url: parsed.url,
         description: parsed.description,
-        state: feedState.selectedState
+        state
     };
 
     try {
@@ -378,13 +388,32 @@ async function addFeedItemFromInput() {
         const saved = await res.json();
         feedState.items.unshift(saved);
         input.value = '';
+        feedState.selectedState = null;
         renderFilterDropdown();
         renderStateChips();
         renderFeedGrid();
-        showToast('Added to Feed', 'success');
+        showToast('Added to EverFeed', 'success');
     } catch (err) {
         console.error(err);
         showToast('Could not save item', 'error');
+    }
+}
+
+async function convertFeedToRecall(id) {
+    try {
+        const res = await fetch(`/api/feed/${id}/to-recall`, { method: 'POST' });
+        if (!res.ok) throw new Error('Move failed');
+        feedState.items = feedState.items.filter(item => item.id !== id);
+        if (feedState.expandedId === id) {
+            feedState.expandedId = null;
+        }
+        renderFilterDropdown();
+        renderStateChips();
+        renderFeedGrid();
+        showToast('Moved to Recalls', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not move to Recalls', 'error');
     }
 }
 
@@ -426,7 +455,6 @@ function confirmStateInput() {
     if (!feedState.customStates.includes(raw) && !feedState.defaultStates.includes(raw)) {
         feedState.customStates.push(raw);
     }
-    feedState.selectedState = raw;
     closeStateInput();
     renderFilterDropdown();
 }
@@ -435,26 +463,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const addBtn = document.getElementById('feed-add-btn');
     const addForm = document.getElementById('feed-add-form');
     const addInput = document.getElementById('feed-add-input');
-    const addSubmit = document.getElementById('feed-add-submit');
     const stateConfirm = document.getElementById('feed-state-confirm');
     const stateCancel = document.getElementById('feed-state-cancel');
     const stateInput = document.getElementById('feed-state-input');
 
-    if (addBtn && addForm) {
-        addBtn.addEventListener('click', () => {
-            addForm.classList.toggle('open');
-        });
+    function updateAddButtonState(isOpen) {
+        if (!addBtn) return;
+        addBtn.setAttribute('aria-label', isOpen ? 'Cancel add' : 'Add item');
+        addBtn.setAttribute('title', isOpen ? 'Cancel add' : 'Add item');
+        const icon = addBtn.querySelector('i');
+        if (icon) {
+            icon.className = isOpen ? 'fa-solid fa-xmark' : 'fa-solid fa-plus';
+        }
     }
 
-    if (addSubmit) {
-        addSubmit.addEventListener('click', addFeedItemFromInput);
+    if (addBtn && addForm) {
+        addBtn.addEventListener('click', () => {
+            const isOpen = addForm.classList.toggle('open');
+            updateAddButtonState(isOpen);
+            if (isOpen) {
+                if (addInput) addInput.focus();
+            } else {
+                if (addInput) addInput.value = '';
+                feedState.selectedState = null;
+                closeStateInput();
+                renderStateChips();
+            }
+        });
     }
 
     if (addInput) {
         addInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                addFeedItemFromInput();
             }
         });
     }

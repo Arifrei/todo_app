@@ -697,13 +697,45 @@ def _event_end_minutes(start_minutes, end_time):
     return min(start_minutes + 30, 24 * 60)
 
 
-def _task_conflicts_with_event(user_id, day_obj, task_start, task_end, exclude_event_id=None):
+def _task_conflicts_with_event(user_id, day_obj, task_start, task_end, new_task_exclusive, exclude_event_id=None):
     if not task_start:
         return None
     task_start_minutes = _time_to_minutes(task_start)
     task_end_minutes = _time_to_minutes(task_end) if task_end else None
     if task_end_minutes is not None and task_end_minutes < task_start_minutes:
         task_end_minutes = task_start_minutes
+
+    events_query = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user_id,
+        CalendarEvent.day == day_obj,
+        CalendarEvent.is_event == True,
+        CalendarEvent.start_time.isnot(None)
+    )
+    if not new_task_exclusive:
+        events_query = events_query.filter(
+            db.or_(CalendarEvent.allow_overlap == False, CalendarEvent.allow_overlap.is_(None))
+        )
+    events = events_query.all()
+
+    for ev in events:
+        if exclude_event_id and ev.id == exclude_event_id:
+            continue
+        ev_start_minutes = _time_to_minutes(ev.start_time)
+        ev_end_minutes = _event_end_minutes(ev_start_minutes, ev.end_time)
+        if task_end_minutes is None:
+            if ev_start_minutes <= task_start_minutes < ev_end_minutes:
+                return ev
+        else:
+            if not (task_end_minutes <= ev_start_minutes or task_start_minutes >= ev_end_minutes):
+                return ev
+    return None
+
+
+def _event_conflicts_with_event(user_id, day_obj, event_start, event_end, new_allow_overlap, exclude_event_id=None):
+    if not event_start:
+        return None
+    event_start_minutes = _time_to_minutes(event_start)
+    event_end_minutes = _event_end_minutes(event_start_minutes, event_end)
 
     events = CalendarEvent.query.filter(
         CalendarEvent.user_id == user_id,
@@ -717,12 +749,69 @@ def _task_conflicts_with_event(user_id, day_obj, task_start, task_end, exclude_e
             continue
         ev_start_minutes = _time_to_minutes(ev.start_time)
         ev_end_minutes = _event_end_minutes(ev_start_minutes, ev.end_time)
+        overlaps = not (event_end_minutes <= ev_start_minutes or event_start_minutes >= ev_end_minutes)
+        if overlaps and ((ev.allow_overlap is False) or (ev.allow_overlap is None) or (new_allow_overlap is False)):
+            return ev
+    return None
+
+
+def _event_conflicts_with_task(user_id, day_obj, event_start, event_end, new_event_allow_overlap, exclude_event_id=None):
+    if not event_start:
+        return None
+    event_start_minutes = _time_to_minutes(event_start)
+    event_end_minutes = _event_end_minutes(event_start_minutes, event_end)
+
+    tasks = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user_id,
+        CalendarEvent.day == day_obj,
+        CalendarEvent.is_event == False,
+        CalendarEvent.is_phase == False,
+        CalendarEvent.is_group == False,
+        CalendarEvent.start_time.isnot(None)
+    ).all()
+
+    for ev in tasks:
+        if exclude_event_id and ev.id == exclude_event_id:
+            continue
+        ev_start_minutes = _time_to_minutes(ev.start_time)
+        ev_end_minutes = _event_end_minutes(ev_start_minutes, ev.end_time)
+        overlaps = not (event_end_minutes <= ev_start_minutes or event_start_minutes >= ev_end_minutes)
+        if overlaps:
+            existing_task_exclusive = ev.allow_overlap is True
+            new_event_exclusive = not new_event_allow_overlap
+            if existing_task_exclusive or new_event_exclusive:
+                return ev
+    return None
+
+
+def _task_conflicts_with_task(user_id, day_obj, task_start, task_end, new_task_exclusive, exclude_event_id=None):
+    if not task_start:
+        return None
+    task_start_minutes = _time_to_minutes(task_start)
+    task_end_minutes = _time_to_minutes(task_end) if task_end else None
+    if task_end_minutes is not None and task_end_minutes < task_start_minutes:
+        task_end_minutes = task_start_minutes
+
+    tasks = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user_id,
+        CalendarEvent.day == day_obj,
+        CalendarEvent.is_event == False,
+        CalendarEvent.is_phase == False,
+        CalendarEvent.is_group == False,
+        CalendarEvent.start_time.isnot(None)
+    ).all()
+
+    for ev in tasks:
+        if exclude_event_id and ev.id == exclude_event_id:
+            continue
+        ev_start_minutes = _time_to_minutes(ev.start_time)
+        ev_end_minutes = _event_end_minutes(ev_start_minutes, ev.end_time)
         if task_end_minutes is None:
-            if ev_start_minutes <= task_start_minutes < ev_end_minutes:
-                return ev
+            overlaps = ev_start_minutes <= task_start_minutes < ev_end_minutes
         else:
-            if not (task_end_minutes <= ev_start_minutes or task_start_minutes >= ev_end_minutes):
-                return ev
+            overlaps = not (task_end_minutes <= ev_start_minutes or task_start_minutes >= ev_end_minutes)
+        if overlaps and (new_task_exclusive or (ev.allow_overlap is True)):
+            return ev
     return None
 
 
@@ -1839,7 +1928,7 @@ def bookmarks_page():
 
 @app.route('/feed')
 def feed_page():
-    """Feed module page."""
+    """Everfeed module page."""
     if not get_current_user():
         return redirect(url_for('select_user'))
     return render_template('feed.html')
@@ -2214,6 +2303,7 @@ def handle_recalls():
         title = (data.get('title') or '').strip()
         payload_type = (data.get('payload_type') or '').strip().lower()
         payload = (data.get('payload') or '').strip()
+        when_context = (data.get('when_context') or '').strip().lower() or 'future'
 
         if not title or not payload:
             return jsonify({'error': 'title and payload are required'}), 400
@@ -2225,6 +2315,7 @@ def handle_recalls():
             title=title,
             payload_type=payload_type,
             payload=payload,
+            when_context=when_context,
             why='',  # Default empty, AI will populate
             ai_status='pending'
         )
@@ -2581,9 +2672,57 @@ def note_list_item_detail(note_id, item_id):
         item.link_url = (data.get('link_url') or '').strip() or None
     if 'checked' in data:
         item.checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
+    if 'insert_index' in data:
+        try:
+            insert_index = int(data.get('insert_index'))
+        except (TypeError, ValueError):
+            insert_index = None
+        if insert_index is not None:
+            items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+                NoteListItem.order_index.asc(),
+                NoteListItem.id.asc()
+            ).all()
+            item_map = {i.id: i for i in items}
+            ordered_ids = [i.id for i in items if i.id != item.id]
+            insert_index = max(0, min(insert_index, len(ordered_ids)))
+            ordered_ids.insert(insert_index, item.id)
+            for idx, item_id in enumerate(ordered_ids, start=1):
+                item_map[item_id].order_index = idx
     note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
     db.session.commit()
     return jsonify(item.to_dict())
+
+
+@app.route('/api/notes/<int:note_id>/list-items/reorder', methods=['POST'])
+def reorder_note_list_items(note_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.note_type != 'list':
+        return jsonify({'error': 'Not a list note'}), 400
+
+    data = request.json or {}
+    ids = data.get('ids') or []
+    if not isinstance(ids, list):
+        return jsonify({'error': 'ids must be a list'}), 400
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'ids must be integers'}), 400
+
+    items = NoteListItem.query.filter_by(note_id=note.id).all()
+    item_map = {item.id: item for item in items}
+    if len(ids) != len(item_map) or set(ids) != set(item_map.keys()):
+        return jsonify({'error': 'ids must include every item'}), 400
+
+    for idx, item_id in enumerate(ids, start=1):
+        item_map[item_id].order_index = idx
+
+    note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
+    db.session.commit()
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/api/notes/<int:note_id>/share', methods=['POST', 'DELETE'])
@@ -3114,6 +3253,40 @@ def feed_detail(item_id):
     return jsonify({'message': 'Deleted'})
 
 
+@app.route('/api/feed/<int:item_id>/to-recall', methods=['POST'])
+def feed_to_recall(item_id):
+    """Convert a feed item into a recall and remove it from the feed."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    item = DoFeedItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+    title = (item.title or '').strip()
+    url = (item.url or '').strip()
+    if not title or not url:
+        return jsonify({'error': 'Feed item is missing title or URL'}), 400
+
+    why_text = (item.description or '').strip()
+    when_context = (item.state or '').strip().lower() or 'future'
+    recall = RecallItem(
+        user_id=user.id,
+        title=title,
+        payload_type='url',
+        payload=url,
+        when_context=when_context,
+        why=why_text or None,
+        ai_status='pending'
+    )
+    db.session.add(recall)
+    db.session.delete(item)
+    db.session.commit()
+
+    start_embedding_job(user.id, ENTITY_RECALL, recall.id)
+    start_recall_processing(recall.id)
+
+    return jsonify({'recall': recall.to_dict(), 'deleted_id': item_id}), 201
+
+
 # Calendar API
 ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
 ALLOWED_STATUSES = {'not_started', 'in_progress', 'done'}
@@ -3353,14 +3526,43 @@ def calendar_events():
         if existing:
             return jsonify(existing.to_dict()), 200
 
-    if (not is_event) and (not is_phase) and (not is_group) and start_time:
-        conflict = _task_conflicts_with_event(user.id, day_obj, start_time, end_time)
-        if conflict:
-            return jsonify({
-                'error': f'Cannot add a task during "{conflict.title}" because an event is already scheduled.',
-                'conflict_event_id': conflict.id,
-                'conflict_event_title': conflict.title
-            }), 409
+    new_allow_overlap = bool(data.get('allow_overlap'))
+    force_overlap = bool(data.get('force_overlap'))
+    if (not is_phase) and (not is_group) and start_time and not force_overlap:
+        if not is_event:
+            conflict = _task_conflicts_with_event(user.id, day_obj, start_time, end_time, new_allow_overlap)
+            if conflict:
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Add task anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
+            conflict = _task_conflicts_with_task(user.id, day_obj, start_time, end_time, new_allow_overlap)
+            if conflict:
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Add task anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
+        else:
+            conflict = _event_conflicts_with_event(user.id, day_obj, start_time, end_time, new_allow_overlap)
+            if conflict:
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Add event anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
+            conflict = _event_conflicts_with_task(user.id, day_obj, start_time, end_time, new_allow_overlap)
+            if conflict:
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Add event anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
 
     default_rollover = (not is_event) and (not is_group) and (not is_phase)
     new_event = CalendarEvent(
@@ -3374,6 +3576,7 @@ def calendar_events():
         priority=priority,
         is_phase=is_phase,
         is_event=is_event and not is_phase and not is_group,
+        allow_overlap=new_allow_overlap if not is_phase and not is_group else False,
         is_group=is_group and not is_phase and not is_event,
         phase_id=resolved_phase_id if not is_phase and not is_group else None,
         group_id=resolved_group_id if not is_group else None,
@@ -3674,6 +3877,8 @@ def calendar_event_detail(event_id):
             status_changed = (old_status != event.status)
     if 'is_event' in data and not event.is_phase:
         event.is_event = bool(data.get('is_event'))
+    if 'allow_overlap' in data and (not event.is_phase) and (not event.is_group):
+        event.allow_overlap = bool(data.get('allow_overlap'))
     if 'is_group' in data and not event.is_phase and not event.is_event:
         event.is_group = bool(data.get('is_group'))
     if 'rollover_enabled' in data:
@@ -3737,15 +3942,74 @@ def calendar_event_detail(event_id):
                 return jsonify({'error': 'Group not found for that day'}), 404
             event.group_id = gid
 
-    if (not event.is_event) and (not event.is_phase) and (not event.is_group) and event.start_time:
-        conflict = _task_conflicts_with_event(user.id, event.day, event.start_time, event.end_time, exclude_event_id=event.id)
-        if conflict:
-            db.session.rollback()
-            return jsonify({
-                'error': f'Cannot add a task during "{conflict.title}" because an event is already scheduled.',
-                'conflict_event_id': conflict.id,
-                'conflict_event_title': conflict.title
-            }), 409
+    force_overlap = bool(data.get('force_overlap'))
+    if (not event.is_phase) and (not event.is_group) and event.start_time and not force_overlap:
+        if not event.is_event:
+            conflict = _task_conflicts_with_event(
+                user.id,
+                event.day,
+                event.start_time,
+                event.end_time,
+                event.allow_overlap,
+                exclude_event_id=event.id
+            )
+            if conflict:
+                db.session.rollback()
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Update task anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
+            conflict = _task_conflicts_with_task(
+                user.id,
+                event.day,
+                event.start_time,
+                event.end_time,
+                event.allow_overlap,
+                exclude_event_id=event.id
+            )
+            if conflict:
+                db.session.rollback()
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Update task anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
+        else:
+            conflict = _event_conflicts_with_event(
+                user.id,
+                event.day,
+                event.start_time,
+                event.end_time,
+                event.allow_overlap,
+                exclude_event_id=event.id
+            )
+            if conflict:
+                db.session.rollback()
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Update event anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
+            conflict = _event_conflicts_with_task(
+                user.id,
+                event.day,
+                event.start_time,
+                event.end_time,
+                event.allow_overlap,
+                exclude_event_id=event.id
+            )
+            if conflict:
+                db.session.rollback()
+                return jsonify({
+                    'conflict_warning': True,
+                    'message': f'"{conflict.title}" is scheduled during this time. Update event anyway?',
+                    'conflict_event_id': conflict.id,
+                    'conflict_event_title': conflict.title
+                }), 409
 
     if status_changed:
         if event.status == 'done':
