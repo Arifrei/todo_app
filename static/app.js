@@ -93,6 +93,7 @@ let listAutoSaveInFlight = false;
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
 let noteCleanupInFlight = false;
+let noteCleanupState = { originalHtml: null };
 let noteExitInProgress = false;
 let noteFolderState = { folders: [], archivedFolders: [], currentFolderId: null, archivedOpen: false };
 try {
@@ -931,6 +932,7 @@ async function updateLinkedTaskStatus(taskId, status) {
         if (changed) {
             renderCalendarEvents();
             if (calendarState.monthCursor) renderCalendarMonth();
+            await scheduleLocalReminders();
         }
     } catch (e) {
         console.error('Error updating task status:', e);
@@ -1001,7 +1003,7 @@ async function deleteList(listId) {
         try {
             const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
             if (res.ok) {
-                window.location.href = '/';
+                window.location.href = '/tasks';
             }
         } catch (e) {
             console.error('Error deleting list:', e);
@@ -5246,6 +5248,8 @@ function initNoteEditorPage() {
     const deleteBtn = document.getElementById('note-delete-btn');
     const shareBtn = document.getElementById('note-share-btn');
     const cleanupBtn = document.getElementById('note-cleanup-btn');
+    const cleanupAcceptBtn = document.getElementById('note-cleanup-accept-btn');
+    const cleanupRestoreBtn = document.getElementById('note-cleanup-restore-btn');
     const convertBtn = document.getElementById('note-convert-btn');
     const archiveBtn = document.getElementById('note-archive-btn');
     const backBtn = document.getElementById('note-back-btn');
@@ -5260,6 +5264,8 @@ function initNoteEditorPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
     if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
     if (cleanupBtn) cleanupBtn.addEventListener('click', () => cleanupCurrentNote());
+    if (cleanupAcceptBtn) cleanupAcceptBtn.addEventListener('click', () => acceptNoteCleanup());
+    if (cleanupRestoreBtn) cleanupRestoreBtn.addEventListener('click', () => restoreNoteCleanup());
     if (convertBtn) convertBtn.addEventListener('click', () => convertCurrentNoteToList());
     if (protectBtn) protectBtn.addEventListener('click', () => toggleNoteProtection());
     if (archiveBtn) archiveBtn.addEventListener('click', () => toggleCurrentNoteArchive());
@@ -7077,6 +7083,7 @@ function prepareNewNoteEditor() {
     notesState.checkboxMode = false;
     notesState.activeNoteIsArchived = false;
     setNoteDirty(false);
+    hideNoteCleanupActions();
     updateNoteToolbarStates();
     updateArchiveButton(false);
     setNoteEditorReadOnly(false);
@@ -8006,6 +8013,11 @@ function handleCheckboxChange(e) {
     const checkbox = e.target;
     const label = checkbox.closest('.note-inline-checkbox');
 
+    if (notesState.activeNoteIsArchived) {
+        checkbox.checked = !checkbox.checked;
+        showReadOnlyToast();
+    }
+
     if (label) {
         if (checkbox.checked) {
             label.style.textDecoration = 'line-through';
@@ -8014,6 +8026,10 @@ function handleCheckboxChange(e) {
             label.style.textDecoration = 'none';
             label.style.opacity = '1';
         }
+    }
+
+    if (notesState.activeNoteIsArchived) {
+        return;
     }
 
     setNoteDirty(true);
@@ -8509,6 +8525,7 @@ async function setActiveNote(noteId, options = {}) {
     notesState.checkboxMode = false; // Reset checkbox mode when switching notes
     notesState.activeNoteIsArchived = !!note.is_archived;
     setNoteDirty(false);
+    hideNoteCleanupActions();
     renderNotesList();
     updateNoteToolbarStates(); // Update toolbar button states
     bindNoteCheckboxes(); // Bind checkbox event handlers
@@ -8538,6 +8555,35 @@ async function movePinnedNote(noteId, direction) {
     return;
 }
 
+function showNoteCleanupActions() {
+    const actions = document.getElementById('note-cleanup-actions');
+    if (actions) actions.classList.add('visible');
+}
+
+function hideNoteCleanupActions() {
+    const actions = document.getElementById('note-cleanup-actions');
+    if (actions) actions.classList.remove('visible');
+    noteCleanupState.originalHtml = null;
+}
+
+function acceptNoteCleanup() {
+    hideNoteCleanupActions();
+}
+
+function restoreNoteCleanup() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    if (noteCleanupState.originalHtml == null) {
+        hideNoteCleanupActions();
+        return;
+    }
+    editor.innerHTML = noteCleanupState.originalHtml;
+    setNoteDirty(true);
+    bindNoteCheckboxes();
+    updateNoteToolbarStates();
+    hideNoteCleanupActions();
+}
+
 async function cleanupCurrentNote() {
     if (noteCleanupInFlight) return;
     const editor = document.getElementById('note-editor');
@@ -8552,7 +8598,10 @@ async function cleanupCurrentNote() {
         return;
     }
 
+    hideNoteCleanupActions();
+    noteCleanupState.originalHtml = content;
     noteCleanupInFlight = true;
+    let cleanupApplied = false;
     const originalLabel = cleanupBtn ? cleanupBtn.innerHTML : '';
     const originalUpdatedLabel = updatedLabel ? updatedLabel.innerHTML : '';
     if (cleanupBtn) {
@@ -8582,12 +8631,18 @@ async function cleanupCurrentNote() {
             setNoteDirty(true);
             bindNoteCheckboxes();
             updateNoteToolbarStates();
+            cleanupApplied = true;
+            showNoteCleanupActions();
         }
     } catch (e) {
         console.error('Error cleaning note:', e);
         showToast('Cleanup failed', 'error', 3000);
     } finally {
         noteCleanupInFlight = false;
+        if (!cleanupApplied) {
+            noteCleanupState.originalHtml = null;
+            hideNoteCleanupActions();
+        }
         if (cleanupBtn) {
             cleanupBtn.disabled = false;
             cleanupBtn.innerHTML = originalLabel;
@@ -8618,6 +8673,13 @@ async function saveCurrentNote(options = {}) {
     const updatedLabel = document.getElementById('note-updated-label');
     if (!editor || !titleInput) return;
     const noteId = notesState.activeNoteId;
+    if (noteId && notesState.activeNoteIsArchived) {
+        showReadOnlyToast();
+        if (closeAfter || noteExitInProgress) {
+            window.location.href = getNoteReturnUrl();
+        }
+        return;
+    }
     if (!notesState.dirty && noteId) {
         // No changes: still clear and reset without touching the timestamp
         if (closeAfter) {
@@ -8802,6 +8864,7 @@ function clearNoteEditor() {
     notesState.activeFolderId = null;
     notesState.checkboxMode = false; // Reset checkbox mode
     setNoteDirty(false);
+    hideNoteCleanupActions();
     updateNoteToolbarStates(); // Update toolbar button states
 }
 
@@ -9865,19 +9928,90 @@ function renderRecurringList(items) {
         yearly: 'Yearly',
         custom: 'Custom'
     };
+    const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    function dayLabelFromStartDay(startDay) {
+        if (!startDay) return null;
+        const date = new Date(`${startDay}T00:00:00`);
+        if (Number.isNaN(date.valueOf())) return null;
+        const jsDay = date.getDay(); // 0=Sun..6=Sat
+        const mondayIndex = (jsDay + 6) % 7;
+        return weekdayLabels[mondayIndex];
+    }
+
+    function formatDaysOfWeek(item) {
+        let days = Array.isArray(item.days_of_week) ? item.days_of_week : [];
+        if (!days.length) {
+            const fallback = dayLabelFromStartDay(item.start_day);
+            return fallback ? fallback : '';
+        }
+        const labels = days
+            .filter(d => d >= 0 && d <= 6)
+            .map(d => weekdayLabels[d]);
+        return labels.join(', ');
+    }
+
+    function formatDayOfMonth(item) {
+        let dom = item.day_of_month;
+        if (!dom && item.start_day) {
+            const date = new Date(`${item.start_day}T00:00:00`);
+            if (!Number.isNaN(date.valueOf())) {
+                dom = date.getDate();
+            }
+        }
+        return dom ? `Day ${dom}` : '';
+    }
+
+    function formatYearly(item) {
+        let month = item.month_of_year;
+        let dom = item.day_of_month;
+        if ((!month || !dom) && item.start_day) {
+            const date = new Date(`${item.start_day}T00:00:00`);
+            if (!Number.isNaN(date.valueOf())) {
+                if (!month) month = date.getMonth() + 1;
+                if (!dom) dom = date.getDate();
+            }
+        }
+        if (!month || !dom) return '';
+        return `${monthLabels[month - 1]} ${dom}`;
+    }
 
     listEl.innerHTML = items.map(item => {
         const typeClass = item.is_event ? 'event' : '';
         const typeLabel = item.is_event ? 'Event' : 'Task';
         const freqLabel = freqLabels[item.frequency] || item.frequency;
-        const timeStr = item.start_time ? ` @ ${item.start_time}` : '';
+        const detailParts = [freqLabel];
+        let dayDetail = '';
+        if (item.frequency === 'weekly' || item.frequency === 'biweekly') {
+            dayDetail = formatDaysOfWeek(item);
+        } else if (item.frequency === 'monthly') {
+            dayDetail = formatDayOfMonth(item);
+        } else if (item.frequency === 'yearly') {
+            dayDetail = formatYearly(item);
+        } else if (item.frequency === 'custom') {
+            if (item.interval_unit === 'weeks') {
+                dayDetail = formatDaysOfWeek(item);
+            } else if (item.interval_unit === 'months') {
+                dayDetail = formatDayOfMonth(item);
+            } else if (item.interval_unit === 'years') {
+                dayDetail = formatYearly(item);
+            }
+        }
+        if (dayDetail) detailParts.push(dayDetail);
+        const reminderOn = item.reminder_minutes_before !== null && item.reminder_minutes_before !== undefined;
+        const reminderTitle = reminderOn ? 'Reminder on' : 'Reminder off';
+        const reminderIcon = reminderOn ? 'fa-bell' : 'fa-bell-slash';
         return `
             <div class="recurring-item" data-id="${item.id}">
                 <div class="recurring-item-info">
                     <div class="recurring-item-title">${escapeHtml(item.title)}</div>
                     <div class="recurring-item-meta">
                         <span class="recurring-item-type ${typeClass}">${typeLabel}</span>
-                        ${freqLabel}${timeStr}
+                        <span class="recurring-item-details">${detailParts.join(' | ')}</span>
+                        <span class="recurring-item-reminder ${reminderOn ? 'on' : 'off'}" title="${reminderTitle}">
+                            <i class="fa-solid ${reminderIcon}"></i>
+                        </span>
                     </div>
                 </div>
                 <div class="recurring-item-actions">
@@ -12437,6 +12571,7 @@ async function updateCalendarEvent(id, payload, options = {}) {
     const { skipReload = false, skipMonth = false, skipConflictWarning = false } = options;
     const prevEvent = Array.isArray(calendarState.events) ? calendarState.events.find(e => e.id === id) : null;
     const prevDay = prevEvent?.day;
+    const reminderAffecting = payload && ['status', 'reminder_minutes_before', 'start_time', 'day'].some(key => Object.prototype.hasOwnProperty.call(payload, key));
     try {
         const res = await fetch(`/api/calendar/events/${id}`, {
             method: 'PUT',
@@ -12505,6 +12640,9 @@ async function updateCalendarEvent(id, payload, options = {}) {
         }
         if (calendarState.monthCursor && !skipMonth) {
             renderCalendarMonth();
+        }
+        if (reminderAffecting) {
+            await scheduleLocalReminders();
         }
     } catch (err) {
         console.error(err);

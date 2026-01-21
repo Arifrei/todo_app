@@ -165,6 +165,7 @@ function openBookmarkModal(id) {
     renderBookmarkModalView(item);
     const overlay = document.getElementById('bookmark-modal-overlay');
     if (overlay) overlay.classList.add('open');
+    refreshBookmarkDetails(id);
 }
 
 function openAddBookmarkModal() {
@@ -223,6 +224,21 @@ function renderBookmarkModalView(item) {
             </button>
         </div>
     `;
+}
+
+async function refreshBookmarkDetails(id) {
+    try {
+        const res = await fetch(`/api/bookmarks/${id}`);
+        if (!res.ok) throw new Error('Failed to load bookmark');
+        const fresh = await res.json();
+        const idx = bookmarkState.items.findIndex(i => i.id === fresh.id);
+        if (idx !== -1) bookmarkState.items[idx] = fresh;
+        if (bookmarkState.activeId === fresh.id && bookmarkState.mode === 'view') {
+            renderBookmarkModalView(fresh);
+        }
+    } catch (err) {
+        console.error(err);
+    }
 }
 
 function renderBookmarkModalEdit(itemOrId) {

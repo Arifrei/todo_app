@@ -1430,126 +1430,185 @@ def _send_daily_email_digest(target_day=None):
     if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '1') != '1':
         return {'disabled': True}
     with app.app_context():
-        tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
-        now_local = datetime.now(tz)
-        is_manual = target_day is not None
-        if target_day is None:
-            target_day = now_local.date()
-        users = User.query.all()
-        fallback_email = os.environ.get('CONTACT_TO_EMAIL')
-        stats = {
-            'day': target_day.isoformat(),
-            'users_total': len(users),
-            'eligible': 0,
-            'sent': 0,
-            'skipped_prefs': 0,
-            'skipped_hour': 0,
-            'skipped_no_items': 0,
-            'skipped_no_recipient': 0,
-            'errors': 0,
-            'manual': is_manual,
-        }
-        for user_obj in users:
-            prefs = _get_or_create_notification_settings(user_obj.id)
-            if not prefs.email_enabled or not prefs.digest_enabled:
-                stats['skipped_prefs'] += 1
-                continue
-            if not is_manual and prefs.digest_hour != now_local.hour:
-                stats['skipped_hour'] += 1
-                continue
-            events = CalendarEvent.query.filter(
-                CalendarEvent.user_id == user_obj.id,
-                CalendarEvent.day == target_day,
-                CalendarEvent.is_group.is_(False),
-                CalendarEvent.is_phase.is_(False),
-                CalendarEvent.is_event.is_(True)
-            ).order_by(
-                CalendarEvent.start_time.is_(None),
-                CalendarEvent.start_time.asc()
-            ).all()
-            calendar_tasks = CalendarEvent.query.filter(
-                CalendarEvent.user_id == user_obj.id,
-                CalendarEvent.day == target_day,
-                CalendarEvent.is_group.is_(False),
-                CalendarEvent.is_phase.is_(False),
-                CalendarEvent.is_event.is_(False)
-            ).order_by(
-                CalendarEvent.start_time.is_(None),
-                CalendarEvent.start_time.asc()
-            ).all()
-            todo_tasks = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
-                TodoList.user_id == user_obj.id,
-                TodoItem.due_date == target_day,
-                TodoItem.is_phase == False
-            ).order_by(TodoItem.order_index.asc()).all()
+        # Acquire distributed lock to avoid duplicate sends across workers.
+        import os
+        worker_id = os.getpid()
+        lock_name = 'daily_email_digest'
+        lock_acquired = False
+        lock_row = None
+        try:
+            from models import JobLock
+            from sqlalchemy.exc import IntegrityError
 
-            tasks_for_day = []
-            for task in calendar_tasks:
-                tasks_for_day.append({
-                    'title': task.title,
-                    'start_time': task.start_time,
-                    'end_time': task.end_time,
-                    'priority': task.priority,
-                    'status': task.status,
-                    'source': 'Calendar task',
-                })
-            for task in todo_tasks:
-                tasks_for_day.append({
-                    'title': task.content,
-                    'start_time': None,
-                    'end_time': None,
-                    'priority': None,
-                    'status': task.status,
-                    'source': 'Todo',
-                    'list_name': task.list.title if task.list else None,
-                })
-            tasks_for_day.sort(
-                key=lambda item: (
-                    item.get('start_time') is None,
-                    item.get('start_time') or time.min,
-                    item.get('title', '').lower()
-                )
-            )
-
-            if not events and not tasks_for_day:
-                stats['skipped_no_items'] += 1
-                continue
-            body = _build_daily_digest_body(events, tasks_for_day)
-            html_body = _build_daily_digest_html(events, tasks_for_day, target_day)
-            try:
-                recipient = fallback_email
-                if recipient:
-                    stats['eligible'] += 1
-                    app.logger.info(
-                        "Digest email recipient=%s user_id=%s day=%s",
-                        recipient,
-                        user_obj.id,
-                        target_day.isoformat()
-                    )
-                    if _send_email(recipient, f"Your tasks for {target_day.isoformat()}", body, html_body=html_body):
-                        stats['sent'] += 1
+            now = _now_local()
+            if db.engine.dialect.name == 'sqlite':
+                try:
+                    lock_row = JobLock(job_name=lock_name, locked_at=now, locked_by=str(worker_id))
+                    db.session.add(lock_row)
+                    db.session.commit()
+                    lock_acquired = True
+                except IntegrityError:
+                    db.session.rollback()
+                    lock_row = db.session.query(JobLock).filter_by(job_name=lock_name).first()
+                    if lock_row and now - lock_row.locked_at >= timedelta(minutes=5):
+                        lock_row.locked_at = now
+                        lock_row.locked_by = str(worker_id)
+                        db.session.commit()
+                        lock_acquired = True
                     else:
-                        stats['errors'] += 1
+                        if lock_row:
+                            app.logger.info(f"Digest already running (locked by {lock_row.locked_by}), skipping")
+                        else:
+                            app.logger.info("Digest lock acquisition failed (missing lock), skipping")
+                        return {'skipped_lock': True}
+            else:
+                lock_row = db.session.query(JobLock).filter_by(job_name=lock_name).with_for_update(nowait=True).first()
+                if lock_row:
+                    if now - lock_row.locked_at < timedelta(minutes=5):
+                        app.logger.info(f"Digest already running (locked by {lock_row.locked_by}), skipping")
+                        db.session.rollback()
+                        return {'skipped_lock': True}
+                    lock_row.locked_at = now
+                    lock_row.locked_by = str(worker_id)
                 else:
-                    stats['skipped_no_recipient'] += 1
-            except Exception as e:
-                stats['errors'] += 1
-                app.logger.error(f"Error sending digest for user {user_obj.id}: {e}")
-                continue
-        app.logger.info(
-            "Digest stats day=%s manual=%s users=%s eligible=%s sent=%s skipped_prefs=%s skipped_hour=%s skipped_no_items=%s skipped_no_recipient=%s errors=%s",
-            stats['day'],
-            stats['manual'],
-            stats['users_total'],
-            stats['eligible'],
-            stats['sent'],
-            stats['skipped_prefs'],
-            stats['skipped_hour'],
-            stats['skipped_no_items'],
-            stats['skipped_no_recipient'],
-            stats['errors']
-        )
-        return stats
+                    lock_row = JobLock(job_name=lock_name, locked_at=now, locked_by=str(worker_id))
+                    db.session.add(lock_row)
+                db.session.commit()
+                lock_acquired = True
+        except Exception as e:
+            db.session.rollback()
+            app.logger.info(f"Digest lock acquisition failed (worker {worker_id}), skipping: {e}")
+            return {'skipped_lock': True}
+
+        try:
+            tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
+            now_local = datetime.now(tz)
+            is_manual = target_day is not None
+            if target_day is None:
+                target_day = now_local.date()
+            users = User.query.all()
+            fallback_email = os.environ.get('CONTACT_TO_EMAIL')
+            stats = {
+                'day': target_day.isoformat(),
+                'users_total': len(users),
+                'eligible': 0,
+                'sent': 0,
+                'skipped_prefs': 0,
+                'skipped_hour': 0,
+                'skipped_no_items': 0,
+                'skipped_no_recipient': 0,
+                'errors': 0,
+                'manual': is_manual,
+            }
+            for user_obj in users:
+                prefs = _get_or_create_notification_settings(user_obj.id)
+                if not prefs.email_enabled or not prefs.digest_enabled:
+                    stats['skipped_prefs'] += 1
+                    continue
+                if not is_manual and prefs.digest_hour != now_local.hour:
+                    stats['skipped_hour'] += 1
+                    continue
+                events = CalendarEvent.query.filter(
+                    CalendarEvent.user_id == user_obj.id,
+                    CalendarEvent.day == target_day,
+                    CalendarEvent.is_group.is_(False),
+                    CalendarEvent.is_phase.is_(False),
+                    CalendarEvent.is_event.is_(True)
+                ).order_by(
+                    CalendarEvent.start_time.is_(None),
+                    CalendarEvent.start_time.asc()
+                ).all()
+                calendar_tasks = CalendarEvent.query.filter(
+                    CalendarEvent.user_id == user_obj.id,
+                    CalendarEvent.day == target_day,
+                    CalendarEvent.is_group.is_(False),
+                    CalendarEvent.is_phase.is_(False),
+                    CalendarEvent.is_event.is_(False)
+                ).order_by(
+                    CalendarEvent.start_time.is_(None),
+                    CalendarEvent.start_time.asc()
+                ).all()
+                todo_tasks = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                    TodoList.user_id == user_obj.id,
+                    TodoItem.due_date == target_day,
+                    TodoItem.is_phase == False
+                ).order_by(TodoItem.order_index.asc()).all()
+
+                tasks_for_day = []
+                for task in calendar_tasks:
+                    tasks_for_day.append({
+                        'title': task.title,
+                        'start_time': task.start_time,
+                        'end_time': task.end_time,
+                        'priority': task.priority,
+                        'status': task.status,
+                    })
+                for task in todo_tasks:
+                    tasks_for_day.append({
+                        'title': task.content,
+                        'start_time': None,
+                        'end_time': None,
+                        'priority': None,
+                        'status': task.status,
+                    })
+                tasks_for_day.sort(
+                    key=lambda item: (
+                        item.get('start_time') is None,
+                        item.get('start_time') or time.min,
+                        item.get('title', '').lower()
+                    )
+                )
+
+                if not events and not tasks_for_day:
+                    stats['skipped_no_items'] += 1
+                    continue
+                body = _build_daily_digest_body(events, tasks_for_day)
+                html_body = _build_daily_digest_html(events, tasks_for_day, target_day)
+                try:
+                    recipient = fallback_email
+                    if recipient:
+                        stats['eligible'] += 1
+                        app.logger.info(
+                            "Digest email recipient=%s user_id=%s day=%s",
+                            recipient,
+                            user_obj.id,
+                            target_day.isoformat()
+                        )
+                        if _send_email(recipient, f"Your tasks for {target_day.isoformat()}", body, html_body=html_body):
+                            stats['sent'] += 1
+                        else:
+                            stats['errors'] += 1
+                    else:
+                        stats['skipped_no_recipient'] += 1
+                except Exception as e:
+                    stats['errors'] += 1
+                    app.logger.error(f"Error sending digest for user {user_obj.id}: {e}")
+                    continue
+            app.logger.info(
+                "Digest stats day=%s manual=%s users=%s eligible=%s sent=%s skipped_prefs=%s skipped_hour=%s skipped_no_items=%s skipped_no_recipient=%s errors=%s",
+                stats['day'],
+                stats['manual'],
+                stats['users_total'],
+                stats['eligible'],
+                stats['sent'],
+                stats['skipped_prefs'],
+                stats['skipped_hour'],
+                stats['skipped_no_items'],
+                stats['skipped_no_recipient'],
+                stats['errors']
+            )
+            return stats
+        finally:
+            if lock_acquired and lock_row:
+                try:
+                    lock_to_release = db.session.query(JobLock).filter_by(job_name=lock_name).first()
+                    if lock_to_release and lock_to_release.locked_by == str(worker_id):
+                        db.session.delete(lock_to_release)
+                        db.session.commit()
+                        app.logger.info(f"Digest lock released (worker {worker_id})")
+                except Exception as e:
+                    db.session.rollback()
+                    app.logger.error(f"Error releasing digest lock: {e}")
 
 
 def _schedule_reminder_job(event):
@@ -2837,6 +2896,8 @@ def handle_note(note_id):
 
     if request.method == 'PUT':
         data = request.json or {}
+        if note.archived_at:
+            return jsonify({'error': 'Archived notes are read-only.'}), 403
         # For protected notes, require notes PIN for any modification
         if note.is_pin_protected:
             pin = str(data.get('pin', '')).strip()
@@ -5134,12 +5195,18 @@ def handle_item(item_id):
         # but we might need manual cleanup if not strict. 
         # models.py has cascade="all, delete-orphan" on the parent list side, 
         # but the linked_list is a separate relationship.
+        phase_id = item.phase_id
         if item.linked_list:
             delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)
             db.session.delete(item.linked_list)
             
         delete_embedding(user.id, ENTITY_TODO_ITEM, item.id)
         db.session.delete(item)
+        db.session.flush()
+        if phase_id:
+            phase_item = db.session.get(TodoItem, phase_id)
+            if phase_item:
+                phase_item.update_phase_status()
         db.session.commit()
         return '', 204
         
