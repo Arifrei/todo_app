@@ -387,6 +387,13 @@ body {
 .tasks-header {
     align-items: flex-start;
 }
+.tasks-header .tasks-fab-container {
+    margin-left: auto;
+    align-self: flex-start;
+    display: flex;
+    justify-content: flex-end;
+    flex: 0 0 auto;
+}
 .tasks-header .header-add-circle {
     align-self: flex-start;
     white-space: nowrap;
@@ -1197,6 +1204,36 @@ header p {
     border-radius: 10px;
 }
 
+.phase-blocked-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.2rem 0;
+    margin-top: 0.5rem;
+    color: var(--text-muted);
+}
+
+.phase-blocked-bar::before,
+.phase-blocked-bar::after {
+    content: '';
+    flex: 1;
+    border-top: 1px dashed rgba(245, 158, 11, 0.35);
+}
+
+.phase-blocked-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.phase-blocked-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+
 .phase-done-bar.hidden-by-phase {
     display: none;
 }
@@ -1217,6 +1254,11 @@ header p {
 .phase-done-container.collapsed,
 .phase-done-container.collapsed-by-phase,
 .phase-done-container.hidden-by-phase {
+    display: none;
+}
+
+.phase-blocked-container.collapsed,
+.phase-blocked-container.hidden-by-phase {
     display: none;
 }
 
@@ -1444,6 +1486,77 @@ header p {
     gap: 0.3rem;
 }
 
+
+.dependency-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.75rem;
+    background: var(--white);
+}
+
+.dependency-task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.75rem;
+    background: var(--white);
+}
+
+.dependency-group-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 0.4rem;
+}
+
+.dependency-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.9rem;
+    color: var(--text-color);
+    justify-content: space-between;
+}
+
+.dependency-text {
+    flex: 1;
+}
+
+.dependency-status {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    background: var(--primary-light);
+    color: var(--primary-color);
+    white-space: nowrap;
+}
+
+.dependency-status.status-in_progress {
+    background: var(--warning-light);
+    color: var(--warning-color);
+}
+
+.dependency-status.status-done {
+    background: var(--accent-light);
+    color: var(--accent-color);
+}
+
+.dependency-empty {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
 .light-list-view .task-list {
     gap: 0.5rem;
     margin-top: 0.5rem;
@@ -1590,6 +1703,10 @@ header p {
     border: 1px solid rgba(6, 182, 212, 0.2);
     background: rgba(6, 182, 212, 0.06);
     box-shadow: none;
+}
+.light-list-view .bulk-menu-dropdown {
+    top: auto;
+    bottom: calc(100% + 8px);
 }
 
 @media (max-width: 768px) {
@@ -2590,6 +2707,12 @@ header p {
     color: var(--text-color);
     font-weight: 600;
     font-size: 0.95rem;
+}
+
+.form-hint {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
 }
 
 /* Autocomplete wrapper and dropdown */
@@ -4427,6 +4550,57 @@ body:has(.ai-fullpage) .ai-panel {
     border-top: 1px solid var(--border-color);
 }
 
+.notes-archived-section {
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-color);
+}
+
+.notes-archived-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border: none;
+    padding: 0.75rem 1rem;
+    background: var(--bg-color);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+.notes-archived-toggle:hover {
+    background: rgba(148, 163, 184, 0.08);
+}
+
+.notes-archived-title {
+    font-weight: 600;
+}
+
+.notes-archived-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+.notes-archived-toggle i {
+    transition: transform 0.2s ease;
+}
+
+.notes-archived-section.open .notes-archived-toggle i {
+    transform: rotate(180deg);
+}
+
+.notes-archived-body {
+    background: var(--white);
+    border-top: 1px solid var(--border-color);
+}
+
+.notes-archived-empty {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    padding: 0.6rem 1rem 0.8rem;
+}
+
 /* ========================================
    Notes Item - Minimal with Swipe Support
    ======================================== */
@@ -4437,6 +4611,10 @@ body:has(.ai-fullpage) .ai-panel {
     background: var(--white);
     border-bottom: 1px solid var(--border-color);
     touch-action: pan-y;
+}
+
+.notes-item.archived {
+    opacity: 0.7;
 }
 
 .notes-item.swiping {
@@ -5836,6 +6014,15 @@ body:has(.ai-fullpage) .ai-panel {
     text-decoration: line-through;
 }
 
+.calendar-month-event.canceled {
+    opacity: 0.6;
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.calendar-month-event.canceled .title {
+    text-decoration: line-through;
+}
+
 .calendar-month-more {
     color: var(--primary-color);
     font-size: 0.9rem;
@@ -5970,6 +6157,96 @@ body:has(.ai-fullpage) .ai-panel {
 
 .calendar-day-view.is-hidden {
     display: none !important;
+}
+
+.calendar-search {
+    position: relative;
+    margin-top: 0.75rem;
+}
+
+.calendar-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.75rem;
+    background: var(--bg-light);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+}
+
+.calendar-search-bar i {
+    color: var(--text-muted);
+}
+
+#calendar-search-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 0.35rem 0;
+    box-shadow: none;
+}
+
+#calendar-search-input:focus {
+    outline: none;
+}
+
+.calendar-search-clear {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0.25rem;
+}
+
+.calendar-search-clear.is-hidden {
+    display: none;
+}
+
+.calendar-search-results {
+    margin-top: 0.5rem;
+    border: 1px solid var(--border-color);
+    background: var(--white);
+    border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+    max-height: 260px;
+    overflow: auto;
+}
+
+.calendar-search-results.is-hidden {
+    display: none;
+}
+
+.calendar-search-item {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    padding: 0.65rem 0.85rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.calendar-search-item:last-child {
+    border-bottom: none;
+}
+
+.calendar-search-item:hover {
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.calendar-search-item-title {
+    font-weight: 600;
+}
+
+.calendar-search-item-meta {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+}
+
+.calendar-search-empty {
+    padding: 0.75rem 0.9rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
 }
 
 .calendar-page header {
@@ -6546,6 +6823,17 @@ section.card.calendar-board,
 
 .calendar-row.done input[type="text"] {
     text-decoration: line-through;
+}
+
+.calendar-row.canceled {
+    opacity: 0.6;
+    background: rgba(239, 68, 68, 0.06);
+    border-left-color: rgba(239, 68, 68, 0.35);
+}
+
+.calendar-row.canceled input[type="text"] {
+    text-decoration: line-through;
+    color: var(--text-muted);
 }
 
 /* Removed - using margin-bottom instead of border-bottom */
@@ -7267,6 +7555,14 @@ button.meta-chip {
     /* Day View - Compact Mobile Layout */
     .calendar-day-view {
         gap: 0.5rem;
+    }
+
+    .calendar-search-bar {
+        padding: 0.4rem 0.6rem;
+    }
+
+    .calendar-search-results {
+        max-height: 200px;
     }
 
     /* Day View Header - Compact Single Row */
@@ -9784,8 +10080,9 @@ button.meta-chip {
     .tasks-header {
         flex-direction: row;
         align-items: flex-start;
+        flex-wrap: nowrap;
     }
-    .tasks-header > div {
+    .tasks-header > div:not(.tasks-fab-container) {
         flex: 1;
         min-width: 0;
     }
@@ -9811,10 +10108,24 @@ button.meta-chip {
     .tasks-header {
         flex-direction: row;
         align-items: flex-start;
+        flex-wrap: nowrap;
     }
-    .tasks-header > div {
+    .tasks-header > div:not(.tasks-fab-container) {
         flex: 1;
         min-width: 0;
+    }
+
+    .tasks-fab-options,
+    .tasks-fab-input-container {
+        right: 0;
+        left: auto;
+        max-width: calc(100vw - 2rem);
+        box-sizing: border-box;
+    }
+
+    .tasks-fab-input {
+        min-width: 0;
+        width: min(220px, calc(100vw - 4.5rem));
     }
 
     .bookmark-grid {

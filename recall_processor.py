@@ -40,18 +40,36 @@ def get_youtube_content(url):
     # Try youtube-transcript-api first
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, cookies={"CONSENT": "YES+1"})
+        except TypeError:
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
         text = ' '.join([t['text'] for t in transcript])
+        print(f"YouTube transcript source: youtube-transcript-api (video_id={video_id})")
         return text[:5000]
     except Exception:
         pass
 
+    transcript = fetch_youtube_transcript(video_id)
+    if transcript:
+        print(f"YouTube transcript source: parsed-captions (video_id={video_id})")
+        return transcript[:5000]
+
     # Fallback: try to get description from page
     try:
-        response = requests.get(url, timeout=10, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html = fetch_youtube_watch_html(video_id)
+        if not html:
+            response = requests.get(url, timeout=10, headers=get_default_headers())
+            html = response.text
+        player_response = extract_player_response(html)
+        if player_response:
+            details = player_response.get('videoDetails', {})
+            short_desc = (details.get('shortDescription') or '').strip()
+            if short_desc:
+                print(f"YouTube description source: videoDetails.shortDescription (video_id={video_id})")
+                return f"Video description: {short_desc}"
+
+        soup = BeautifulSoup(html, 'html.parser')
         meta = soup.find('meta', attrs={'name': 'description'})
         if meta and meta.get('content'):
             desc = meta.get('content')
@@ -65,12 +83,120 @@ def get_youtube_content(url):
             desc_lower = desc.lower()
             if sum(1 for phrase in generic_phrases if phrase in desc_lower) >= 2:
                 # This is YouTube's generic page, not the actual video
+                print(f"YouTube description source: consent-generic (video_id={video_id})")
                 return "[YouTube video - blocked by consent page, transcript unavailable]"
+            print(f"YouTube description source: meta description (video_id={video_id})")
             return f"Video description: {desc}"
     except Exception:
         pass
 
+    print(f"YouTube content source: unavailable (video_id={video_id})")
     return "[YouTube video - transcript unavailable]"
+
+
+def get_default_headers():
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+
+
+def get_default_cookies():
+    return {'CONSENT': 'YES+1'}
+
+
+def fetch_youtube_watch_html(video_id):
+    watch_urls = [
+        f"https://www.youtube.com/watch?v={video_id}&hl=en&persist_gl=1&persist_hl=1",
+        f"https://www.youtube.com/watch?v={video_id}",
+    ]
+    for watch_url in watch_urls:
+        try:
+            response = requests.get(
+                watch_url,
+                timeout=10,
+                headers=get_default_headers(),
+                cookies=get_default_cookies(),
+            )
+            if response.ok and 'ytInitialPlayerResponse' in response.text:
+                return response.text
+        except Exception:
+            continue
+    return None
+
+
+def extract_player_response(html):
+    match = re.search(r'ytInitialPlayerResponse\s*=\s*({.*?});', html, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+
+
+def select_caption_track(tracks):
+    if not tracks:
+        return None
+    # Prefer English tracks when available.
+    for track in tracks:
+        lang = (track.get('languageCode') or '').lower()
+        if lang.startswith('en'):
+            return track
+    return tracks[0]
+
+
+def parse_vtt_text(vtt_text):
+    lines = []
+    for line in vtt_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('WEBVTT'):
+            continue
+        if '-->' in line:
+            continue
+        if line.isdigit():
+            continue
+        lines.append(line)
+    return ' '.join(lines)
+
+
+def fetch_youtube_transcript(video_id):
+    html = fetch_youtube_watch_html(video_id)
+    if not html:
+        return None
+
+    player_response = extract_player_response(html)
+    if not player_response:
+        return None
+
+    captions = player_response.get('captions', {}).get('playerCaptionsTracklistRenderer', {})
+    tracks = captions.get('captionTracks', [])
+    track = select_caption_track(tracks)
+    if not track or not track.get('baseUrl'):
+        return None
+
+    base_url = track['baseUrl']
+    if 'fmt=' not in base_url:
+        base_url += '&fmt=vtt'
+
+    try:
+        response = requests.get(
+            base_url,
+            timeout=10,
+            headers=get_default_headers(),
+            cookies=get_default_cookies(),
+        )
+        if not response.ok:
+            return None
+        text = response.text
+        if '<text' in text:
+            soup = BeautifulSoup(text, 'html.parser')
+            return ' '.join(soup.stripped_strings)
+        return parse_vtt_text(text)
+    except Exception:
+        return None
 
 
 def scrape_video_content(url):

@@ -132,6 +132,26 @@ def ensure_todo_item_table(cur):
     )
 
 
+def ensure_task_dependency_table(cur):
+    if table_exists(cur, "task_dependency"):
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_task_dependency_task ON task_dependency(task_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_task_dependency_depends ON task_dependency(depends_on_id)")
+        print("[ok] task_dependency table exists")
+        return
+    cur.execute(
+        """
+        CREATE TABLE task_dependency (
+            task_id INTEGER NOT NULL,
+            depends_on_id INTEGER NOT NULL,
+            PRIMARY KEY (task_id, depends_on_id)
+        )
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_dependency_task ON task_dependency(task_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_task_dependency_depends ON task_dependency(depends_on_id)")
+    print("[add] task_dependency table created")
+
+
 def ensure_note_table(cur):
     if not table_exists(cur, "note"):
         cur.execute(
@@ -148,6 +168,7 @@ def ensure_note_table(cur):
                 checkbox_mode BOOLEAN DEFAULT 0,
                 pinned BOOLEAN DEFAULT 0,
                 pin_order INTEGER DEFAULT 0,
+                archived_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 share_token VARCHAR(64) UNIQUE,
@@ -169,6 +190,7 @@ def ensure_note_table(cur):
     add_column(cur, "note", "checkbox_mode", "BOOLEAN DEFAULT 0", default_sql="0")
     add_column(cur, "note", "pinned", "BOOLEAN DEFAULT 0")
     add_column(cur, "note", "pin_order", "INTEGER DEFAULT 0")
+    add_column(cur, "note", "archived_at", "TIMESTAMP")
     add_column(cur, "note", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "share_token", "VARCHAR(64)")
@@ -216,6 +238,7 @@ def ensure_note_folder_table(cur):
                 name VARCHAR(120) NOT NULL,
                 order_index INTEGER DEFAULT 0,
                 is_pin_protected BOOLEAN DEFAULT 0 NOT NULL,
+                archived_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -227,6 +250,7 @@ def ensure_note_folder_table(cur):
     add_column(cur, "note_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "note_folder", "is_pin_protected", "BOOLEAN DEFAULT 0 NOT NULL")
+    add_column(cur, "note_folder", "archived_at", "TIMESTAMP")
     add_column(cur, "note_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
@@ -597,6 +621,7 @@ def main():
         ensure_user_table(cur)
         ensure_todo_list_table(cur)
         ensure_todo_item_table(cur)
+        ensure_task_dependency_table(cur)
         ensure_note_table(cur)
         ensure_note_list_item_table(cur)
         ensure_note_folder_table(cur)

@@ -20,8 +20,11 @@
                             <button class="calendar-month-menu-item" id="calendar-today-month-btn">
                                 <i class="fa-solid fa-calendar-day"></i> Today
                             </button>
+                            <button class="calendar-month-menu-item" id="calendar-search-toggle">
+                                <i class="fa-solid fa-magnifying-glass"></i> Search
+                            </button>
                             <button class="calendar-month-menu-item" id="calendar-go-to-btn">
-                                <i class="fa-solid fa-magnifying-glass"></i> Go to date
+                                <i class="fa-solid fa-calendar-check"></i> Go to date
                             </button>
                             <button class="calendar-month-menu-item" id="calendar-recurring-btn">
                                 <i class="fa-solid fa-repeat"></i> Recurring items
@@ -31,6 +34,16 @@
                 </div>
             </div>
         </div>
+        <section class="calendar-search is-hidden" id="calendar-search-panel">
+            <div class="calendar-search-bar">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="search" id="calendar-search-input" class="form-control" placeholder="Search events and tasks" autocomplete="off">
+                <button class="btn-icon calendar-search-clear is-hidden" id="calendar-search-clear" aria-label="Clear search" title="Clear">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div id="calendar-search-results" class="calendar-search-results is-hidden"></div>
+        </section>
         <div class="calendar-weekdays">
             <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
         </div>

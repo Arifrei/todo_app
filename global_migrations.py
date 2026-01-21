@@ -91,6 +91,7 @@ def ensure_note(cur):
     add_column(cur, "note", "checkbox_mode", "BOOLEAN DEFAULT 0", default_sql="0")
     add_column(cur, "note", "pinned", "BOOLEAN DEFAULT 0")
     add_column(cur, "note", "pin_order", "INTEGER DEFAULT 0")
+    add_column(cur, "note", "archived_at", "TIMESTAMP")
     add_column(cur, "note", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
@@ -117,6 +118,7 @@ def ensure_note_folder(cur):
     add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "note_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "note_folder", "archived_at", "TIMESTAMP")
 
 
 def ensure_note_list_item(cur):

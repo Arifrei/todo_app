@@ -5,6 +5,12 @@ from datetime import datetime, date, time
 
 db = SQLAlchemy()
 
+task_dependencies = db.Table(
+    'task_dependency',
+    db.Column('task_id', db.Integer, db.ForeignKey('todo_item.id'), primary_key=True),
+    db.Column('depends_on_id', db.Integer, db.ForeignKey('todo_item.id'), primary_key=True)
+)
+
 
 class JobLock(db.Model):
     """Simple distributed lock for background jobs to prevent concurrent execution."""
@@ -150,6 +156,13 @@ class TodoItem(db.Model):
     phase_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     phase = db.relationship('TodoItem', remote_side=[id], backref='phase_tasks', foreign_keys=[phase_id])
     linked_notes = db.relationship('Note', backref='task', lazy=True, foreign_keys='Note.todo_item_id')
+    dependencies = db.relationship(
+        'TodoItem',
+        secondary=task_dependencies,
+        primaryjoin=id == task_dependencies.c.task_id,
+        secondaryjoin=id == task_dependencies.c.depends_on_id,
+        backref='dependents'
+    )
 
     def is_phase_header(self):
         """Canonical check for phase headers. Support legacy records where status was 'phase'."""
@@ -218,6 +231,8 @@ class TodoItem(db.Model):
             data['linked_list_progress'] = self.linked_list.get_progress()
         if hasattr(self, 'linked_notes'):
             data['linked_note_ids'] = [n.id for n in self.linked_notes]
+        if hasattr(self, 'dependencies'):
+            data['dependency_ids'] = [d.id for d in self.dependencies]
         return data
 
 
@@ -234,6 +249,7 @@ class Note(db.Model):
     checkbox_mode = db.Column(db.Boolean, default=False)
     pinned = db.Column(db.Boolean, default=False)
     pin_order = db.Column(db.Integer, default=0)
+    archived_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     share_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
@@ -254,6 +270,8 @@ class Note(db.Model):
             'checkbox_mode': bool(self.checkbox_mode) if note_type == 'list' else False,
             'pinned': bool(self.pinned),
             'pin_order': self.pin_order or 0,
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'is_archived': bool(self.archived_at),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'is_public': self.is_public,
@@ -298,6 +316,7 @@ class NoteFolder(db.Model):
     name = db.Column(db.String(120), nullable=False)
     order_index = db.Column(db.Integer, default=0)
     is_pin_protected = db.Column(db.Boolean, default=False, nullable=False)
+    archived_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -308,6 +327,8 @@ class NoteFolder(db.Model):
             'name': self.name,
             'order_index': self.order_index or 0,
             'is_pin_protected': bool(self.is_pin_protected),
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'is_archived': bool(self.archived_at),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

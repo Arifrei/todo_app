@@ -9,6 +9,7 @@ import threading
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
+from html.parser import HTMLParser
 from ai_service import run_ai_chat
 from ai_embeddings import get_openai_client
 from embedding_service import (
@@ -88,6 +89,104 @@ def _normalize_note_type(raw):
     if str(raw or '').lower() == 'list':
         return 'list'
     return 'note'
+
+def _html_to_plain_text(raw_html: str) -> str:
+    if not raw_html:
+        return ''
+    text = str(raw_html)
+    text = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', text)
+    text = re.sub(r'(?i)</\s*(p|div|li|h[1-6]|blockquote|pre|tr)\s*>', '\n', text)
+    text = re.sub(r'(?i)</\s*(ul|ol|table)\s*>', '\n', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = html.unescape(text)
+    text = text.replace('\r', '\n').replace('\xa0', ' ')
+    raw_lines = [line.rstrip() for line in text.split('\n')]
+    cleaned_lines = []
+    blank_streak = 0
+    for line in raw_lines:
+        if not line.strip():
+            blank_streak += 1
+            if blank_streak > 1:
+                continue
+            cleaned_lines.append('')
+            continue
+        blank_streak = 0
+        cleaned_lines.append(re.sub(r'\s+', ' ', line).strip())
+    return '\n'.join(cleaned_lines).strip()
+
+class _NoteHTMLSanitizer(HTMLParser):
+    _allowed_tags = {
+        'p', 'div', 'br', 'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'u', 's', 'del',
+        'blockquote', 'pre', 'code', 'h1', 'h2', 'h3', 'h4', 'span', 'a', 'input'
+    }
+    _void_tags = {'br', 'input'}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag not in self._allowed_tags:
+            return
+        if tag == 'input':
+            attrs_dict = {name.lower(): (value or '') for name, value in attrs}
+            if attrs_dict.get('type', '').lower() != 'checkbox':
+                return
+            pieces = ['type="checkbox"']
+            if attrs_dict.get('checked') is not None:
+                pieces.append('checked')
+            self._parts.append(f"<input {' '.join(pieces)}>")
+            return
+        clean_attrs = []
+        if tag == 'a':
+            attrs_dict = {name.lower(): (value or '') for name, value in attrs}
+            href = attrs_dict.get('href', '').strip()
+            if href and (href.startswith('http://') or href.startswith('https://') or href.startswith('mailto:')):
+                clean_attrs.append(f'href="{html.escape(href, quote=True)}"')
+        if tag == 'span':
+            attrs_dict = {name.lower(): (value or '') for name, value in attrs}
+            class_name = (attrs_dict.get('class') or '').strip()
+            if class_name == 'note-inline-checkbox':
+                clean_attrs.append('class="note-inline-checkbox"')
+            style = (attrs_dict.get('style') or '').strip()
+            if style:
+                match = re.search(r'font-size\s*:\s*([\d.]+)(px|%)', style)
+                if match:
+                    clean_attrs.append(f'style="font-size: {match.group(1)}{match.group(2)}"')
+        attr_text = f" {' '.join(clean_attrs)}" if clean_attrs else ''
+        if tag in self._void_tags:
+            self._parts.append(f"<{tag}{attr_text}>")
+        else:
+            self._parts.append(f"<{tag}{attr_text}>")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in self._allowed_tags and tag not in self._void_tags:
+            self._parts.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_data(self, data):
+        if data:
+            self._parts.append(html.escape(data, quote=False))
+
+    def get_html(self) -> str:
+        return ''.join(self._parts).strip()
+
+def _sanitize_note_html(raw_html: str) -> str:
+    sanitizer = _NoteHTMLSanitizer()
+    sanitizer.feed(raw_html or '')
+    sanitizer.close()
+    return sanitizer.get_html()
+
+def _wrap_plain_text_html(text: str) -> str:
+    if not text:
+        return ''
+    lines = (text or '').splitlines()
+    escaped_lines = [html.escape(line, quote=False) for line in lines]
+    return '<p>' + '<br>'.join(escaped_lines) + '</p>'
 
 def _extract_note_list_lines(raw_html):
     if not raw_html:
@@ -1193,7 +1292,7 @@ def _cleanup_completed_tasks():
             db.session.rollback()
 
 
-def _send_email(to_addr, subject, body):
+def _send_email(to_addr, subject, body, html_body=None):
     """Lightweight SMTP sender using environment variables."""
     host = os.environ.get('SMTP_HOST')
     port = int(os.environ.get('SMTP_PORT', 587))
@@ -1201,27 +1300,35 @@ def _send_email(to_addr, subject, body):
     password = os.environ.get('SMTP_PASSWORD')
     from_addr = os.environ.get('SMTP_FROM') or user
     if not host or not from_addr:
+        app.logger.warning("SMTP host/from missing; email not sent")
         return False
     import smtplib
     from email.mime.text import MIMEText
 
-    msg = MIMEText(body, 'plain')
+    if html_body:
+        msg = MIMEText(html_body, 'html')
+    else:
+        msg = MIMEText(body, 'plain')
     msg['Subject'] = subject
     msg['From'] = from_addr
     msg['To'] = to_addr
 
-    with smtplib.SMTP(host, port) as server:
-        server.starttls()
-        if user and password:
-            server.login(user, password)
-        server.sendmail(from_addr, [to_addr], msg.as_string())
-    return True
+    try:
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            if user and password:
+                server.login(user, password)
+            server.sendmail(from_addr, [to_addr], msg.as_string())
+        return True
+    except Exception as e:
+        app.logger.error(f"SMTP send failed: {e}")
+        return False
 
 
-def _build_daily_digest_body(events_for_day, tasks_due):
+def _build_daily_digest_body(events_for_day, tasks_for_day):
     lines = []
     if events_for_day:
-        lines.append("Calendar items:")
+        lines.append("Events:")
         for ev in events_for_day:
             prefix = '[x]' if ev.status == 'done' else '[ ]'
             time_block = ''
@@ -1230,20 +1337,98 @@ def _build_daily_digest_body(events_for_day, tasks_due):
                 time_block = f" @ {ev.start_time.isoformat()}{('-' + end_str) if end_str else ''}"
             priority = ev.priority or 'medium'
             lines.append(f"{prefix} {ev.title} ({priority}){time_block}")
-    if tasks_due:
+    if tasks_for_day:
         if lines:
             lines.append("")
-        lines.append("Due tasks:")
-        for item in tasks_due:
-            prefix = '[x]' if item.status == 'done' else '[ ]'
-            lines.append(f"{prefix} {item.content} (list: {item.list.title if item.list else ''})")
+        lines.append("Tasks:")
+        for item in tasks_for_day:
+            prefix = '[x]' if item.get('status') == 'done' else '[ ]'
+            time_block = ''
+            if item.get('start_time'):
+                end_str = item.get('end_time').isoformat() if item.get('end_time') else ''
+                time_block = f" @ {item['start_time'].isoformat()}{('-' + end_str) if end_str else ''}"
+            priority = item.get('priority') or 'medium'
+            lines.append(f"{prefix} {item['title']} ({priority}){time_block}")
     return '\n'.join(lines)
+
+def _build_daily_digest_html(events_for_day, tasks_for_day, day_value):
+    def _priority_style(priority_value):
+        val = (priority_value or 'medium').lower()
+        if val == 'high':
+            return "#f04438"
+        if val == 'low':
+            return "#12b76a"
+        return "#f79009"
+
+    def _event_row(ev):
+        start_str = ev.start_time.strftime('%I:%M %p') if ev.start_time else 'No time'
+        end_str = ev.end_time.strftime('%I:%M %p') if ev.end_time else ''
+        time_block = f"{start_str}{(' - ' + end_str) if end_str else ''}"
+        bubble_color = _priority_style(ev.priority)
+        return f"""
+        <div style="display:flex;background:#f7f8fb;border-radius:12px;margin-bottom:12px;">
+          <div style="width:6px;background:{bubble_color};border-radius:12px 0 0 12px;"></div>
+          <div style="padding:14px 16px;">
+            <div style="font-size:13px;color:#6b6f76;margin-bottom:6px;">{time_block}</div>
+            <div style="font-size:16px;font-weight:700;color:#121926;">{ev.title}</div>
+          </div>
+        </div>
+        """
+
+    def _task_row(item):
+        start_time = item.get('start_time')
+        end_time = item.get('end_time')
+        start_str = start_time.strftime('%I:%M %p') if start_time else 'No time'
+        end_str = end_time.strftime('%I:%M %p') if end_time else ''
+        time_block = f"{start_str}{(' - ' + end_str) if end_str else ''}"
+        bubble_color = _priority_style(item.get('priority'))
+        return f"""
+        <div style="display:flex;background:#f7f8fb;border-radius:12px;margin-bottom:12px;">
+          <div style="width:6px;background:{bubble_color};border-radius:12px 0 0 12px;"></div>
+          <div style="padding:14px 16px;">
+            <div style="font-size:13px;color:#6b6f76;margin-bottom:6px;">{time_block}</div>
+            <div style="font-size:16px;font-weight:700;color:#121926;">{item['title']}</div>
+          </div>
+        </div>
+        """
+
+    events_html = ''.join([_event_row(ev) for ev in events_for_day]) or """
+        <div style="padding:8px 0;color:#666;">No events today.</div>
+    """
+    tasks_html = ''.join([_task_row(item) for item in tasks_for_day]) or """
+        <div style="padding:8px 0;color:#666;">No tasks today.</div>
+    """
+
+    day_label = day_value.strftime('%A, %B %d, %Y') if hasattr(day_value, 'strftime') else str(day_value)
+    return f"""
+<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:Arial, Helvetica, sans-serif;color:#121926;">
+    <div style="max-width:640px;margin:0 auto;padding:20px;">
+      <div style="font-size:26px;font-weight:800;margin-bottom:6px;">Today's Schedule</div>
+      <div style="font-size:16px;color:#4c6fff;margin-bottom:18px;">{day_label}</div>
+
+      <div style="font-size:15px;font-weight:700;margin-bottom:10px;color:#121926;">Events</div>
+      <div>
+        {events_html}
+      </div>
+
+      <div style="font-size:15px;font-weight:700;margin:16px 0 10px;color:#121926;">Tasks</div>
+      <div>
+        {tasks_html}
+      </div>
+
+      <div style="text-align:left;color:#98a2b3;font-size:11px;margin-top:12px;">Automated daily report</div>
+    </div>
+  </body>
+</html>
+"""
 
 
 def _send_daily_email_digest(target_day=None):
     """Send daily digest emails to users who have an email set."""
     if os.environ.get('ENABLE_CALENDAR_EMAIL_DIGEST', '1') != '1':
-        return
+        return {'disabled': True}
     with app.app_context():
         tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
         now_local = datetime.now(tz)
@@ -1252,32 +1437,119 @@ def _send_daily_email_digest(target_day=None):
             target_day = now_local.date()
         users = User.query.all()
         fallback_email = os.environ.get('CONTACT_TO_EMAIL')
+        stats = {
+            'day': target_day.isoformat(),
+            'users_total': len(users),
+            'eligible': 0,
+            'sent': 0,
+            'skipped_prefs': 0,
+            'skipped_hour': 0,
+            'skipped_no_items': 0,
+            'skipped_no_recipient': 0,
+            'errors': 0,
+            'manual': is_manual,
+        }
         for user_obj in users:
             prefs = _get_or_create_notification_settings(user_obj.id)
             if not prefs.email_enabled or not prefs.digest_enabled:
+                stats['skipped_prefs'] += 1
                 continue
             if not is_manual and prefs.digest_hour != now_local.hour:
+                stats['skipped_hour'] += 1
                 continue
             events = CalendarEvent.query.filter(
                 CalendarEvent.user_id == user_obj.id,
                 CalendarEvent.day == target_day,
                 CalendarEvent.is_group.is_(False),
-                CalendarEvent.is_phase.is_(False)
-            ).order_by(CalendarEvent.order_index.asc()).all()
-            tasks_due = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                CalendarEvent.is_phase.is_(False),
+                CalendarEvent.is_event.is_(True)
+            ).order_by(
+                CalendarEvent.start_time.is_(None),
+                CalendarEvent.start_time.asc()
+            ).all()
+            calendar_tasks = CalendarEvent.query.filter(
+                CalendarEvent.user_id == user_obj.id,
+                CalendarEvent.day == target_day,
+                CalendarEvent.is_group.is_(False),
+                CalendarEvent.is_phase.is_(False),
+                CalendarEvent.is_event.is_(False)
+            ).order_by(
+                CalendarEvent.start_time.is_(None),
+                CalendarEvent.start_time.asc()
+            ).all()
+            todo_tasks = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
                 TodoList.user_id == user_obj.id,
                 TodoItem.due_date == target_day,
                 TodoItem.is_phase == False
-            ).all()
-            if not events and not tasks_due:
+            ).order_by(TodoItem.order_index.asc()).all()
+
+            tasks_for_day = []
+            for task in calendar_tasks:
+                tasks_for_day.append({
+                    'title': task.title,
+                    'start_time': task.start_time,
+                    'end_time': task.end_time,
+                    'priority': task.priority,
+                    'status': task.status,
+                    'source': 'Calendar task',
+                })
+            for task in todo_tasks:
+                tasks_for_day.append({
+                    'title': task.content,
+                    'start_time': None,
+                    'end_time': None,
+                    'priority': None,
+                    'status': task.status,
+                    'source': 'Todo',
+                    'list_name': task.list.title if task.list else None,
+                })
+            tasks_for_day.sort(
+                key=lambda item: (
+                    item.get('start_time') is None,
+                    item.get('start_time') or time.min,
+                    item.get('title', '').lower()
+                )
+            )
+
+            if not events and not tasks_for_day:
+                stats['skipped_no_items'] += 1
                 continue
-            body = _build_daily_digest_body(events, tasks_due)
+            body = _build_daily_digest_body(events, tasks_for_day)
+            html_body = _build_daily_digest_html(events, tasks_for_day, target_day)
             try:
-                recipient = user_obj.email or fallback_email
+                recipient = fallback_email
                 if recipient:
-                    _send_email(recipient, f"Your tasks for {target_day.isoformat()}", body)
-            except Exception:
+                    stats['eligible'] += 1
+                    app.logger.info(
+                        "Digest email recipient=%s user_id=%s day=%s",
+                        recipient,
+                        user_obj.id,
+                        target_day.isoformat()
+                    )
+                    if _send_email(recipient, f"Your tasks for {target_day.isoformat()}", body, html_body=html_body):
+                        stats['sent'] += 1
+                    else:
+                        stats['errors'] += 1
+                else:
+                    stats['skipped_no_recipient'] += 1
+            except Exception as e:
+                stats['errors'] += 1
+                app.logger.error(f"Error sending digest for user {user_obj.id}: {e}")
                 continue
+        app.logger.info(
+            "Digest stats day=%s manual=%s users=%s eligible=%s sent=%s skipped_prefs=%s skipped_hour=%s skipped_no_items=%s skipped_no_recipient=%s errors=%s",
+            stats['day'],
+            stats['manual'],
+            stats['users_total'],
+            stats['eligible'],
+            stats['sent'],
+            stats['skipped_prefs'],
+            stats['skipped_hour'],
+            stats['skipped_no_items'],
+            stats['skipped_no_recipient'],
+            stats['errors']
+        )
+        return stats
 
 
 def _schedule_reminder_job(event):
@@ -1488,6 +1760,8 @@ def _schedule_existing_reminders():
                 CalendarEvent.reminder_minutes_before.isnot(None),
                 CalendarEvent.start_time.isnot(None),
                 CalendarEvent.reminder_sent == False,
+                CalendarEvent.status != 'done',
+                CalendarEvent.status != 'canceled',
                 CalendarEvent.day >= now.date()
             ).all()
 
@@ -1958,8 +2232,28 @@ def list_view(list_id):
     # Commit any backfilled phase_id values
     db.session.commit()
 
+    blocked_ids = set()
+    blocked_items = []
+    if todo_list.type == 'list':
+        for item in todo_list.items:
+            if is_phase_header(item):
+                continue
+            deps = item.dependencies if hasattr(item, 'dependencies') else []
+            if deps and any(dep.status != 'done' for dep in deps):
+                blocked_ids.add(item.id)
+        if blocked_ids:
+            blocked_items = [i for i in todo_list.items if i.id in blocked_ids]
+
     # Use items in their order_index order (no re-sorting by completion status)
-    return render_template('list_view.html', todo_list=todo_list, parent_list=parent_list, items=todo_list.items, default_timezone=app.config.get('DEFAULT_TIMEZONE'))
+    return render_template(
+        'list_view.html',
+        todo_list=todo_list,
+        parent_list=parent_list,
+        items=todo_list.items,
+        blocked_ids=blocked_ids,
+        blocked_items=blocked_items,
+        default_timezone=app.config.get('DEFAULT_TIMEZONE')
+    )
 
 # API Routes
 @app.route('/api/lists', methods=['GET', 'POST'])
@@ -2035,6 +2329,7 @@ def handle_notes():
     folder_id = request.args.get('folder_id')
     folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
     include_all = str(request.args.get('all') or '').lower() in ['1', 'true', 'yes', 'on']
+    archived_only = str(request.args.get('archived') or '').lower() in ['1', 'true', 'yes', 'on']
 
     if request.method == 'POST':
         data = request.json or {}
@@ -2089,6 +2384,10 @@ def handle_notes():
         return jsonify(note.to_dict()), 201
 
     notes_query = Note.query.filter_by(user_id=user.id)
+    if archived_only:
+        notes_query = notes_query.filter(Note.archived_at.isnot(None))
+    else:
+        notes_query = notes_query.filter(Note.archived_at.is_(None))
     if not include_all:
         if folder_id_int is None:
             notes_query = notes_query.filter(Note.folder_id.is_(None))
@@ -2132,6 +2431,77 @@ def handle_notes():
     return jsonify(note_payload)
 
 
+@app.route('/api/notes/cleanup', methods=['POST'])
+def cleanup_note_content():
+    """AI cleanup for a note's HTML content."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    if not app.config.get('OPENAI_API_KEY'):
+        return jsonify({'error': 'AI service not configured'}), 503
+
+    data = request.json or {}
+    raw_html = data.get('content') or ''
+    title = (data.get('title') or '').strip()
+    if not raw_html or not str(raw_html).strip():
+        return jsonify({'error': 'Note content is empty'}), 400
+    if len(raw_html) > 20000:
+        return jsonify({'error': 'Note is too large to clean up at once'}), 400
+
+    plain_text = _html_to_plain_text(raw_html)
+    if not plain_text:
+        return jsonify({'error': 'Note content is empty'}), 400
+
+    system_prompt = (
+        "You are an expert note editor. Clean up messy notes into clear, well-organized HTML. "
+        "Preserve every meaningful detail and original intent; do not add new facts. "
+        "Choose structure based on the content (fluid and context-sensitive). "
+        "Use headings only when they clearly help, lists only when the content is list-like, "
+        "and paragraphs for narrative text. Avoid forcing a rigid outline. "
+        "Merge duplicate lines, fix obvious typos, and normalize punctuation/capitalization. "
+        "Keep the original language. "
+        "Return ONLY JSON as {\"html\":\"...\"}. "
+        "Allowed HTML tags: h1,h2,h3,h4,p,ul,ol,li,blockquote,pre,code,strong,em,u,s,del,br,span,a. "
+        "Do not include html/body tags or scripts. If no cleanup is needed, return the original text as HTML."
+    )
+    payload = json.dumps({
+        "title": title,
+        "text": plain_text,
+    })
+
+    try:
+        client = get_openai_client()
+        model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload},
+            ],
+            max_tokens=1200,
+            temperature=0.2
+        )
+        raw = (resp.choices[0].message.content or '').strip()
+    except Exception as exc:
+        app.logger.warning(f"Note cleanup failed: {exc}")
+        return jsonify({'error': 'AI cleanup failed'}), 500
+
+    parsed = try_parse_json(raw)
+    cleaned_html = ''
+    if isinstance(parsed, dict):
+        cleaned_html = parsed.get('html') or ''
+    if not cleaned_html:
+        return jsonify({'error': 'AI returned an invalid response'}), 502
+
+    if not re.search(r'<\s*/?\s*[a-zA-Z]', cleaned_html):
+        cleaned_html = _wrap_plain_text_html(cleaned_html)
+
+    sanitized = _sanitize_note_html(cleaned_html)
+    if not sanitized:
+        return jsonify({'error': 'AI cleanup produced empty content'}), 502
+    return jsonify({'html': sanitized})
+
+
 @app.route('/api/notes/reorder', methods=['POST'])
 def reorder_notes():
     """Reorder pinned notes by explicit id list (pinned only)."""
@@ -2169,6 +2539,7 @@ def note_folders():
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
+    archived_only = str(request.args.get('archived') or '').lower() in ['1', 'true', 'yes', 'on']
 
     if request.method == 'POST':
         data = request.json or {}
@@ -2193,7 +2564,12 @@ def note_folders():
         db.session.commit()
         return jsonify(folder.to_dict()), 201
 
-    folders = NoteFolder.query.filter_by(user_id=user.id).order_by(
+    folder_query = NoteFolder.query.filter_by(user_id=user.id)
+    if archived_only:
+        folder_query = folder_query.filter(NoteFolder.archived_at.isnot(None))
+    else:
+        folder_query = folder_query.filter(NoteFolder.archived_at.is_(None))
+    folders = folder_query.order_by(
         NoteFolder.parent_id.asc(),
         NoteFolder.order_index.asc(),
         NoteFolder.name.asc()
@@ -2255,6 +2631,42 @@ def note_folder_detail(folder_id):
         if is_protected and not user.has_notes_pin():
             return jsonify({'error': 'Set a notes PIN first before protecting folders'}), 400
         folder.is_pin_protected = is_protected
+    folder.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(folder.to_dict())
+
+
+@app.route('/api/note-folders/<int:folder_id>/archive', methods=['POST'])
+def archive_note_folder(folder_id):
+    """Archive a note folder."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    folder = NoteFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+    if folder.is_pin_protected:
+        data = request.json or {}
+        pin = str(data.get('pin', '')).strip()
+        if not pin or not user.check_notes_pin(pin):
+            return jsonify({'error': 'Folder is protected. Please enter notes PIN.'}), 403
+    folder.archived_at = _now_local()
+    folder.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(folder.to_dict())
+
+
+@app.route('/api/note-folders/<int:folder_id>/restore', methods=['POST'])
+def restore_note_folder(folder_id):
+    """Restore an archived note folder."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    folder = NoteFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+    if folder.is_pin_protected:
+        data = request.json or {}
+        pin = str(data.get('pin', '')).strip()
+        if not pin or not user.check_notes_pin(pin):
+            return jsonify({'error': 'Folder is protected. Please enter notes PIN.'}), 403
+    folder.archived_at = None
     folder.updated_at = _now_local()
     db.session.commit()
     return jsonify(folder.to_dict())
@@ -2515,6 +2927,8 @@ def handle_note(note_id):
             'note_type': note.note_type,
             'pinned': note.pinned,
             'folder_id': note.folder_id,
+            'archived_at': note.archived_at.isoformat() if note.archived_at else None,
+            'is_archived': bool(note.archived_at),
             'created_at': note.created_at.isoformat() if note.created_at else None,
             'updated_at': note.updated_at.isoformat() if note.updated_at else None,
         }
@@ -2524,6 +2938,44 @@ def handle_note(note_id):
     if note.note_type == 'list':
         payload['items'] = [item.to_dict() for item in note.list_items]
     return jsonify(payload)
+
+
+@app.route('/api/notes/<int:note_id>/archive', methods=['POST'])
+def archive_note(note_id):
+    """Archive a note or list."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.is_pin_protected:
+        data = request.json or {}
+        pin = str(data.get('pin', '')).strip()
+        if not pin or not user.check_notes_pin(pin):
+            return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
+    note.archived_at = _now_local()
+    note.pinned = False
+    note.pin_order = 0
+    note.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(note.to_dict())
+
+
+@app.route('/api/notes/<int:note_id>/restore', methods=['POST'])
+def restore_note(note_id):
+    """Restore an archived note or list."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.is_pin_protected:
+        data = request.json or {}
+        pin = str(data.get('pin', '')).strip()
+        if not pin or not user.check_notes_pin(pin):
+            return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
+    note.archived_at = None
+    note.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(note.to_dict())
 
 
 @app.route('/api/notes/<int:note_id>/convert-to-list', methods=['POST'])
@@ -3289,7 +3741,7 @@ def feed_to_recall(item_id):
 
 # Calendar API
 ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
-ALLOWED_STATUSES = {'not_started', 'in_progress', 'done'}
+ALLOWED_STATUSES = {'not_started', 'in_progress', 'done', 'canceled'}
 
 def _parse_day_value(raw):
     if isinstance(raw, date):
@@ -3298,6 +3750,90 @@ def _parse_day_value(raw):
         return datetime.strptime(str(raw), '%Y-%m-%d').date()
     except Exception:
         return None
+
+
+@app.route('/api/calendar/search', methods=['GET'])
+def calendar_search():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    query = (request.args.get('q') or request.args.get('query') or '').strip()
+    if not query:
+        return jsonify({'query': '', 'results': []})
+
+    try:
+        limit = int(request.args.get('limit') or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 100))
+
+    like_expr = f"%{query}%"
+    events = CalendarEvent.query.filter(
+        CalendarEvent.user_id == user.id,
+        or_(
+            CalendarEvent.title.ilike(like_expr),
+            CalendarEvent.description.ilike(like_expr),
+            CalendarEvent.item_note.ilike(like_expr)
+        )
+    ).order_by(
+        CalendarEvent.day.asc(),
+        CalendarEvent.start_time.asc(),
+        CalendarEvent.order_index.asc()
+    ).limit(limit).all()
+
+    results = []
+    linked_task_ids = set()
+    for ev in events:
+        if ev.todo_item_id:
+            linked_task_ids.add(ev.todo_item_id)
+        results.append({
+            'type': 'event',
+            'id': ev.id,
+            'title': ev.title,
+            'day': ev.day.isoformat() if ev.day else None,
+            'start_time': ev.start_time.isoformat() if ev.start_time else None,
+            'end_time': ev.end_time.isoformat() if ev.end_time else None,
+            'status': ev.status,
+            'priority': ev.priority,
+            'is_event': ev.is_event,
+            'is_phase': ev.is_phase,
+            'is_group': ev.is_group,
+            'task_id': ev.todo_item_id,
+            'calendar_event_id': ev.id,
+            'item_note': ev.item_note
+        })
+
+    remaining = max(0, limit - len(results))
+    if remaining:
+        task_query = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+            TodoList.user_id == user.id,
+            TodoItem.due_date.isnot(None),
+            TodoItem.is_phase == False,
+            or_(
+                TodoItem.content.ilike(like_expr),
+                TodoItem.description.ilike(like_expr),
+                TodoItem.notes.ilike(like_expr)
+            )
+        )
+        if linked_task_ids:
+            task_query = task_query.filter(~TodoItem.id.in_(linked_task_ids))
+        tasks = task_query.order_by(TodoItem.due_date.asc(), TodoItem.order_index.asc()).limit(remaining).all()
+        for item in tasks:
+            results.append({
+                'type': 'task',
+                'id': item.id,
+                'title': item.content,
+                'day': item.due_date.isoformat() if item.due_date else None,
+                'status': item.status,
+                'task_id': item.id,
+                'task_list_id': item.list_id,
+                'task_list_title': item.list.title if item.list else '',
+                'calendar_event_id': None
+            })
+
+    results.sort(key=lambda r: ((r.get('day') or ''), (r.get('start_time') or ''), (r.get('title') or '')))
+    return jsonify({'query': query, 'results': results})
 
 
 @app.route('/api/calendar/events', methods=['GET', 'POST'])
@@ -3375,6 +3911,7 @@ def calendar_events():
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
+                'allow_overlap': linked_event.allow_overlap if linked_event else False,
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_key,
@@ -3429,6 +3966,7 @@ def calendar_events():
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
+                'allow_overlap': linked_event.allow_overlap if linked_event else False,
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_obj.isoformat(),
@@ -4012,18 +4550,18 @@ def calendar_event_detail(event_id):
                 }), 409
 
     if status_changed:
-        if event.status == 'done':
+        if event.status in {'done', 'canceled'}:
             _cancel_reminder_job(event)
             event.reminder_sent = True
             event.reminder_snoozed_until = None
-        elif old_status == 'done':
+        elif old_status in {'done', 'canceled'}:
             event.reminder_sent = False
     db.session.commit()
     start_embedding_job(user.id, ENTITY_CALENDAR, event.id)
 
     # Reschedule reminder if relevant fields changed
-    if event.status != 'done':
-        needs_reschedule = reminder_changed or time_changed or day_changed or (status_changed and old_status == 'done')
+    if event.status not in {'done', 'canceled'}:
+        needs_reschedule = reminder_changed or time_changed or day_changed or (status_changed and old_status in {'done', 'canceled'})
         if needs_reschedule and event.reminder_minutes_before is not None:
             if event.start_time:
                 _schedule_reminder_job(event)
@@ -4085,8 +4623,10 @@ def send_digest_now():
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     day_obj = _parse_day_value(request.json.get('day') if request.json else None) or date.today()
-    _send_daily_email_digest(target_day=day_obj)
-    return jsonify({'status': 'sent', 'day': day_obj.isoformat()})
+    stats = _send_daily_email_digest(target_day=day_obj) or {}
+    payload = {'status': 'sent', 'day': day_obj.isoformat()}
+    payload.update(stats)
+    return jsonify(payload)
 
 
 def _get_or_create_notification_settings(user_id):
@@ -4604,14 +5144,48 @@ def handle_item(item_id):
         return '', 204
         
     if request.method == 'PUT':
-        data = request.json
+        data = request.json or {}
         old_due_date = item.due_date
         old_status = item.status
         calendar_event_to_refresh = None
+        if 'dependency_ids' in data:
+            if not item.list or item.list.type != 'list':
+                return jsonify({'error': 'Dependencies are only supported for task lists'}), 400
+            raw_ids = data.get('dependency_ids')
+            if raw_ids is None:
+                dependency_ids = []
+            elif not isinstance(raw_ids, list):
+                return jsonify({'error': 'dependency_ids must be a list'}), 400
+            else:
+                dependency_ids = []
+                for raw_id in raw_ids:
+                    try:
+                        dependency_ids.append(int(raw_id))
+                    except (TypeError, ValueError):
+                        continue
+            dependency_ids = [dep_id for dep_id in dependency_ids if dep_id != item.id]
+            if dependency_ids:
+                deps = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                    TodoItem.id.in_(dependency_ids),
+                    TodoList.user_id == user.id,
+                    TodoList.type == 'list',
+                    TodoItem.is_phase.is_(False)
+                ).all()
+                if len(deps) != len(set(dependency_ids)):
+                    db.session.rollback()
+                    return jsonify({'error': 'Invalid dependency selection'}), 400
+                item.dependencies = deps
+            else:
+                item.dependencies = []
         new_status = data.get('status', item.status)
         allowed_statuses = {'not_started', 'in_progress', 'done'}
         if new_status not in allowed_statuses:
             new_status = item.status
+        if new_status == 'done':
+            blockers = [dep for dep in (item.dependencies or []) if dep.status != 'done']
+            if blockers:
+                db.session.rollback()
+                return jsonify({'error': 'Task is blocked by incomplete dependencies.'}), 409
         if new_status == 'done':
             if item.status != 'done' or not item.completed_at:
                 item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
@@ -5124,6 +5698,15 @@ def bulk_items():
         status = data.get('status')
         if status not in ['not_started', 'in_progress', 'done', 'phase']:
             return jsonify({'error': 'invalid status'}), 400
+        if status == 'done':
+            blocked = [
+                item for item in items
+                if not is_phase_header(item)
+                and hasattr(item, 'dependencies')
+                and any(dep.status != 'done' for dep in (item.dependencies or []))
+            ]
+            if blocked:
+                return jsonify({'error': f'{len(blocked)} task(s) are blocked by dependencies.'}), 409
 
         affected_phases = set()
         for item in items:

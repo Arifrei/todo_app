@@ -85,15 +85,29 @@ let touchDragId = null;
 let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
-let notesState = { notes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null };
+let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
 let noteAutoSaveTimer = null;
 let noteAutoSaveInFlight = false;
+let noteCleanupInFlight = false;
 let noteExitInProgress = false;
-let noteFolderState = { folders: [], currentFolderId: null };
+let noteFolderState = { folders: [], archivedFolders: [], currentFolderId: null, archivedOpen: false };
+try {
+    noteFolderState.archivedOpen = localStorage.getItem('notes_archived_open') === '1';
+} catch (e) {
+    noteFolderState.archivedOpen = false;
+}
+
+let readOnlyToastAt = 0;
+function showReadOnlyToast() {
+    const now = Date.now();
+    if (now - readOnlyToastAt < 1200) return;
+    readOnlyToastAt = now;
+    showToast('Archived notes are read-only.', 'info', 2000);
+}
 let noteMoveState = { ids: [], destinationFolderId: null, navStack: [] };
 let activeListItemMenu = null;
 let activeListItemActionPill = null;
@@ -109,6 +123,7 @@ let recallState = {
 let currentTaskFilter = 'all';
 let selectedTagFilters = new Set();
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time' };
+let calendarSearchState = { query: '', results: [], loading: false, debounceTimer: null, requestToken: 0 };
 const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
@@ -948,6 +963,7 @@ async function ensureLinkedTaskEvent(ev) {
     ev.reminder_minutes_before = created.reminder_minutes_before;
     ev.priority = created.priority || ev.priority;
     ev.rollover_enabled = created.rollover_enabled || false;
+    ev.allow_overlap = created.allow_overlap ?? ev.allow_overlap ?? false;
     ev.day = created.day || calendarState.selectedDay;
     return ev;
 }
@@ -1006,6 +1022,11 @@ async function updateItemStatus(itemId, status) {
         if (res.ok) {
             // Instead of reload, just refresh the list content
             await refreshListView();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            if (err && err.error) {
+                showToast(err.error, 'error');
+            }
         }
     } catch (e) {
         console.error('Error updating item:', e);
@@ -1015,6 +1036,295 @@ async function updateItemStatus(itemId, status) {
 async function inlineToggleStatus(itemId, currentStatus, targetStatus) {
     const nextStatus = currentStatus === targetStatus ? 'not_started' : targetStatus;
     updateItemStatus(itemId, nextStatus);
+}
+
+let dependencyTargetId = null;
+let dependencySelectedIds = new Set();
+let dependencyNavStack = [];
+
+function getDependencyIdsForItem(itemId) {
+    const row = document.getElementById(`item-${itemId}`);
+    const deps = row && row.dataset.deps
+        ? row.dataset.deps.split(',').map((val) => val.trim()).filter(Boolean)
+        : [];
+    return deps;
+}
+
+function updateDependencyBackButton() {
+    const backBtn = document.getElementById('dependency-back-button');
+    if (!backBtn) return;
+    backBtn.style.display = dependencyNavStack.length > 1 ? 'inline-flex' : 'none';
+}
+
+function pushDependencyView(renderFn) {
+    dependencyNavStack.push(renderFn);
+    updateDependencyBackButton();
+    renderFn();
+}
+
+function dependencyNavBack() {
+    if (dependencyNavStack.length > 1) {
+        dependencyNavStack.pop();
+        const last = dependencyNavStack[dependencyNavStack.length - 1];
+        last && last();
+    }
+    updateDependencyBackButton();
+}
+
+function getDependencyPhaseId() {
+    const row = dependencyTargetId ? document.getElementById(`item-${dependencyTargetId}`) : null;
+    const phaseId = row ? row.dataset.phaseParent : '';
+    return phaseId ? parseInt(phaseId, 10) : null;
+}
+
+function getPhaseTitle(phaseId) {
+    if (!phaseId) return null;
+    const phaseEl = document.getElementById(`item-${phaseId}`);
+    const titleEl = phaseEl ? phaseEl.querySelector('.task-text') : null;
+    return titleEl ? titleEl.textContent.trim() : null;
+}
+
+function renderDependencyRoot() {
+    const panel = document.getElementById('dependency-step-container');
+    if (!panel) return;
+    panel.innerHTML = '';
+    dependencyNavStack = [renderDependencyRoot];
+    updateDependencyBackButton();
+
+    const actions = [];
+    const currentListType = (typeof CURRENT_LIST_TYPE !== 'undefined' ? CURRENT_LIST_TYPE : null);
+    if (currentListType === 'list') {
+        const phaseId = getDependencyPhaseId();
+        if (phaseId) {
+            const phaseTitle = getPhaseTitle(phaseId) || 'This phase';
+            actions.push({
+                label: `<i class="fa-solid fa-layer-group" style="margin-right: 0.5rem;"></i>Within "${phaseTitle}"`,
+                handler: () => pushDependencyView(() => renderDependencyTasks(CURRENT_LIST_ID, phaseId, `Phase: ${phaseTitle}`))
+            });
+        }
+        actions.push({
+            label: `<i class="fa-solid fa-list-check" style="margin-right: 0.5rem;"></i>Within "${typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'this project'}"`,
+            handler: () => pushDependencyView(() => renderDependencyPhasePicker(CURRENT_LIST_ID, typeof CURRENT_LIST_TITLE !== 'undefined' ? CURRENT_LIST_TITLE : 'This project'))
+        });
+    }
+    actions.push({
+        label: '<i class="fa-solid fa-sitemap" style="margin-right: 0.5rem;"></i>Browse projects',
+        handler: () => pushDependencyView(renderDependencyProjectList)
+    });
+    actions.push({
+        label: '<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>Browse hubs',
+        handler: () => pushDependencyView(renderDependencyHubList)
+    });
+
+    actions.forEach((action) => {
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.innerHTML = action.label;
+        btn.onclick = action.handler;
+        panel.appendChild(btn);
+    });
+}
+
+async function renderDependencyPhasePicker(listId, listTitle) {
+    const panel = document.getElementById('dependency-step-container');
+    if (!panel) return;
+    panel.innerHTML = `<div class="move-heading"><i class="fa-solid fa-list-check" style="margin-right: 0.5rem;"></i>Choose a phase in "${listTitle}"</div>`;
+    try {
+        const res = await fetch(`/api/lists/${listId}/phases`);
+        const data = await res.json();
+        const btnAll = document.createElement('button');
+        btnAll.className = 'btn';
+        btnAll.innerHTML = `<i class="fa-solid fa-inbox" style="margin-right: 0.5rem; opacity: 0.7;"></i>All tasks in "${data.title || listTitle}"`;
+        btnAll.onclick = () => pushDependencyView(() => renderDependencyTasks(listId, null, data.title || listTitle));
+        panel.appendChild(btnAll);
+
+        const btnNoPhase = document.createElement('button');
+        btnNoPhase.className = 'btn';
+        btnNoPhase.innerHTML = `<i class="fa-solid fa-layer-group" style="margin-right: 0.5rem; opacity: 0.7;"></i>No phase`;
+        btnNoPhase.onclick = () => pushDependencyView(() => renderDependencyTasks(listId, 'none', data.title || listTitle));
+        panel.appendChild(btnNoPhase);
+
+        if (data.phases && data.phases.length) {
+            data.phases.forEach((phase) => {
+                const btn = document.createElement('button');
+                btn.className = 'btn';
+                btn.innerHTML = `<i class="fa-solid fa-layer-group" style="margin-right: 0.5rem; opacity: 0.7;"></i>${phase.content}`;
+                btn.onclick = () => pushDependencyView(() => renderDependencyTasks(listId, phase.id, phase.content));
+                panel.appendChild(btn);
+            });
+        }
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;"><i class="fa-solid fa-exclamation-triangle"></i> Unable to load phases.</div>';
+    }
+}
+
+async function renderDependencyProjectList() {
+    const panel = document.getElementById('dependency-step-container');
+    if (!panel) return;
+    panel.innerHTML = '<div class="move-heading"><i class="fa-solid fa-sitemap" style="margin-right: 0.5rem;"></i>Choose a project</div>';
+    try {
+        const res = await fetch('/api/lists?type=list&include_children=true');
+        const lists = await res.json();
+        if (!lists.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted); padding: 1rem; text-align: center;"><i class="fa-solid fa-inbox" style="margin-right: 0.5rem;"></i>No projects available.</div>';
+            return;
+        }
+        lists.forEach((list) => {
+            const btn = document.createElement('button');
+            btn.className = 'btn';
+            btn.innerHTML = `<i class="fa-solid fa-list-check" style="margin-right: 0.5rem; opacity: 0.7;"></i>${list.title}`;
+            btn.onclick = () => pushDependencyView(() => renderDependencyPhasePicker(list.id, list.title));
+            panel.appendChild(btn);
+        });
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;"><i class="fa-solid fa-exclamation-triangle"></i> Unable to load projects.</div>';
+    }
+}
+
+async function renderDependencyHubList() {
+    const panel = document.getElementById('dependency-step-container');
+    if (!panel) return;
+    panel.innerHTML = '<div class="move-heading"><i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>Choose a hub</div>';
+    try {
+        const res = await fetch('/api/hubs');
+        const hubs = await res.json();
+        if (!hubs.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted); padding: 1rem; text-align: center;"><i class="fa-solid fa-inbox" style="margin-right: 0.5rem;"></i>No hubs available.</div>';
+            return;
+        }
+        hubs.forEach((hub) => {
+            const btn = document.createElement('button');
+            btn.className = 'btn';
+            btn.innerHTML = `<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem; opacity: 0.7;"></i>${hub.title}`;
+            btn.onclick = () => pushDependencyView(() => renderDependencyHubProjects(hub.id, hub.title));
+            panel.appendChild(btn);
+        });
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;"><i class="fa-solid fa-exclamation-triangle"></i> Unable to load hubs.</div>';
+    }
+}
+
+async function renderDependencyHubProjects(hubId, hubTitle) {
+    const panel = document.getElementById('dependency-step-container');
+    if (!panel) return;
+    panel.innerHTML = `<div class="move-heading"><i class="fa-solid fa-sitemap" style="margin-right: 0.5rem;"></i>Projects in "${hubTitle}"</div>`;
+    try {
+        const res = await fetch(`/api/hubs/${hubId}/children`);
+        const data = await res.json();
+        if (!data.children || !data.children.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted); margin-top: 0.5rem; padding: 1rem; text-align: center;"><i class="fa-solid fa-inbox" style="margin-right: 0.5rem;"></i>No projects in this hub.</div>';
+            return;
+        }
+        data.children.forEach((child) => {
+            if (child.type === 'hub') {
+                const btnHub = document.createElement('button');
+                btnHub.className = 'btn';
+                btnHub.innerHTML = `<i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem; opacity: 0.7;"></i>${child.title} <span style="opacity: 0.6; margin-left: 0.25rem;">(Hub)</span>`;
+                btnHub.onclick = () => pushDependencyView(() => renderDependencyHubProjects(child.id, child.title));
+                panel.appendChild(btnHub);
+            } else if (child.type === 'list') {
+                const btnProject = document.createElement('button');
+                btnProject.className = 'btn';
+                btnProject.innerHTML = `<i class="fa-solid fa-list-check" style="margin-right: 0.5rem; opacity: 0.7;"></i>${child.title}`;
+                btnProject.onclick = () => pushDependencyView(() => renderDependencyPhasePicker(child.id, child.title));
+                panel.appendChild(btnProject);
+            }
+        });
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem; padding: 1rem;"><i class="fa-solid fa-exclamation-triangle" style="margin-right: 0.5rem;"></i>Unable to load hub contents.</div>';
+    }
+}
+
+async function renderDependencyTasks(listId, phaseId, heading) {
+    const panel = document.getElementById('dependency-step-container');
+    if (!panel) return;
+    panel.innerHTML = `<div class="move-heading"><i class="fa-solid fa-list-check" style="margin-right: 0.5rem;"></i>${heading}</div>`;
+    try {
+        const res = await fetch(`/api/items?list_id=${listId}`);
+        const items = await res.json();
+        const tasks = (items || []).filter((item) => {
+            if (item.is_phase || item.status === 'phase') return false;
+            if (dependencyTargetId && item.id === dependencyTargetId) return false;
+            if (phaseId === 'none') return !item.phase_id;
+            if (phaseId && phaseId !== 'none') return item.phase_id === phaseId;
+            return true;
+        });
+        if (!tasks.length) {
+            panel.innerHTML += '<div style="color: var(--text-muted); margin-top: 0.5rem;">No tasks found.</div>';
+            return;
+        }
+        const listEl = document.createElement('div');
+        listEl.className = 'dependency-task-list';
+        tasks.forEach((task) => {
+            const wrapper = document.createElement('label');
+            wrapper.className = 'dependency-item';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.value = String(task.id);
+            input.checked = dependencySelectedIds.has(String(task.id));
+            input.onchange = () => {
+                if (input.checked) dependencySelectedIds.add(String(task.id));
+                else dependencySelectedIds.delete(String(task.id));
+            };
+            const text = document.createElement('span');
+            text.className = 'dependency-text';
+            text.textContent = task.content;
+            const status = document.createElement('span');
+            status.className = `dependency-status status-${task.status || 'not_started'}`;
+            status.textContent = task.status === 'done' ? 'Done' : task.status === 'in_progress' ? 'Started' : 'Not started';
+            wrapper.appendChild(input);
+            wrapper.appendChild(text);
+            wrapper.appendChild(status);
+            listEl.appendChild(wrapper);
+        });
+        panel.appendChild(listEl);
+    } catch (e) {
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;">Unable to load tasks.</div>';
+    }
+}
+
+function openDependencyModal(itemId, title) {
+    dependencyTargetId = itemId;
+    dependencySelectedIds = new Set(getDependencyIdsForItem(itemId));
+    const modal = document.getElementById('dependency-modal');
+    const label = document.getElementById('dependency-target-label');
+    const titleEl = document.getElementById('dependency-title');
+    if (label) label.textContent = title ? `For: ${title}` : '';
+    if (titleEl) titleEl.textContent = 'Set Dependencies';
+    renderDependencyRoot();
+    if (modal) modal.classList.add('active');
+}
+
+function closeDependencyModal() {
+    dependencyTargetId = null;
+    dependencySelectedIds = new Set();
+    dependencyNavStack = [];
+    const modal = document.getElementById('dependency-modal');
+    const label = document.getElementById('dependency-target-label');
+    if (label) label.textContent = '';
+    if (modal) modal.classList.remove('active');
+    updateDependencyBackButton();
+}
+
+async function saveDependencies() {
+    if (!dependencyTargetId) return;
+    const selected = Array.from(dependencySelectedIds).map((val) => parseInt(val, 10)).filter(Number.isFinite);
+    try {
+        const res = await fetch(`/api/items/${dependencyTargetId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dependency_ids: selected })
+        });
+        if (res.ok) {
+            closeDependencyModal();
+            window.location.reload();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            if (err && err.error) showToast(err.error, 'error');
+        }
+    } catch (e) {
+        console.error('Error saving dependencies:', e);
+    }
 }
 
 function toggleStatusDropdown(itemId) {
@@ -1875,15 +2185,22 @@ const overlapWarningModal = document.getElementById('overlap-warning-modal');
 const overlapWarningMessage = document.getElementById('overlap-warning-message');
 const overlapAddAnywayButton = document.getElementById('overlap-add-anyway-button');
 let pendingOverlapAction = null;
+let pendingOverlapCancelAction = null;
 
-function openOverlapWarningModal(message, onAddAnyway) {
+function openOverlapWarningModal(message, onAddAnyway, onCancel) {
     if (overlapWarningMessage) overlapWarningMessage.textContent = message || 'An event is scheduled during this time.';
     pendingOverlapAction = onAddAnyway;
+    pendingOverlapCancelAction = onCancel;
     if (overlapWarningModal) overlapWarningModal.classList.add('active');
 }
 
-function closeOverlapWarningModal() {
+function closeOverlapWarningModal(options = {}) {
+    const { skipCancel = false } = options;
+    if (!skipCancel && pendingOverlapCancelAction) {
+        pendingOverlapCancelAction();
+    }
     pendingOverlapAction = null;
+    pendingOverlapCancelAction = null;
     if (overlapWarningModal) overlapWarningModal.classList.remove('active');
 }
 
@@ -1893,7 +2210,7 @@ if (overlapAddAnywayButton) {
         if (pendingOverlapAction) {
             await pendingOverlapAction();
         }
-        closeOverlapWarningModal();
+        closeOverlapWarningModal({ skipCancel: true });
     });
 }
 
@@ -1962,23 +2279,13 @@ function toggleBulkMenu(event, forceClose = false) {
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        menu.style.bottom = '';
         menu.dataset.anchorId = '';
         const statusMenu = document.getElementById('bulk-status-submenu');
         const tagForm = document.getElementById('bulk-tag-form');
         if (statusMenu) statusMenu.classList.remove('show');
         if (tagForm) tagForm.classList.remove('show');
         return;
-    }
-
-    // Position the menu above the button on mobile
-    if (window.innerWidth <= 768 && event && event.currentTarget) {
-        const button = event.currentTarget;
-        const rect = button.getBoundingClientRect();
-        const menuHeight = menu.offsetHeight || 120; // Estimate if not visible yet
-
-        // Position above the button
-        menu.style.bottom = `${window.innerHeight - rect.top + 4}px`;
-        menu.style.left = `${rect.left}px`;
     }
 
     const shouldShow = !menu.classList.contains('show');
@@ -1988,6 +2295,7 @@ function toggleBulkMenu(event, forceClose = false) {
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        menu.style.bottom = '';
         menu.dataset.anchorId = '';
         const statusMenu = document.getElementById('bulk-status-submenu');
         const tagForm = document.getElementById('bulk-tag-form');
@@ -1996,28 +2304,47 @@ function toggleBulkMenu(event, forceClose = false) {
         return;
     }
 
-    if (window.innerWidth <= 768 && event && event.currentTarget) {
-        const rect = event.currentTarget.getBoundingClientRect();
+    const isListView = !!document.querySelector('.list-view');
+    const positionBulkMenuAbove = (rect) => {
         menu.style.position = 'fixed';
         menu.style.right = '';
+        menu.style.top = '';
         const padding = 8;
         const menuWidth = menu.offsetWidth || 220;
         let left = rect.right - menuWidth;
         left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
-        let top = rect.bottom + 8;
-        if (top + menu.offsetHeight > window.innerHeight - padding) {
-            top = Math.max(padding, rect.top - menu.offsetHeight - 8);
-        }
-        const maxTop = window.innerHeight - menu.offsetHeight - padding;
-        top = Math.max(padding, Math.min(top, maxTop));
+        const bottom = Math.max(padding, window.innerHeight - rect.top + 8);
         menu.style.left = `${left}px`;
-        menu.style.top = `${top}px`;
+        menu.style.bottom = `${bottom}px`;
+    };
+    if (window.innerWidth <= 768 && event && event.currentTarget) {
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (isListView) {
+            positionBulkMenuAbove(rect);
+        } else {
+            menu.style.position = 'fixed';
+            menu.style.right = '';
+            menu.style.bottom = '';
+            const padding = 8;
+            const menuWidth = menu.offsetWidth || 220;
+            let left = rect.right - menuWidth;
+            left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+            let top = rect.bottom + 8;
+            if (top + menu.offsetHeight > window.innerHeight - padding) {
+                top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+            }
+            const maxTop = window.innerHeight - menu.offsetHeight - padding;
+            top = Math.max(padding, Math.min(top, maxTop));
+            menu.style.left = `${left}px`;
+            menu.style.top = `${top}px`;
+        }
         menu.dataset.anchorId = event.currentTarget.id || '';
     } else {
         menu.style.position = '';
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        menu.style.bottom = '';
         menu.dataset.anchorId = '';
     }
 }
@@ -2053,6 +2380,7 @@ document.addEventListener('click', (e) => {
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        menu.style.bottom = '';
         menu.dataset.anchorId = '';
         const statusMenu = document.getElementById('bulk-status-submenu');
         const tagForm = document.getElementById('bulk-tag-form');
@@ -2068,17 +2396,26 @@ window.addEventListener('scroll', () => {
     const anchor = anchorId ? document.getElementById(anchorId) : null;
     if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
+    const isListView = !!document.querySelector('.list-view');
     const padding = 8;
     const menuWidth = menu.offsetWidth || 220;
     let left = rect.right - menuWidth;
     left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+    menu.style.left = `${left}px`;
+    if (isListView) {
+        menu.style.position = 'fixed';
+        menu.style.right = '';
+        menu.style.top = '';
+        const bottom = Math.max(padding, window.innerHeight - rect.top + 8);
+        menu.style.bottom = `${bottom}px`;
+        return;
+    }
     let top = rect.bottom + 8;
     if (top + menu.offsetHeight > window.innerHeight - padding) {
         top = Math.max(padding, rect.top - menu.offsetHeight - 8);
     }
     const maxTop = window.innerHeight - menu.offsetHeight - padding;
     top = Math.max(padding, Math.min(top, maxTop));
-    menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
 }, { passive: true });
 
@@ -2247,6 +2584,11 @@ async function bulkUpdateStatus(status) {
         if (res.ok) {
             selectedItems.clear();
             await refreshListView();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            if (err && err.error) {
+                showToast(err.error, 'error');
+            }
         }
     } catch (e) {
         console.error('Error bulk updating status:', e);
@@ -2655,6 +2997,7 @@ async function handleDrop(e) {
     // Re-organize done tasks after drag to maintain proper grouping
     normalizePhaseParents();
     organizePhaseDoneTasks();
+    organizePhaseBlockedTasks();
     organizeLightListDoneTasks();
 }
 
@@ -2670,6 +3013,7 @@ async function refreshListView() {
         document.getElementById('items-container').innerHTML = newContainer.innerHTML;
         normalizePhaseParents();
         organizePhaseDoneTasks();
+        organizePhaseBlockedTasks();
         organizeLightListDoneTasks();
         initTaskSelectionUI();
         selectedItems.forEach(id => setTaskSelected(id, true, true));
@@ -3034,6 +3378,7 @@ async function touchHandleDragEnd(e) {
     // Re-organize done tasks after drag to maintain proper grouping
     normalizePhaseParents();
     organizePhaseDoneTasks();
+    organizePhaseBlockedTasks();
     organizeLightListDoneTasks();
     console.log('🔴 ===== DRAG COMPLETE =====');
 }
@@ -3362,18 +3707,27 @@ async function loadNotesUnified() {
     try {
         const folderId = noteFolderState.currentFolderId;
         const query = folderId ? `?folder_id=${folderId}` : '';
-        const [notesRes, foldersRes] = await Promise.all([
+        const archivedQuery = query ? `${query}&archived=1` : '?archived=1';
+        const [notesRes, foldersRes, archivedNotesRes, archivedFoldersRes] = await Promise.all([
             fetch(`/api/notes${query}`),
-            fetch('/api/note-folders')
+            fetch('/api/note-folders'),
+            fetch(`/api/notes${archivedQuery}`),
+            fetch('/api/note-folders?archived=1')
         ]);
 
-        if (!notesRes.ok || !foldersRes.ok) throw new Error('Failed to load');
+        if (!notesRes.ok || !foldersRes.ok || !archivedNotesRes.ok || !archivedFoldersRes.ok) {
+            throw new Error('Failed to load');
+        }
 
         const notes = await notesRes.json();
         const folders = await foldersRes.json();
+        const archivedNotes = await archivedNotesRes.json();
+        const archivedFolders = await archivedFoldersRes.json();
 
         notesState.notes = notes;
+        notesState.archivedNotes = archivedNotes || [];
         noteFolderState.folders = folders;
+        noteFolderState.archivedFolders = archivedFolders || [];
 
         renderNotesUnified();
 
@@ -3414,6 +3768,83 @@ function getSortedNotesItems() {
     };
 }
 
+function organizePhaseBlockedTasks() {
+    const container = document.getElementById('items-container');
+    if (!container) return;
+
+    document.querySelectorAll('.phase-blocked-container').forEach(box => {
+        while (box.firstChild) {
+            container.insertBefore(box.firstChild, box);
+        }
+        box.remove();
+    });
+    document.querySelectorAll('.phase-blocked-bar').forEach(bar => bar.remove());
+
+    const phases = Array.from(container.querySelectorAll('.task-item.phase'));
+    phases.forEach(phaseEl => {
+        const phaseIdStr = String(phaseEl.dataset.phaseId || '');
+        if (!phaseIdStr) return;
+
+        const blockedTasks = [];
+        let cursor = phaseEl.nextElementSibling;
+        while (cursor && !cursor.classList.contains('phase')) {
+            if (cursor.classList.contains('task-item')) {
+                const belongs = cursor.dataset.phaseParent === phaseIdStr
+                    || (!cursor.dataset.phaseParent && cursor.classList.contains('under-phase'));
+                if (belongs && cursor.dataset.blocked === 'true') {
+                    blockedTasks.push(cursor);
+                }
+            }
+            cursor = cursor.nextElementSibling;
+        }
+
+        if (!blockedTasks.length) return;
+
+        const doneAnchor = container.querySelector(`.phase-done-bar[data-phase-id="${phaseIdStr}"]`);
+        const anchor = doneAnchor || cursor || null;
+
+        const bar = document.createElement('div');
+        bar.className = 'phase-blocked-bar';
+        bar.setAttribute('data-phase-id', phaseIdStr);
+
+        const label = document.createElement('span');
+        label.className = 'phase-blocked-label';
+        label.textContent = `Blocked tasks (${blockedTasks.length})`;
+
+        const blockedBox = document.createElement('div');
+        blockedBox.className = 'phase-blocked-container';
+        blockedBox.setAttribute('data-phase-id', phaseIdStr);
+
+        blockedTasks.forEach(task => blockedBox.appendChild(task));
+
+        bar.appendChild(label);
+        container.insertBefore(bar, anchor);
+        container.insertBefore(blockedBox, anchor);
+    });
+}
+
+function getSortedArchivedItems() {
+    const currentFolderId = noteFolderState.currentFolderId;
+    const notes = notesState.archivedNotes || [];
+    const folders = noteFolderState.archivedFolders || [];
+
+    const currentFolders = folders.filter(f =>
+        (f.parent_id || null) === (currentFolderId || null)
+    ).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+
+    const archivedNotes = notes.filter(n => n.note_type === 'note')
+        .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+    const archivedLists = notes.filter(n => n.note_type === 'list')
+        .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+    return {
+        notes: archivedNotes,
+        lists: archivedLists,
+        folders: currentFolders
+    };
+}
+
 /**
  * Render the unified notes list
  */
@@ -3423,11 +3854,13 @@ function renderNotesUnified() {
     if (!listEl) return;
 
     const sorted = getSortedNotesItems();
+    const archived = getSortedArchivedItems();
 
     listEl.innerHTML = '';
 
     const hasItems = sorted.pinned.length || sorted.notes.length ||
-                     sorted.lists.length || sorted.folders.length;
+                     sorted.lists.length || sorted.folders.length ||
+                     archived.notes.length || archived.lists.length || archived.folders.length;
 
     if (!hasItems) {
         if (emptyEl) emptyEl.style.display = 'flex';
@@ -3440,7 +3873,7 @@ function renderNotesUnified() {
     if (sorted.pinned.length) {
         listEl.appendChild(createSectionHeader('Pinned'));
         sorted.pinned.forEach(note => {
-            listEl.appendChild(createNoteItem(note, true));
+            listEl.appendChild(createNoteItem(note, { isPinned: true }));
         });
     }
 
@@ -3448,7 +3881,7 @@ function renderNotesUnified() {
     if (sorted.notes.length) {
         listEl.appendChild(createSectionHeader('Notes'));
         sorted.notes.forEach(note => {
-            listEl.appendChild(createNoteItem(note, false));
+            listEl.appendChild(createNoteItem(note));
         });
     }
 
@@ -3456,7 +3889,7 @@ function renderNotesUnified() {
     if (sorted.lists.length) {
         listEl.appendChild(createSectionHeader('Lists'));
         sorted.lists.forEach(note => {
-            listEl.appendChild(createNoteItem(note, false));
+            listEl.appendChild(createNoteItem(note));
         });
     }
 
@@ -3467,6 +3900,8 @@ function renderNotesUnified() {
             listEl.appendChild(createFolderItem(folder));
         });
     }
+
+    listEl.appendChild(createArchivedSection(archived));
 
     // Bind swipe and drag handlers
     initNoteSwipeHandlers();
@@ -3480,15 +3915,78 @@ function createSectionHeader(title) {
     return header;
 }
 
-function createNoteItem(note, isPinned) {
+function createArchivedSection(archived) {
+    const wrapper = document.createElement('div');
+    const total = (archived.notes.length + archived.lists.length + archived.folders.length) || 0;
+    wrapper.className = `notes-archived-section${noteFolderState.archivedOpen ? ' open' : ''}`;
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'notes-archived-toggle';
+    header.setAttribute('aria-expanded', noteFolderState.archivedOpen ? 'true' : 'false');
+    header.innerHTML = `
+        <span class="notes-archived-title">Archived</span>
+        <span class="notes-archived-count">${total}</span>
+        <i class="fa-solid fa-chevron-down"></i>
+    `;
+    header.addEventListener('click', () => {
+        noteFolderState.archivedOpen = !noteFolderState.archivedOpen;
+        try {
+            localStorage.setItem('notes_archived_open', noteFolderState.archivedOpen ? '1' : '0');
+        } catch (e) {
+            // no-op: storage unavailable
+        }
+        renderNotesUnified();
+    });
+    wrapper.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'notes-archived-body';
+    if (!noteFolderState.archivedOpen) {
+        body.style.display = 'none';
+    }
+
+    if (!total) {
+        const empty = document.createElement('div');
+        empty.className = 'notes-archived-empty';
+        empty.textContent = 'No archived items.';
+        body.appendChild(empty);
+    } else {
+        if (archived.notes.length) {
+            body.appendChild(createSectionHeader('Notes'));
+            archived.notes.forEach(note => {
+                body.appendChild(createNoteItem(note, { isArchived: true }));
+            });
+        }
+        if (archived.lists.length) {
+            body.appendChild(createSectionHeader('Lists'));
+            archived.lists.forEach(note => {
+                body.appendChild(createNoteItem(note, { isArchived: true }));
+            });
+        }
+        if (archived.folders.length) {
+            body.appendChild(createSectionHeader('Folders'));
+            archived.folders.forEach(folder => {
+                body.appendChild(createFolderItem(folder, { isArchived: true }));
+            });
+        }
+    }
+
+    wrapper.appendChild(body);
+    return wrapper;
+}
+
+function createNoteItem(note, options = {}) {
+    const { isPinned = false, isArchived = false } = options;
     const item = document.createElement('div');
     const isProtected = note.is_pin_protected;
     const isLocked = note.locked;
-    item.className = 'notes-item' + (isPinned ? ' pinned-item' : '') + (isProtected ? ' protected' : '') + (isLocked ? ' locked' : '');
+    item.className = 'notes-item' + (isPinned ? ' pinned-item' : '') + (isProtected ? ' protected' : '') + (isLocked ? ' locked' : '') + (isArchived ? ' archived' : '');
     item.dataset.itemId = note.id;
     item.dataset.itemType = 'note';
     item.dataset.protected = isProtected ? 'true' : 'false';
     item.dataset.locked = isLocked ? 'true' : 'false';
+    item.dataset.archived = isArchived ? 'true' : 'false';
     if (isPinned) {
         item.draggable = true;
     }
@@ -3500,6 +3998,7 @@ function createNoteItem(note, isPinned) {
     const lockIcon = isProtected ? '<i class="notes-item-lock fa-solid fa-lock"></i>' : '';
 
     item.innerHTML = `
+        ${isArchived ? '' : `
         <div class="notes-item-swipe-layer swipe-right">
             <i class="fa-solid fa-thumbtack"></i>
             <span>${pinLabel}</span>
@@ -3507,7 +4006,7 @@ function createNoteItem(note, isPinned) {
         <div class="notes-item-swipe-layer swipe-left">
             <i class="fa-solid fa-trash"></i>
             <span>Delete</span>
-        </div>
+        </div>`}
         <div class="notes-item-content">
             ${isPinned ? '<div class="notes-item-drag-handle"><i class="fa-solid fa-grip-vertical"></i></div>' : ''}
             <div class="notes-item-icon ${iconClass}">
@@ -3527,13 +4026,15 @@ function createNoteItem(note, isPinned) {
     return item;
 }
 
-function createFolderItem(folder) {
+function createFolderItem(folder, options = {}) {
+    const { isArchived = false } = options;
     const item = document.createElement('div');
     const isProtected = folder.is_pin_protected;
-    item.className = 'notes-item' + (isProtected ? ' protected locked' : '');
+    item.className = 'notes-item' + (isProtected ? ' protected locked' : '') + (isArchived ? ' archived' : '');
     item.dataset.itemId = folder.id;
     item.dataset.itemType = 'folder';
     item.dataset.locked = isProtected ? 'true' : 'false';
+    item.dataset.archived = isArchived ? 'true' : 'false';
 
     const lockIcon = isProtected ? '<i class="notes-item-lock fa-solid fa-lock"></i>' : '';
 
@@ -3566,9 +4067,12 @@ function initNoteSwipeHandlers() {
         const content = item.querySelector('.notes-item-content');
         if (!content) return;
 
-        content.addEventListener('touchstart', handleNoteSwipeStart, { passive: true });
-        content.addEventListener('touchmove', handleNoteSwipeMove, { passive: false });
-        content.addEventListener('touchend', handleNoteSwipeEnd, { passive: true });
+        const isArchived = item.dataset.archived === 'true';
+        if (!isArchived) {
+            content.addEventListener('touchstart', handleNoteSwipeStart, { passive: true });
+            content.addEventListener('touchmove', handleNoteSwipeMove, { passive: false });
+            content.addEventListener('touchend', handleNoteSwipeEnd, { passive: true });
+        }
 
         // Click handler for navigation (non-swipe) or action buttons
         content.addEventListener('click', (e) => {
@@ -3617,7 +4121,7 @@ function initNoteSwipeHandlers() {
             if (actionBtn) {
                 e.stopPropagation();
                 const action = actionBtn.dataset.action;
-                const folder = noteFolderState.folders.find(f => f.id === folderId);
+                const folder = getFolderById(folderId);
                 if (action === 'rename' && folder) {
                     openNoteFolderModal('rename', folder);
                 } else if (action === 'delete' && folder) {
@@ -3650,6 +4154,7 @@ function handleNoteSwipeStart(e) {
 
     const touch = e.touches[0];
     const item = e.currentTarget.closest('.notes-item');
+    if (item && item.dataset.archived === 'true') return;
 
     noteSwipeState.activeItem = item;
     noteSwipeState.startX = touch.clientX;
@@ -3747,8 +4252,12 @@ function handleNoteSwipeEnd(e) {
 }
 
 async function handleSwipePin(noteId) {
-    const note = notesState.notes.find(n => n.id === noteId);
+    const note = getNoteById(noteId);
     if (!note) return;
+    if (note.is_archived) {
+        showToast('Restore the note to pin it.', 'info', 2000);
+        return;
+    }
 
     const newPinned = !note.pinned;
 
@@ -3774,7 +4283,7 @@ async function handleSwipePin(noteId) {
 }
 
 function handleSwipeDelete(noteId) {
-    const note = notesState.notes.find(n => n.id === noteId);
+    const note = getNoteById(noteId);
     if (!note) return;
 
     openConfirmModal(`Delete "${getNoteDisplayTitle(note)}"?`, async () => {
@@ -3833,6 +4342,16 @@ function positionNotesDropdown(dropdown, button) {
     dropdown.style.left = `${leftPos}px`;
 }
 
+function getNoteById(noteId) {
+    return (notesState.notes || []).find(n => n.id === noteId)
+        || (notesState.archivedNotes || []).find(n => n.id === noteId);
+}
+
+function getFolderById(folderId) {
+    return (noteFolderState.folders || []).find(f => f.id === folderId)
+        || (noteFolderState.archivedFolders || []).find(f => f.id === folderId);
+}
+
 /**
  * Toggle note actions dropdown menu
  */
@@ -3850,15 +4369,30 @@ function toggleNoteActionsMenu(noteId, event) {
     closeNotesDropdown();
 
     // Get pin label from note state
-    const note = notesState.notes.find(n => n.id === noteId);
+    const note = getNoteById(noteId);
     const pinLabel = note && note.pinned ? 'Unpin' : 'Pin';
     const isListNote = note && note.note_type === 'list';
     const isProtected = note && note.is_pin_protected;
+    const isArchived = note && note.is_archived;
     const protectLabel = isProtected ? 'Unprotect' : 'Protect';
     const protectIcon = isProtected ? 'fa-lock-open' : 'fa-lock';
+    const pinOption = isArchived ? '' : `
+        <button class="notes-item-menu-option" data-action="pin">
+            <i class="fa-solid fa-thumbtack"></i> ${pinLabel}
+        </button>
+    `;
     const convertOption = isListNote ? '' : `
         <button class="notes-item-menu-option" data-action="convert">
             <i class="fa-solid fa-list-check"></i> Convert to list
+        </button>
+    `;
+    const archiveOption = isArchived ? `
+        <button class="notes-item-menu-option" data-action="restore">
+            <i class="fa-solid fa-rotate-left"></i> Restore
+        </button>
+    ` : `
+        <button class="notes-item-menu-option" data-action="archive">
+            <i class="fa-solid fa-box-archive"></i> Archive
         </button>
     `;
 
@@ -3867,9 +4401,7 @@ function toggleNoteActionsMenu(noteId, event) {
     dropdown.className = 'notes-item-menu active';
     dropdown.dataset.noteId = noteId;
     dropdown.innerHTML = `
-        <button class="notes-item-menu-option" data-action="pin">
-            <i class="fa-solid fa-thumbtack"></i> ${pinLabel}
-        </button>
+        ${pinOption}
         <button class="notes-item-menu-option" data-action="protect">
             <i class="fa-solid ${protectIcon}"></i> ${protectLabel}
         </button>
@@ -3883,6 +4415,7 @@ function toggleNoteActionsMenu(noteId, event) {
         <button class="notes-item-menu-option" data-action="duplicate">
             <i class="fa-solid fa-copy"></i> Duplicate
         </button>
+        ${archiveOption}
         <button class="notes-item-menu-option danger" data-action="delete">
             <i class="fa-solid fa-trash"></i> Delete
         </button>
@@ -3900,6 +4433,8 @@ function toggleNoteActionsMenu(noteId, event) {
             else if (action === 'convert') handleNoteMenuConvert(noteId);
             else if (action === 'move') handleNoteMenuMove(noteId);
             else if (action === 'duplicate') handleNoteMenuDuplicate(noteId);
+            else if (action === 'archive') handleNoteMenuArchive(noteId);
+            else if (action === 'restore') handleNoteMenuRestore(noteId);
             else if (action === 'delete') handleNoteMenuDelete(noteId);
         });
     });
@@ -3927,10 +4462,20 @@ function toggleFolderActionsMenu(folderId, event) {
     closeNotesDropdown();
 
     // Get protection status from folder state
-    const folder = noteFolderState.folders.find(f => f.id === folderId);
+    const folder = getFolderById(folderId);
     const isProtected = folder && folder.is_pin_protected;
+    const isArchived = folder && folder.is_archived;
     const protectLabel = isProtected ? 'Unprotect' : 'Protect';
     const protectIcon = isProtected ? 'fa-lock-open' : 'fa-lock';
+    const archiveOption = isArchived ? `
+        <button class="notes-item-menu-option" data-action="restore">
+            <i class="fa-solid fa-rotate-left"></i> Restore
+        </button>
+    ` : `
+        <button class="notes-item-menu-option" data-action="archive">
+            <i class="fa-solid fa-box-archive"></i> Archive
+        </button>
+    `;
 
     // Create dropdown
     const dropdown = document.createElement('div');
@@ -3943,6 +4488,7 @@ function toggleFolderActionsMenu(folderId, event) {
         <button class="notes-item-menu-option" data-action="protect">
             <i class="fa-solid ${protectIcon}"></i> ${protectLabel}
         </button>
+        ${archiveOption}
         <button class="notes-item-menu-option danger" data-action="delete">
             <i class="fa-solid fa-trash"></i> Delete
         </button>
@@ -3956,6 +4502,8 @@ function toggleFolderActionsMenu(folderId, event) {
             closeNotesDropdown();
             if (action === 'rename') handleFolderMenuRename(folderId, folderName);
             else if (action === 'protect') handleFolderMenuProtect(folderId);
+            else if (action === 'archive') handleFolderMenuArchive(folderId);
+            else if (action === 'restore') handleFolderMenuRestore(folderId);
             else if (action === 'delete') handleFolderMenuDelete(folderId);
         });
     });
@@ -3989,7 +4537,7 @@ async function handleNoteMenuProtect(noteId) {
         return;
     }
 
-    const note = notesState.notes.find(n => n.id === noteId);
+    const note = getNoteById(noteId);
     if (!note) return;
 
     // If note is protected, require PIN to unprotect
@@ -4031,7 +4579,7 @@ function handleNoteMenuMove(noteId) {
 }
 
 async function handleNoteMenuShare(noteId) {
-    let note = notesState.notes.find(n => n.id === noteId);
+    let note = getNoteById(noteId);
     if (!note) return;
     const isListNote = note.note_type === 'list';
 
@@ -4086,7 +4634,7 @@ async function handleNoteMenuShare(noteId) {
 }
 
 async function handleNoteMenuDuplicate(noteId) {
-    const note = notesState.notes.find(n => n.id === noteId);
+    const note = getNoteById(noteId);
     if (!note) return;
 
     try {
@@ -4112,12 +4660,52 @@ async function handleNoteMenuDuplicate(noteId) {
     }
 }
 
+async function handleNoteMenuArchive(noteId) {
+    const note = getNoteById(noteId);
+    if (!note || note.is_archived) return;
+    if (note.is_pin_protected) {
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'archive';
+        openPinModal();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/notes/${noteId}/archive`, { method: 'POST' });
+        if (!res.ok) throw new Error('Archive failed');
+        showToast('Archived', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Archive failed:', err);
+        showToast('Failed to archive', 'error');
+    }
+}
+
+async function handleNoteMenuRestore(noteId) {
+    const note = getNoteById(noteId);
+    if (!note || !note.is_archived) return;
+    if (note.is_pin_protected) {
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'restore';
+        openPinModal();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/notes/${noteId}/restore`, { method: 'POST' });
+        if (!res.ok) throw new Error('Restore failed');
+        showToast('Restored', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Restore failed:', err);
+        showToast('Failed to restore', 'error');
+    }
+}
+
 function handleNoteMenuDelete(noteId) {
     handleSwipeDelete(noteId);
 }
 
 async function handleNoteMenuConvert(noteId) {
-    const note = notesState.notes.find(n => n.id === noteId);
+    const note = getNoteById(noteId);
     if (note && note.note_type === 'list') {
         showToast('This note is already a list.', 'info');
         return;
@@ -4170,7 +4758,7 @@ function handleFolderMenuRename(folderId, currentName) {
 }
 
 async function handleFolderMenuDelete(folderId) {
-    const folder = noteFolderState.folders.find(f => f.id === folderId);
+    const folder = getFolderById(folderId);
     if (!folder) return;
 
     // If folder is protected, require PIN to delete
@@ -4208,7 +4796,7 @@ async function handleFolderMenuProtect(folderId) {
         return;
     }
 
-    const folder = noteFolderState.folders.find(f => f.id === folderId);
+    const folder = getFolderById(folderId);
     if (!folder) return;
 
     // If folder is protected, require PIN to unprotect
@@ -4222,6 +4810,48 @@ async function handleFolderMenuProtect(folderId) {
 
     // Protecting an unprotected folder - no PIN needed
     await doProtectFolder(folderId, true);
+}
+
+async function handleFolderMenuArchive(folderId) {
+    const folder = getFolderById(folderId);
+    if (!folder || folder.is_archived) return;
+    if (folder.is_pin_protected) {
+        pinState.pendingFolderId = folderId;
+        pinState.pendingNoteId = null;
+        pinState.pendingAction = 'archive_folder';
+        openPinModal();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/note-folders/${folderId}/archive`, { method: 'POST' });
+        if (!res.ok) throw new Error('Archive failed');
+        showToast('Folder archived', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Archive failed:', err);
+        showToast('Failed to archive folder', 'error');
+    }
+}
+
+async function handleFolderMenuRestore(folderId) {
+    const folder = getFolderById(folderId);
+    if (!folder || !folder.is_archived) return;
+    if (folder.is_pin_protected) {
+        pinState.pendingFolderId = folderId;
+        pinState.pendingNoteId = null;
+        pinState.pendingAction = 'restore_folder';
+        openPinModal();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/note-folders/${folderId}/restore`, { method: 'POST' });
+        if (!res.ok) throw new Error('Restore failed');
+        showToast('Folder restored', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Restore failed:', err);
+        showToast('Failed to restore folder', 'error');
+    }
 }
 
 async function doProtectFolder(folderId, newProtectedState) {
@@ -4615,7 +5245,9 @@ function initNoteEditorPage() {
     const saveBtn = document.getElementById('note-save-btn');
     const deleteBtn = document.getElementById('note-delete-btn');
     const shareBtn = document.getElementById('note-share-btn');
+    const cleanupBtn = document.getElementById('note-cleanup-btn');
     const convertBtn = document.getElementById('note-convert-btn');
+    const archiveBtn = document.getElementById('note-archive-btn');
     const backBtn = document.getElementById('note-back-btn');
     const notesBtn = document.getElementById('note-notes-btn');
     const actionsToggle = document.getElementById('note-actions-toggle');
@@ -4627,8 +5259,10 @@ function initNoteEditorPage() {
     if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
     if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
+    if (cleanupBtn) cleanupBtn.addEventListener('click', () => cleanupCurrentNote());
     if (convertBtn) convertBtn.addEventListener('click', () => convertCurrentNoteToList());
     if (protectBtn) protectBtn.addEventListener('click', () => toggleNoteProtection());
+    if (archiveBtn) archiveBtn.addEventListener('click', () => toggleCurrentNoteArchive());
     if (backBtn) backBtn.addEventListener('click', () => handleNoteBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleNoteExit());
 
@@ -4651,10 +5285,35 @@ function initNoteEditorPage() {
     }
 
     editor.addEventListener('input', () => {
+        if (notesState.activeNoteIsArchived) {
+            showReadOnlyToast();
+            return;
+        }
         refreshNoteDirtyState();
         autoGenerateTitle();
     });
-    titleInput.addEventListener('input', refreshNoteDirtyState);
+    editor.addEventListener('beforeinput', (e) => {
+        if (!notesState.activeNoteIsArchived) return;
+        e.preventDefault();
+        showReadOnlyToast();
+    });
+    editor.addEventListener('paste', (e) => {
+        if (!notesState.activeNoteIsArchived) return;
+        e.preventDefault();
+        showReadOnlyToast();
+    });
+    titleInput.addEventListener('input', () => {
+        if (notesState.activeNoteIsArchived) {
+            showReadOnlyToast();
+            return;
+        }
+        refreshNoteDirtyState();
+    });
+    titleInput.addEventListener('keydown', (e) => {
+        if (!notesState.activeNoteIsArchived) return;
+        e.preventDefault();
+        showReadOnlyToast();
+    });
 
     // Add keydown listener for checkbox auto-continuation
     editor.addEventListener('keydown', handleNoteEditorKeydown);
@@ -4677,6 +5336,33 @@ function initNoteEditorPage() {
     }
 }
 
+function setNoteEditorReadOnly(isReadOnly) {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const saveBtn = document.getElementById('note-save-btn');
+    const cleanupBtn = document.getElementById('note-cleanup-btn');
+    const convertBtn = document.getElementById('note-convert-btn');
+    const toolbar = document.getElementById('note-toolbar');
+    if (editor) editor.setAttribute('contenteditable', isReadOnly ? 'false' : 'true');
+    if (titleInput) titleInput.disabled = isReadOnly;
+    if (saveBtn) saveBtn.disabled = isReadOnly;
+    if (cleanupBtn) cleanupBtn.disabled = isReadOnly;
+    if (convertBtn) convertBtn.disabled = isReadOnly;
+    if (toolbar) {
+        toolbar.classList.toggle('disabled', isReadOnly);
+        toolbar.querySelectorAll('button, select').forEach(el => {
+            el.disabled = isReadOnly;
+        });
+    }
+    if (editor) {
+        editor.classList.toggle('read-only', isReadOnly);
+        editor.onpointerdown = isReadOnly ? (e) => {
+            showReadOnlyToast();
+            e.preventDefault();
+        } : null;
+    }
+}
+
 function initListEditorPage() {
     const titleInput = document.getElementById('list-title');
     const checkboxToggle = document.getElementById('list-checkbox-toggle');
@@ -4687,6 +5373,7 @@ function initListEditorPage() {
     const deleteBtn = document.getElementById('list-delete-btn');
     const shareBtn = document.getElementById('list-share-btn');
     const protectBtn = document.getElementById('list-protect-btn');
+    const archiveBtn = document.getElementById('list-archive-btn');
     const backBtn = document.getElementById('list-back-btn');
     const notesBtn = document.getElementById('list-notes-btn');
     const actionsToggle = document.getElementById('list-actions-toggle');
@@ -4708,6 +5395,7 @@ function initListEditorPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
     if (shareBtn) shareBtn.addEventListener('click', () => shareCurrentList());
     if (protectBtn) protectBtn.addEventListener('click', () => toggleListProtection());
+    if (archiveBtn) archiveBtn.addEventListener('click', () => toggleCurrentListArchive());
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
     if (selectToggle) selectToggle.addEventListener('click', () => toggleListSelectionMode());
@@ -4795,16 +5483,70 @@ function initListEditorPage() {
     }
     if (stack) {
         stack.addEventListener('click', (e) => {
+            if (listState.isArchived) {
+                showReadOnlyToast();
+                return;
+            }
             if (isListSelectionActive()) return;
             if (e.target.closest('.list-pill')) return;
             if (e.target.closest('.list-pill-input')) return;
             setListInsertionAtPosition(e.clientY);
         });
+
+        const selectionState = {
+            pointerId: null,
+            moved: false,
+            startX: 0,
+            startY: 0,
+            itemId: null
+        };
+        const getPillFromTarget = (target) => target.closest('.list-pill:not(.list-pill-input)');
+        const resetSelectionState = () => {
+            selectionState.pointerId = null;
+            selectionState.moved = false;
+            selectionState.itemId = null;
+        };
+        stack.addEventListener('pointerdown', (e) => {
+            if (!isListSelectionActive()) return;
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            const pill = getPillFromTarget(e.target);
+            if (!pill) return;
+            const itemId = parseInt(pill.dataset.itemId || '', 10);
+            if (!itemId) return;
+            selectionState.pointerId = e.pointerId;
+            selectionState.moved = false;
+            selectionState.startX = e.clientX;
+            selectionState.startY = e.clientY;
+            selectionState.itemId = itemId;
+        });
+        stack.addEventListener('pointermove', (e) => {
+            if (!isListSelectionActive()) return;
+            if (selectionState.pointerId !== e.pointerId) return;
+            if (Math.abs(e.clientX - selectionState.startX) > TOUCH_SCROLL_THRESHOLD ||
+                Math.abs(e.clientY - selectionState.startY) > TOUCH_SCROLL_THRESHOLD) {
+                selectionState.moved = true;
+            }
+        });
+        stack.addEventListener('pointerup', (e) => {
+            if (!isListSelectionActive()) return;
+            if (selectionState.pointerId !== e.pointerId) return;
+            const itemId = selectionState.itemId;
+            const moved = selectionState.moved;
+            resetSelectionState();
+            if (moved || !itemId) return;
+            toggleListItemSelection(itemId);
+        });
+        stack.addEventListener('pointercancel', resetSelectionState);
     }
     document.addEventListener('mousedown', handleListEditorOutsideClick);
 
     titleInput.addEventListener('input', refreshListDirtyState);
     checkboxToggle.addEventListener('change', () => {
+        if (listState.isArchived) {
+            showReadOnlyToast();
+            checkboxToggle.checked = listState.checkboxMode;
+            return;
+        }
         listState.checkboxMode = checkboxToggle.checked;
         refreshListDirtyState();
         renderListItems();
@@ -4812,6 +5554,20 @@ function initListEditorPage() {
 
     updateListSelectionUI();
     loadListForEditor(listId);
+}
+
+function setListEditorReadOnly(isReadOnly) {
+    const titleInput = document.getElementById('list-title');
+    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    const saveBtn = document.getElementById('list-save-btn');
+    const selectToggle = document.getElementById('list-select-toggle');
+    const bulkBar = document.getElementById('list-bulk-bar');
+    if (titleInput) titleInput.disabled = isReadOnly;
+    if (checkboxToggle) checkboxToggle.disabled = isReadOnly;
+    if (saveBtn) saveBtn.disabled = isReadOnly;
+    if (selectToggle) selectToggle.disabled = isReadOnly;
+    if (bulkBar && isReadOnly) bulkBar.classList.remove('active');
+    if (isReadOnly) setListSelectionMode(false);
 }
 
 function handleListEditorOutsideClick(e) {
@@ -4870,6 +5626,8 @@ function getListReturnUrl() {
 async function loadListForEditor(listId) {
     try {
         let list;
+        listState.isArchived = false;
+        setListEditorReadOnly(false);
 
         // Check for pre-fetched unlocked list data (from PIN unlock)
         const unlockedDataStr = sessionStorage.getItem('unlocked_note_data');
@@ -4907,6 +5665,7 @@ async function loadListForEditor(listId) {
         listState.listId = list.id;
         listState.items = list.items || [];
         listState.checkboxMode = !!list.checkbox_mode;
+        listState.isArchived = !!list.is_archived;
         listState.activeSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode
@@ -4924,6 +5683,8 @@ async function loadListForEditor(listId) {
         renderListItems();
         setListDirty(false);
         updateProtectButton(list.is_pin_protected); // Update protect button state
+        updateArchiveButton(!!list.is_archived);
+        setListEditorReadOnly(!!list.is_archived);
     } catch (err) {
         console.error('Error loading list:', err);
         showToast('Could not load that list.', 'error');
@@ -4934,6 +5695,10 @@ function refreshListDirtyState() {
     const titleInput = document.getElementById('list-title');
     const checkboxToggle = document.getElementById('list-checkbox-toggle');
     if (!titleInput || !checkboxToggle) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
     const snapshot = listState.activeSnapshot || { title: '', checkboxMode: false };
     const title = (titleInput.value || '').trim();
     const checkboxMode = checkboxToggle.checked;
@@ -4944,7 +5709,7 @@ function refreshListDirtyState() {
 function setListDirty(dirty) {
     listState.dirty = dirty;
     const saveBtn = document.getElementById('list-save-btn');
-    if (saveBtn) saveBtn.disabled = !dirty;
+    if (saveBtn) saveBtn.disabled = false;
     if (!dirty) {
         if (listAutoSaveTimer) {
             clearTimeout(listAutoSaveTimer);
@@ -4980,6 +5745,12 @@ async function saveListMetadata(options = {}) {
     const titleInput = document.getElementById('list-title');
     const checkboxToggle = document.getElementById('list-checkbox-toggle');
     if (!listId || !titleInput || !checkboxToggle) return;
+    if (!listState.dirty) {
+        if (closeAfter) {
+            window.location.href = getListReturnUrl();
+        }
+        return;
+    }
     const title = titleInput.value.trim() || 'Untitled List';
     const checkboxMode = checkboxToggle.checked;
     try {
@@ -5631,6 +6402,10 @@ document.addEventListener('click', (e) => {
 function renderListItems() {
     const stack = document.getElementById('list-pill-stack');
     if (!stack) return;
+    if (listState.isArchived) {
+        listState.insertionIndex = null;
+        listState.editingItemId = null;
+    }
     closeListItemMenu();
     clearListItemActions();
     const items = getSortedListItems();
@@ -5639,6 +6414,7 @@ function renderListItems() {
     let activeSectionBody = null;
 
     const appendInsertionRow = (insertIndex, target) => {
+        if (listState.isArchived) return;
         if (listState.insertionIndex !== insertIndex) return;
         const row = createListInputRow({
             mode: 'insert',
@@ -5681,6 +6457,10 @@ function renderListItems() {
                 }
                 header.addEventListener('click', (e) => {
                     e.stopPropagation();
+                    if (listState.isArchived) {
+                        showReadOnlyToast();
+                        return;
+                    }
                     listState.editingItemId = item.id;
                     listState.insertionIndex = null;
                     renderListItems();
@@ -5737,20 +6517,24 @@ function renderListItems() {
             });
             target.appendChild(row);
         } else {
-            target.appendChild(createListPill(item));
+        target.appendChild(createListPill(item));
         }
         const gapIndex = index + 1;
-        target.appendChild(createListGap(gapIndex));
-        appendInsertionRow(gapIndex, target);
+        if (!listState.isArchived) {
+            target.appendChild(createListGap(gapIndex));
+            appendInsertionRow(gapIndex, target);
+        }
     });
 
-    const primaryTarget = activeSectionBody || stack;
-    primaryTarget.appendChild(createListInputRow({
-        mode: 'new',
-        insertIndex: items.length,
-        placeholder: 'Add item... (use /section to split)',
-        isPrimary: true
-    }));
+    if (!listState.isArchived) {
+        const primaryTarget = activeSectionBody || stack;
+        primaryTarget.appendChild(createListInputRow({
+            mode: 'new',
+            insertIndex: items.length,
+            placeholder: 'Add item... (use /section to split)',
+            isPrimary: true
+        }));
+    }
 }
 
 function createListGap(insertIndex) {
@@ -5778,6 +6562,7 @@ function createListPill(item) {
     const isExpanded = hasNote && listState.expandedItemId === item.id;
     const isSelected = listSelectionState.ids.has(item.id);
     pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}${isSelected ? ' selected' : ''}`;
+    pill.dataset.itemId = item.id;
     const content = document.createElement('div');
     content.className = 'list-pill-content';
     const textValue = (item.text || '').trim();
@@ -5790,8 +6575,14 @@ function createListPill(item) {
         checkbox.type = 'checkbox';
         checkbox.className = 'list-checkbox';
         checkbox.checked = !!item.checked;
+        checkbox.disabled = listState.isArchived;
         checkbox.addEventListener('click', (e) => e.stopPropagation());
         checkbox.addEventListener('change', async () => {
+            if (listState.isArchived) {
+                showReadOnlyToast();
+                checkbox.checked = !!item.checked;
+                return;
+            }
             await updateListItem(item.id, { checked: checkbox.checked }, { refresh: true });
         });
         pill.appendChild(checkbox);
@@ -5839,6 +6630,10 @@ function createListPill(item) {
     moveBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (isListSelectionActive()) return;
+        if (listState.isArchived) {
+            showReadOnlyToast();
+            return;
+        }
         showListItemActions(pill);
         openListItemMoveMenu(item.id, moveBtn);
     });
@@ -5850,6 +6645,10 @@ function createListPill(item) {
     deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (isListSelectionActive()) return;
+        if (listState.isArchived) {
+            showReadOnlyToast();
+            return;
+        }
         openConfirmModal('Delete this item?', async () => {
             try {
                 await deleteListItem(item.id);
@@ -5878,6 +6677,10 @@ function createListPill(item) {
     };
     let touchMoveHandler = null;
     const handleTouchStart = (e) => {
+        if (listState.isArchived) {
+            showReadOnlyToast();
+            return;
+        }
         if (!supportsTouch || isListSelectionActive()) return;
         const touch = e.touches && e.touches[0];
         if (!touch) return;
@@ -5916,45 +6719,21 @@ function createListPill(item) {
     pill.addEventListener('touchend', handleTouchEnd);
     pill.addEventListener('touchcancel', handleTouchEnd);
 
-    let selectionTouchMoved = false;
-    let selectionTouchStart = { x: 0, y: 0 };
-    const selectionTouchMoveHandler = (moveEvent) => {
-        const moveTouch = moveEvent.touches && moveEvent.touches[0];
-        if (!moveTouch) return;
-        if (Math.abs(moveTouch.clientX - selectionTouchStart.x) > 8 || Math.abs(moveTouch.clientY - selectionTouchStart.y) > 8) {
-            selectionTouchMoved = true;
-        }
-    };
-    pill.addEventListener('touchstart', (e) => {
-        if (!isListSelectionActive()) return;
-        const touch = e.touches && e.touches[0];
-        if (!touch) return;
-        selectionTouchMoved = false;
-        selectionTouchStart = { x: touch.clientX, y: touch.clientY };
-        pill.addEventListener('touchmove', selectionTouchMoveHandler, { passive: true });
-    }, { passive: true });
-    pill.addEventListener('touchend', () => {
-        if (!isListSelectionActive()) return;
-        pill.removeEventListener('touchmove', selectionTouchMoveHandler);
-        if (selectionTouchMoved) {
-            ignoreClick = true;
-            return;
-        }
-        ignoreClick = true;
-        toggleListItemSelection(item.id);
-    });
-    pill.addEventListener('touchcancel', () => {
-        if (!isListSelectionActive()) return;
-        pill.removeEventListener('touchmove', selectionTouchMoveHandler);
-    });
-
     pill.addEventListener('click', () => {
         if (ignoreClick) {
             ignoreClick = false;
             return;
         }
-        if (isListSelectionActive()) {
-            toggleListItemSelection(item.id);
+        if (isListSelectionActive()) return;
+        if (listState.isArchived) {
+            if (hasNote) {
+                listState.expandedItemId = listState.expandedItemId === item.id ? null : item.id;
+                listState.editingItemId = null;
+                listState.insertionIndex = null;
+                renderListItems();
+            } else {
+                showReadOnlyToast();
+            }
             return;
         }
         if (hasNote && listState.expandedItemId !== item.id) {
@@ -6045,7 +6824,7 @@ function createListInputRow(options) {
         }
     };
 
-      const resetListInputState = () => {
+    const resetListInputState = () => {
           listState.insertionIndex = null;
           listState.editingItemId = null;
           listState.expandedItemId = null;
@@ -6296,8 +7075,11 @@ function prepareNewNoteEditor() {
     notesState.activeSnapshot = { title: '', content: '' };
     notesState.activeFolderId = folderId;
     notesState.checkboxMode = false;
+    notesState.activeNoteIsArchived = false;
     setNoteDirty(false);
     updateNoteToolbarStates();
+    updateArchiveButton(false);
+    setNoteEditorReadOnly(false);
 }
 
 async function loadNoteForEditor(noteId) {
@@ -7297,6 +8079,11 @@ function updateNoteToolbarStates() {
 function handleNoteEditorKeydown(e) {
     const editor = document.getElementById('note-editor');
     if (!editor) return;
+    if (notesState.activeNoteIsArchived) {
+        e.preventDefault();
+        showReadOnlyToast();
+        return;
+    }
 
     // Handle keyboard shortcuts for formatting (Ctrl/Cmd + B/I/U)
     const isMeta = e.metaKey || e.ctrlKey;
@@ -7383,11 +8170,7 @@ function setNoteDirty(dirty) {
     notesState.dirty = dirty;
     const saveBtn = document.getElementById('note-save-btn');
     if (saveBtn) {
-        if (isStandaloneNoteEditor()) {
-            saveBtn.disabled = false;
-        } else {
-            saveBtn.disabled = !dirty;
-        }
+        saveBtn.disabled = false;
     }
     if (!dirty) {
         if (noteAutoSaveTimer) {
@@ -7724,11 +8507,14 @@ async function setActiveNote(noteId, options = {}) {
     };
     notesState.activeFolderId = note.folder_id || null;
     notesState.checkboxMode = false; // Reset checkbox mode when switching notes
+    notesState.activeNoteIsArchived = !!note.is_archived;
     setNoteDirty(false);
     renderNotesList();
     updateNoteToolbarStates(); // Update toolbar button states
     bindNoteCheckboxes(); // Bind checkbox event handlers
     updateProtectButton(note.is_pin_protected); // Update protect button state
+    updateArchiveButton(!!note.is_archived);
+    setNoteEditorReadOnly(!!note.is_archived);
 }
 
 async function toggleNotePin(noteId, pinned) {
@@ -7750,6 +8536,66 @@ async function toggleNotePin(noteId, pinned) {
 async function movePinnedNote(noteId, direction) {
     // Drag-based reordering supersedes arrow controls; keep function to avoid breaks if called elsewhere
     return;
+}
+
+async function cleanupCurrentNote() {
+    if (noteCleanupInFlight) return;
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    const cleanupBtn = document.getElementById('note-cleanup-btn');
+    const updatedLabel = document.getElementById('note-updated-label');
+    if (!editor) return;
+
+    const content = (editor.innerHTML || '').trim();
+    if (!content) {
+        showToast('Note is empty', 'warning', 2500);
+        return;
+    }
+
+    noteCleanupInFlight = true;
+    const originalLabel = cleanupBtn ? cleanupBtn.innerHTML : '';
+    const originalUpdatedLabel = updatedLabel ? updatedLabel.innerHTML : '';
+    if (cleanupBtn) {
+        cleanupBtn.disabled = true;
+        cleanupBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Cleaning...';
+    }
+    if (updatedLabel) {
+        updatedLabel.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Cleaning...';
+    }
+
+    try {
+        const res = await fetch('/api/notes/cleanup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: titleInput ? titleInput.value.trim() : '',
+                content
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            showToast(data.error || 'Cleanup failed', 'error', 3000);
+            return;
+        }
+        if (data.html) {
+            editor.innerHTML = data.html;
+            setNoteDirty(true);
+            bindNoteCheckboxes();
+            updateNoteToolbarStates();
+        }
+    } catch (e) {
+        console.error('Error cleaning note:', e);
+        showToast('Cleanup failed', 'error', 3000);
+    } finally {
+        noteCleanupInFlight = false;
+        if (cleanupBtn) {
+            cleanupBtn.disabled = false;
+            cleanupBtn.innerHTML = originalLabel;
+        }
+        if (updatedLabel) {
+            updatedLabel.innerHTML = originalUpdatedLabel;
+        }
+    }
 }
 
 function getPinnedNoteDragAfterElement(container, y) {
@@ -8329,6 +9175,9 @@ function showDayView() {
     if (view) view.classList.remove('is-hidden');
     calendarState.dayViewOpen = true;
     setDayControlsEnabled(true);
+    const searchPanel = document.getElementById('calendar-search-panel');
+    if (searchPanel) searchPanel.classList.add('is-hidden');
+    hideCalendarSearchResults();
 }
 
 function hideDayView() {
@@ -8581,7 +9430,7 @@ function renderCalendarMonth() {
         const previews = eventsForDay.slice(0, 3);
         previews.forEach(ev => {
             const row = document.createElement('div');
-            row.className = `calendar-month-event ${ev.is_phase ? 'phase' : ''} ${ev.status === 'done' ? 'done' : ''}`;
+            row.className = `calendar-month-event ${ev.is_phase ? 'phase' : ''} ${ev.status === 'done' ? 'done' : ''} ${ev.status === 'canceled' ? 'canceled' : ''}`;
             const time = ev.start_time ? ev.start_time.slice(0, 5) + (ev.end_time ? `-${ev.end_time.slice(0, 5)}` : '') : '';
             row.innerHTML = `
                 <span class="dot priority-${ev.priority || 'medium'}"></span>
@@ -8666,6 +9515,132 @@ function formatTimeDisplay(timeStr) {
     const period = hour >= 12 ? 'PM' : 'AM';
     const displayHour = ((hour + 11) % 12) + 1;
     return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+function hideCalendarSearchResults() {
+    const resultsEl = document.getElementById('calendar-search-results');
+    if (resultsEl) resultsEl.classList.add('is-hidden');
+}
+
+function clearCalendarSearch() {
+    calendarSearchState.query = '';
+    calendarSearchState.results = [];
+    calendarSearchState.loading = false;
+    if (calendarSearchState.debounceTimer) {
+        clearTimeout(calendarSearchState.debounceTimer);
+        calendarSearchState.debounceTimer = null;
+    }
+    renderCalendarSearchResults();
+}
+
+function scheduleCalendarSearch(query) {
+    if (calendarSearchState.debounceTimer) {
+        clearTimeout(calendarSearchState.debounceTimer);
+    }
+    calendarSearchState.debounceTimer = setTimeout(() => {
+        runCalendarSearch(query);
+    }, 250);
+}
+
+async function runCalendarSearch(query) {
+    const trimmed = String(query || '').trim();
+    if (trimmed.length < 2) {
+        calendarSearchState.results = [];
+        calendarSearchState.loading = false;
+        renderCalendarSearchResults();
+        return;
+    }
+    const token = ++calendarSearchState.requestToken;
+    calendarSearchState.loading = true;
+    renderCalendarSearchResults();
+    try {
+        const res = await fetch(`/api/calendar/search?q=${encodeURIComponent(trimmed)}`);
+        if (!res.ok) throw new Error('Search failed');
+        const data = await res.json();
+        if (token !== calendarSearchState.requestToken) return;
+        calendarSearchState.results = Array.isArray(data.results) ? data.results : [];
+    } catch (err) {
+        if (token !== calendarSearchState.requestToken) return;
+        calendarSearchState.results = [];
+        console.error(err);
+    } finally {
+        if (token === calendarSearchState.requestToken) {
+            calendarSearchState.loading = false;
+            renderCalendarSearchResults();
+        }
+    }
+}
+
+function setCalendarSearchQuery(value) {
+    calendarSearchState.query = String(value || '');
+    const trimmed = calendarSearchState.query.trim();
+    if (trimmed.length < 2) {
+        calendarSearchState.results = [];
+        calendarSearchState.loading = false;
+        renderCalendarSearchResults();
+        return;
+    }
+    scheduleCalendarSearch(trimmed);
+}
+
+function renderCalendarSearchResults() {
+    const resultsEl = document.getElementById('calendar-search-results');
+    const input = document.getElementById('calendar-search-input');
+    const clearBtn = document.getElementById('calendar-search-clear');
+    if (!resultsEl) return;
+    const query = String(calendarSearchState.query || '').trim();
+
+    if (clearBtn) {
+        clearBtn.classList.toggle('is-hidden', !query);
+    }
+    if (input && input.value !== calendarSearchState.query) {
+        input.value = calendarSearchState.query;
+    }
+
+    if (query.length < 2) {
+        resultsEl.innerHTML = '';
+        resultsEl.classList.add('is-hidden');
+        return;
+    }
+
+    if (calendarSearchState.loading) {
+        resultsEl.innerHTML = `<div class="calendar-search-empty">Searching...</div>`;
+        resultsEl.classList.remove('is-hidden');
+        return;
+    }
+
+    const results = calendarSearchState.results || [];
+    if (!results.length) {
+        resultsEl.innerHTML = `<div class="calendar-search-empty">No matches found.</div>`;
+        resultsEl.classList.remove('is-hidden');
+        return;
+    }
+
+    const itemsHtml = results.map((item) => {
+        const title = escapeHtml(item.title || '');
+        const dayText = item.day ? formatCalendarLabel(item.day) : 'No date';
+        const timeText = item.start_time
+            ? `${formatTimeDisplay(item.start_time)}${item.end_time ? `–${formatTimeDisplay(item.end_time)}` : ''}`
+            : '';
+        let typeLabel = item.type === 'task' ? 'Task' : 'Event';
+        if (item.is_phase) typeLabel = 'Phase';
+        if (item.is_group) typeLabel = 'Group';
+        if (item.is_event) typeLabel = 'Event';
+        const metaBits = [dayText, timeText, typeLabel, item.task_list_title].filter(Boolean);
+        const metaText = escapeHtml(metaBits.join(' • '));
+        const dayAttr = escapeHtml(item.day || '');
+        const idAttr = escapeHtml(String(item.calendar_event_id || item.id || ''));
+        const typeAttr = escapeHtml(String(item.type || ''));
+        return `
+            <button class="calendar-search-item" type="button" data-day="${dayAttr}" data-id="${idAttr}" data-type="${typeAttr}">
+                <div class="calendar-search-item-title">${title}</div>
+                <div class="calendar-search-item-meta">${metaText}</div>
+            </button>
+        `;
+    }).join('');
+
+    resultsEl.innerHTML = itemsHtml;
+    resultsEl.classList.remove('is-hidden');
 }
 
 // --- Calendar Time Modal ---
@@ -9069,7 +10044,7 @@ function parseTimeToMinutes(value) {
 
 function sortCalendarItems(items, mode) {
     const priorityRank = { high: 0, medium: 1, low: 2 };
-    const statusRank = { not_started: 0, in_progress: 1, done: 2 };
+    const statusRank = { not_started: 0, in_progress: 1, done: 2, canceled: 3 };
     const normalizedMode = mode || 'time';
     const orderIndex = (ev) => (Number.isFinite(ev.order_index) ? ev.order_index : 999999);
 
@@ -9286,6 +10261,24 @@ function renderCalendarEvents() {
             }
         };
 
+        const allowOverlapMenuItem = document.createElement('button');
+        allowOverlapMenuItem.className = 'calendar-item-menu-option';
+        const overlapLabel = ev.allow_overlap ? 'Allow' : 'Disallow';
+        allowOverlapMenuItem.innerHTML = `<i class="fa-solid fa-layer-group ${ev.allow_overlap ? 'active-icon' : ''}"></i> ${overlapLabel} Overlap`;
+        allowOverlapMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const linked = await ensureLinkedTaskEvent(ev);
+            if (!linked || !linked.calendar_event_id) return;
+            const next = !linked.allow_overlap;
+            try {
+                await updateCalendarEvent(linked.calendar_event_id, { allow_overlap: next });
+                linked.allow_overlap = next;
+            } catch (err) {
+                console.error('Failed to toggle allow_overlap', err);
+            }
+        };
+
         const openBtn = document.createElement('a');
         openBtn.className = 'calendar-item-menu-option';
         openBtn.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
@@ -9300,7 +10293,7 @@ function renderCalendarEvents() {
             unpinTaskDate(ev.task_id);
         };
 
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, openBtn, unpinBtn);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, openBtn, unpinBtn);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -9729,7 +10722,8 @@ function renderCalendarEvents() {
 
     const renderEvent = (ev, isChild = false) => {
         const row = document.createElement('div');
-        row.className = `calendar-row event ${isChild ? 'child-row' : ''}`;
+        const canceledClass = ev.status === 'canceled' ? 'canceled' : '';
+        row.className = `calendar-row event ${canceledClass} ${isChild ? 'child-row' : ''}`;
         row.dataset.id = ev.id;
         row.dataset.groupId = ev.group_id || '';
         row.dataset.type = 'event';
@@ -9824,6 +10818,19 @@ function renderCalendarEvents() {
             openReminderEditor(ev);
         };
 
+        const canceledActive = ev.status === 'canceled';
+        const canceledMenuItem = document.createElement('button');
+        canceledMenuItem.className = 'calendar-item-menu-option';
+        canceledMenuItem.innerHTML = `<i class="fa-solid fa-ban ${canceledActive ? 'active-icon' : ''}"></i> ${canceledActive ? 'Mark active' : 'Mark canceled'}`;
+        canceledMenuItem.onclick = async (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            const nextStatus = canceledActive ? 'not_started' : 'canceled';
+            await updateCalendarEvent(ev.id, { status: nextStatus });
+            ev.status = nextStatus;
+            renderCalendarEvents();
+        };
+
         const noteMenuItem = document.createElement('button');
         noteMenuItem.className = 'calendar-item-menu-option';
         noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Add Note...';
@@ -9900,7 +10907,7 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        overflowDropdown.append(reminderMenuItem, canceledMenuItem, rolloverMenuItem, allowOverlapMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -10910,9 +11917,18 @@ async function getOrCreateGroup(groupName) {
 async function handleCalendarQuickAdd() {
     const input = document.getElementById('calendar-quick-input');
     if (!input || !calendarState.selectedDay || !calendarState.dayViewOpen) return;
-    const parsed = parseCalendarQuickInput(input.value || '');
+    const rawValue = input.value || '';
+    const parsed = parseCalendarQuickInput(rawValue);
     if (!parsed) return;
-    input.value = '';
+    const restoreInput = () => {
+        input.value = rawValue;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    };
+    const clearInput = () => {
+        input.value = '';
+        input.focus();
+    };
 
     // Handle phase creation with task
     if (parsed.create_phase_with_task) {
@@ -10920,12 +11936,16 @@ async function handleCalendarQuickAdd() {
             title: parsed.phase_name,
             is_phase: true
         });
+        if (!createdPhase) {
+            restoreInput();
+            return;
+        }
         const phaseId = createdPhase ? createdPhase.id : null;
 
         // Parse task text for all properties
         const taskParsed = parseCalendarQuickInput(parsed.task_text);
         if (taskParsed && !taskParsed.is_phase && !taskParsed.is_group && !taskParsed.create_phase_with_task && !taskParsed.create_group_with_task) {
-            await createCalendarEvent({
+            const createdTask = await createCalendarEvent({
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
@@ -10938,6 +11958,10 @@ async function handleCalendarQuickAdd() {
                 group_id: taskParsed.group_name ? (await getOrCreateGroup(taskParsed.group_name)) : null,
                 rollover_enabled: taskParsed.rollover_enabled
             });
+            if (!createdTask) {
+                restoreInput();
+                return;
+            }
         }
 
         if (calendarState.detailsOpen) {
@@ -10945,6 +11969,7 @@ async function handleCalendarQuickAdd() {
         } else {
             await loadCalendarMonth();
         }
+        clearInput();
         return;
     }
 
@@ -10956,6 +11981,10 @@ async function handleCalendarQuickAdd() {
             is_event: false,
             is_phase: false
         });
+        if (!createdGroup) {
+            restoreInput();
+            return;
+        }
         const groupId = createdGroup ? createdGroup.id : null;
 
         // Parse task text for all properties
@@ -10966,7 +11995,7 @@ async function handleCalendarQuickAdd() {
                 phaseId = await getOrCreatePhase(taskParsed.phase_name);
             }
 
-            await createCalendarEvent({
+            const createdTask = await createCalendarEvent({
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
@@ -10979,6 +12008,10 @@ async function handleCalendarQuickAdd() {
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
                 rollover_enabled: taskParsed.rollover_enabled
             });
+            if (!createdTask) {
+                restoreInput();
+                return;
+            }
         }
 
         if (calendarState.detailsOpen) {
@@ -10986,27 +12019,38 @@ async function handleCalendarQuickAdd() {
         } else {
             await loadCalendarMonth();
         }
+        clearInput();
         return;
     }
 
     const isEvent = parsed.is_event || false;
     if (parsed.is_phase) {
-        await createCalendarEvent({ title: parsed.title, is_phase: true });
+        const created = await createCalendarEvent({ title: parsed.title, is_phase: true });
+        if (!created) {
+            restoreInput();
+            return;
+        }
         if (calendarState.detailsOpen) {
             await loadCalendarDay(calendarState.selectedDay);
         } else {
             await loadCalendarMonth();
         }
+        clearInput();
         return;
     }
 
     if (parsed.is_group) {
-        await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
+        const created = await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
+        if (!created) {
+            restoreInput();
+            return;
+        }
         if (calendarState.detailsOpen) {
             await loadCalendarDay(calendarState.selectedDay);
         } else {
             await loadCalendarMonth();
         }
+        clearInput();
         return;
     }
 
@@ -11038,7 +12082,7 @@ async function handleCalendarQuickAdd() {
         }
     }
 
-    await createCalendarEvent({
+    const created = await createCalendarEvent({
         title: parsed.title,
         is_phase: false,
         is_event: isEvent,
@@ -11051,11 +12095,16 @@ async function handleCalendarQuickAdd() {
         phase_id: isEvent ? null : phaseId,
         rollover_enabled: parsed.rollover_enabled
     });
+    if (!created) {
+        restoreInput();
+        return;
+    }
     if (calendarState.detailsOpen) {
         await loadCalendarDay(calendarState.selectedDay);
     } else {
         await loadCalendarMonth();
     }
+    clearInput();
 }
 
 async function handleMonthQuickAdd() {
@@ -11063,10 +12112,19 @@ async function handleMonthQuickAdd() {
     const panel = document.getElementById('calendar-quick-add-panel');
     if (!input || !calendarState.selectedDay) return;
 
-    const parsed = parseCalendarQuickInput(input.value || '');
+    const rawValue = input.value || '';
+    const parsed = parseCalendarQuickInput(rawValue);
     if (!parsed) return;
 
-    input.value = '';
+    const restoreInput = () => {
+        input.value = rawValue;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    };
+    const clearInput = () => {
+        input.value = '';
+        input.focus();
+    };
 
     // Handle phase creation with task
     if (parsed.create_phase_with_task) {
@@ -11074,6 +12132,10 @@ async function handleMonthQuickAdd() {
             title: parsed.phase_name,
             is_phase: true
         });
+        if (!createdPhase) {
+            restoreInput();
+            return;
+        }
         const phaseId = createdPhase ? createdPhase.id : null;
 
         // Parse task text for all properties
@@ -11093,10 +12155,14 @@ async function handleMonthQuickAdd() {
                         is_phase: false
                     });
                     groupId = createdGroup ? createdGroup.id : null;
+                    if (!createdGroup) {
+                        restoreInput();
+                        return;
+                    }
                 }
             }
 
-            await createCalendarEvent({
+            const createdTask = await createCalendarEvent({
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
@@ -11109,10 +12175,15 @@ async function handleMonthQuickAdd() {
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
                 rollover_enabled: taskParsed.rollover_enabled
             });
+            if (!createdTask) {
+                restoreInput();
+                return;
+            }
         }
 
         await loadCalendarMonth();
         if (panel) panel.classList.add('is-hidden');
+        clearInput();
         return;
     }
 
@@ -11124,6 +12195,10 @@ async function handleMonthQuickAdd() {
             is_event: false,
             is_phase: false
         });
+        if (!createdGroup) {
+            restoreInput();
+            return;
+        }
         const groupId = createdGroup ? createdGroup.id : null;
 
         // Parse task text for all properties
@@ -11141,10 +12216,14 @@ async function handleMonthQuickAdd() {
                         is_phase: true
                     });
                     phaseId = createdPhase ? createdPhase.id : null;
+                    if (!createdPhase) {
+                        restoreInput();
+                        return;
+                    }
                 }
             }
 
-            await createCalendarEvent({
+            const createdTask = await createCalendarEvent({
                 title: taskParsed.title,
                 is_phase: false,
                 is_event: taskParsed.is_event || false,
@@ -11157,10 +12236,15 @@ async function handleMonthQuickAdd() {
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
                 rollover_enabled: taskParsed.rollover_enabled
             });
+            if (!createdTask) {
+                restoreInput();
+                return;
+            }
         }
 
         await loadCalendarMonth();
         if (panel) panel.classList.add('is-hidden');
+        clearInput();
         return;
     }
 
@@ -11170,16 +12254,26 @@ async function handleMonthQuickAdd() {
     await loadCalendarMonth();
 
     if (parsed.is_phase) {
-        await createCalendarEvent({ title: parsed.title, is_phase: true });
+        const created = await createCalendarEvent({ title: parsed.title, is_phase: true });
+        if (!created) {
+            restoreInput();
+            return;
+        }
         await loadCalendarMonth();
         if (panel) panel.classList.add('is-hidden');
+        clearInput();
         return;
     }
 
     if (parsed.is_group) {
-        await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
+        const created = await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
+        if (!created) {
+            restoreInput();
+            return;
+        }
         await loadCalendarMonth();
         if (panel) panel.classList.add('is-hidden');
+        clearInput();
         return;
     }
 
@@ -11192,6 +12286,10 @@ async function handleMonthQuickAdd() {
         } else {
             const createdPhase = await createCalendarEvent({ title: parsed.phase_name, is_phase: true });
             phaseId = createdPhase ? createdPhase.id : null;
+            if (!createdPhase) {
+                restoreInput();
+                return;
+            }
         }
     }
 
@@ -11204,10 +12302,14 @@ async function handleMonthQuickAdd() {
         } else {
             const createdGroup = await createCalendarEvent({ title: parsed.group_name, is_group: true, is_event: false, is_phase: false });
             finalGroupId = createdGroup ? createdGroup.id : null;
+            if (!createdGroup) {
+                restoreInput();
+                return;
+            }
         }
     }
 
-    await createCalendarEvent({
+    const created = await createCalendarEvent({
         title: parsed.title,
         is_phase: false,
         is_event: isEvent,
@@ -11220,9 +12322,14 @@ async function handleMonthQuickAdd() {
         phase_id: isEvent ? null : phaseId,
         rollover_enabled: parsed.rollover_enabled
     });
+    if (!created) {
+        restoreInput();
+        return;
+    }
 
     await loadCalendarMonth();
     if (panel) panel.classList.add('is-hidden');
+    clearInput();
 }
 
 async function fetchMonthEvents(dayStr) {
@@ -11306,6 +12413,8 @@ async function createCalendarEvent(payload, options = {}) {
                             }
                         }
                         resolve(result);
+                    }, () => {
+                        resolve(null);
                     });
                 });
             }
@@ -11453,7 +12562,7 @@ async function scheduleLocalReminders() {
         // Only cancel reminders for items we are about to reschedule (avoid wiping background-synced reminders)
         const cancelIds = new Set();
         calendarState.events.forEach((ev) => {
-            if (ev.status === 'done') return;
+            if (ev.status === 'done' || ev.status === 'canceled') return;
             if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
             const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
             cancelIds.add(reminderId);
@@ -11464,7 +12573,7 @@ async function scheduleLocalReminders() {
 
         // Schedule new notifications
         calendarState.events.forEach(async (ev) => {
-            if (ev.status === 'done') return;
+            if (ev.status === 'done' || ev.status === 'canceled') return;
             if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
 
             const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
@@ -11486,7 +12595,7 @@ async function scheduleLocalReminders() {
     } else {
         // Web mode: use setTimeout as before
         calendarState.events.forEach(ev => {
-            if (ev.status === 'done') return;
+            if (ev.status === 'done' || ev.status === 'canceled') return;
             if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
             const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
             const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
@@ -11847,6 +12956,11 @@ function initCalendarPage() {
     const itemNoteConvertBtn = document.getElementById('calendar-item-note-convert');
     const itemNoteSaveBtn = document.getElementById('calendar-item-note-save');
     const itemNoteCancelBtn = document.getElementById('calendar-item-note-cancel');
+    const searchToggleBtn = document.getElementById('calendar-search-toggle');
+    const searchPanel = document.getElementById('calendar-search-panel');
+    const searchInput = document.getElementById('calendar-search-input');
+    const searchClearBtn = document.getElementById('calendar-search-clear');
+    const searchResults = document.getElementById('calendar-search-results');
 
     const sortLabelMap = {
         time: 'Time',
@@ -11884,6 +12998,9 @@ function initCalendarPage() {
               }
               if (sortMenu && !e.target.closest('.calendar-sort-menu')) {
                   sortMenu.classList.remove('active');
+              }
+              if (!e.target.closest('.calendar-search')) {
+                  hideCalendarSearchResults();
               }
               // Also close all calendar item dropdowns
               if (!e.target.closest('.calendar-overflow-menu') && !e.target.closest('.calendar-item-dropdown')) {
@@ -11943,6 +13060,36 @@ function initCalendarPage() {
     };
     if (itemNoteInput) {
         itemNoteInput.addEventListener('input', updateCalendarItemNoteCounter);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => setCalendarSearchQuery(e.target.value));
+        searchInput.addEventListener('focus', () => renderCalendarSearchResults());
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                clearCalendarSearch();
+                searchInput.blur();
+            }
+        });
+    }
+    if (searchClearBtn) {
+        searchClearBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            clearCalendarSearch();
+            if (searchInput) {
+                searchInput.focus();
+            }
+        });
+    }
+    if (searchResults) {
+        searchResults.addEventListener('click', (e) => {
+            const item = e.target.closest('.calendar-search-item');
+            if (!item) return;
+            const day = item.getAttribute('data-day');
+            if (!day) return;
+            navigateToDayPage(day);
+            clearCalendarSearch();
+        });
     }
 
     if (prevBtn) prevBtn.onclick = () => {
@@ -12008,6 +13155,21 @@ function initCalendarPage() {
                 monthMenu.classList.remove('open');
             });
         });
+    }
+    if (searchToggleBtn) {
+        searchToggleBtn.onclick = () => {
+            if (!searchPanel) return;
+            const willOpen = searchPanel.classList.contains('is-hidden');
+            searchPanel.classList.toggle('is-hidden', !willOpen);
+            if (willOpen && searchInput) {
+                searchInput.focus();
+                searchInput.select();
+                renderCalendarSearchResults();
+            }
+            if (!willOpen) {
+                hideCalendarSearchResults();
+            }
+        };
     }
     function closeCalendarMonthMenu() {
         const menu = document.querySelector('.calendar-month-menu');
@@ -12820,6 +13982,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initDragAndDrop();
     normalizePhaseParents();
     organizePhaseDoneTasks();
+    organizePhaseBlockedTasks();
     organizeLightListDoneTasks();
     restorePhaseVisibility();
     initStickyListHeader();
@@ -14156,7 +15319,7 @@ async function verifyPin(pin) {
     const pendingAction = pinState.pendingAction;
 
     // Handle folder-related actions
-    if (folderId && (pendingAction === 'unlock_folder' || pendingAction === 'unprotect_folder' || pendingAction === 'delete_folder')) {
+    if (folderId && (pendingAction === 'unlock_folder' || pendingAction === 'unprotect_folder' || pendingAction === 'delete_folder' || pendingAction === 'archive_folder' || pendingAction === 'restore_folder')) {
         return await verifyFolderPin(pin, folderId, pendingAction);
     }
 
@@ -14179,6 +15342,50 @@ async function verifyPin(pin) {
                 pinState.pendingNoteId = null;
                 pinState.pendingAction = null;
                 showToast('Protection removed', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (pendingAction === 'archive') {
+            const res = await fetch(`/api/notes/${noteId}/archive`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingNoteId = null;
+                pinState.pendingAction = null;
+                showToast('Archived', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (pendingAction === 'restore') {
+            const res = await fetch(`/api/notes/${noteId}/restore`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingNoteId = null;
+                pinState.pendingAction = null;
+                showToast('Restored', 'success', 2000);
                 await loadNotesUnified();
                 return true;
             } else {
@@ -14282,6 +15489,52 @@ async function verifyFolderPin(pin, folderId, action) {
                 pinState.pendingFolderId = null;
                 pinState.pendingAction = null;
                 showToast('Folder deleted', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (action === 'archive_folder') {
+            const res = await fetch(`/api/note-folders/${folderId}/archive`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingFolderId = null;
+                pinState.pendingAction = null;
+                showToast('Folder archived', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (action === 'restore_folder') {
+            const res = await fetch(`/api/note-folders/${folderId}/restore`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingFolderId = null;
+                pinState.pendingAction = null;
+                showToast('Folder restored', 'success', 2000);
                 await loadNotesUnified();
                 return true;
             } else {
@@ -14511,6 +15764,94 @@ function updateProtectButton(isProtected) {
             if (icon) icon.className = 'fa-solid fa-lock';
             if (label) label.textContent = ' Protect';
         }
+    }
+}
+
+function updateArchiveButton(isArchived) {
+    const noteBtn = document.getElementById('note-archive-btn');
+    if (noteBtn) {
+        const icon = noteBtn.querySelector('i');
+        const label = noteBtn.querySelector('span');
+        if (isArchived) {
+            if (icon) icon.className = 'fa-solid fa-rotate-left';
+            if (label) label.textContent = ' Restore';
+        } else {
+            if (icon) icon.className = 'fa-solid fa-box-archive';
+            if (label) label.textContent = ' Archive';
+        }
+    }
+
+    const listBtn = document.getElementById('list-archive-btn');
+    if (listBtn) {
+        const icon = listBtn.querySelector('i');
+        const label = listBtn.querySelector('span');
+        if (isArchived) {
+            if (icon) icon.className = 'fa-solid fa-rotate-left';
+            if (label) label.textContent = ' Restore';
+        } else {
+            if (icon) icon.className = 'fa-solid fa-box-archive';
+            if (label) label.textContent = ' Archive';
+        }
+    }
+}
+
+async function toggleCurrentNoteArchive() {
+    const noteId = notesState.activeNoteId;
+    if (!noteId) {
+        showToast('No note selected', 'warning', 2000);
+        return;
+    }
+    const note = getNoteById(noteId) || (notesState.notes || [])[0];
+    const shouldArchive = !(note && note.is_archived);
+    if (note && note.is_pin_protected) {
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = shouldArchive ? 'archive' : 'restore';
+        openPinModal();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/notes/${noteId}/${shouldArchive ? 'archive' : 'restore'}`, { method: 'POST' });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        notesState.notes = [updated];
+        updateArchiveButton(!!updated.is_archived);
+        showToast(shouldArchive ? 'Archived' : 'Restored', 'success', 2000);
+        if (shouldArchive) {
+            window.location.href = getNoteReturnUrl();
+        }
+    } catch (e) {
+        console.error('Archive toggle failed:', e);
+        showToast('Failed to update archive state', 'error', 3000);
+    }
+}
+
+async function toggleCurrentListArchive() {
+    const listId = listState.listId;
+    if (!listId) {
+        showToast('No list selected', 'warning', 2000);
+        return;
+    }
+    const note = getNoteById(listId) || (notesState.notes || [])[0];
+    const shouldArchive = !(note && note.is_archived);
+    if (note && note.is_pin_protected) {
+        pinState.pendingNoteId = listId;
+        pinState.pendingAction = shouldArchive ? 'archive' : 'restore';
+        openPinModal();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/notes/${listId}/${shouldArchive ? 'archive' : 'restore'}`, { method: 'POST' });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        notesState.notes = [updated];
+        updateArchiveButton(!!updated.is_archived);
+        showToast(shouldArchive ? 'Archived' : 'Restored', 'success', 2000);
+        if (shouldArchive) {
+            window.location.href = getListReturnUrl();
+        }
+    } catch (e) {
+        console.error('Archive toggle failed:', e);
+        showToast('Failed to update archive state', 'error', 3000);
     }
 }
 

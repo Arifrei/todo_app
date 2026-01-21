@@ -198,6 +198,7 @@
 {% for item in items %}
     {% set parent_phase_id = item.phase_id if (item.phase_id and todo_list.type == 'list') else '' %}
     {% set tag_list = item.tag_list() %}
+    {% set is_blocked = (todo_list.type == 'list' and (item.id in blocked_ids) and (not item.is_phase) and item.status != 'phase') %}
     {% if todo_list.type == 'list' and item.is_phase %}
         {% set phase_tasks = item.phase_tasks
             |selectattr('is_phase', 'equalto', False)
@@ -206,7 +207,7 @@
         {% set phase_done = phase_tasks|selectattr('status', 'equalto', 'done')|list|length %}
         {% set phase_not_done = (phase_tasks|length) - phase_done %}
     {% endif %}
-    <div class="task-item {{ 'phase' if (todo_list.type == 'list' and item.is_phase) else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if (todo_list.type == 'list' and item.is_phase) else '' }}" data-phase-parent="{{ parent_phase_id }}" data-tags="{{ tag_list|join(',') if todo_list.type == 'list' else '' }}">
+    <div class="task-item {{ 'phase' if (todo_list.type == 'list' and item.is_phase) else '' }} {{ 'under-phase' if parent_phase_id else '' }} status-{{ item.status }}{% if is_blocked %} blocked-task{% endif %} {% if item.linked_list and item.linked_list.type == 'hub' %}item-is-hub{% endif %}" id="item-{{ item.id }}" data-status="{{ item.status }}" data-item-id="{{ item.id }}" data-phase-id="{{ item.id if (todo_list.type == 'list' and item.is_phase) else '' }}" data-phase-parent="{{ parent_phase_id }}" data-tags="{{ tag_list|join(',') if todo_list.type == 'list' else '' }}" data-deps="{% if todo_list.type == 'list' and not item.is_phase and item.status != 'phase' %}{{ item.dependencies|map(attribute='id')|list|join(',') }}{% endif %}"{% if is_blocked %} data-blocked="true"{% endif %}>
         <div class="task-content">
             <div class="drag-handle" title="Drag to reorder" data-drag-id="{{ item.id }}">
                 <i class="fa-solid fa-grip-lines"></i>
@@ -328,6 +329,12 @@
                             <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
                         </button>
+                        {% if todo_list.type == 'list' %}
+                        {% set dep_titles = item.dependencies|map(attribute='content')|list %}
+                        <button class="task-actions-menu-item" onclick="openDependencyModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);" {% if dep_titles %}title="Depends on: {{ dep_titles|join(', ') }}"{% endif %}>
+                            <i class="fa-solid fa-link"></i> Dependencies{% if dep_titles %} ({{ dep_titles|length }}){% endif %}
+                        </button>
+                        {% endif %}
                         <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
                         </button>
@@ -431,6 +438,24 @@
         <div class="modal-actions">
             <button class="btn" onclick="closeEditItemModal()">Cancel</button>
             <button class="btn btn-primary" onclick="saveItemChanges()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Dependency Picker Modal -->
+<div class="modal" id="dependency-modal">
+    <div class="modal-content">
+        <h2 id="dependency-title">Set Dependencies</h2>
+        <div class="form-hint" id="dependency-target-label"></div>
+        <div class="move-nav-header">
+            <button class="btn btn-secondary" id="dependency-back-button" style="display:none;" onclick="dependencyNavBack()">Back</button>
+        </div>
+        <div id="dependency-step-container" class="move-step-container">
+            <!-- Navigation options populated by JS -->
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeDependencyModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveDependencies()">Save</button>
         </div>
     </div>
 </div>
