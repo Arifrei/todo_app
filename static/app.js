@@ -85,9 +85,11 @@ let touchDragId = null;
 let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
-let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false };
+let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true };
+let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
 let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false };
+let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
 let noteAutoSaveTimer = null;
@@ -101,6 +103,670 @@ try {
 } catch (e) {
     noteFolderState.archivedOpen = false;
 }
+
+// Vault
+const vaultState = {
+    folders: [],
+    documents: [],
+    activeFolderId: null,
+    viewMode: localStorage.getItem('vaultViewMode') || 'grid',
+    search: '',
+    sort: 'recent',
+    stats: null
+};
+
+const vaultIconMap = {
+    image: 'fa-solid fa-file-image',
+    pdf: 'fa-solid fa-file-pdf',
+    document: 'fa-solid fa-file-word',
+    spreadsheet: 'fa-solid fa-file-excel',
+    presentation: 'fa-solid fa-file-powerpoint',
+    text: 'fa-solid fa-file-lines',
+    archive: 'fa-solid fa-file-zipper',
+    audio: 'fa-solid fa-file-audio',
+    video: 'fa-solid fa-file-video',
+    code: 'fa-solid fa-file-code',
+    other: 'fa-solid fa-file'
+};
+
+let vaultFabExpanded = false;
+
+function closeVaultFab() {
+    const fab = document.getElementById('vault-fab');
+    if (!fab) return;
+    vaultFabExpanded = false;
+    fab.classList.remove('expanded');
+}
+
+function initVaultFab() {
+    const fab = document.getElementById('vault-fab');
+    const mainBtn = document.getElementById('vault-fab-main');
+    const newFolderBtn = document.getElementById('vault-new-folder-btn');
+    const uploadBtn = document.getElementById('vault-upload-btn');
+    if (!fab || !mainBtn) return;
+
+    mainBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        vaultFabExpanded = !vaultFabExpanded;
+        fab.classList.toggle('expanded', vaultFabExpanded);
+    });
+
+    if (newFolderBtn) {
+        newFolderBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeVaultFab();
+            openVaultFolderModal();
+        });
+    }
+
+    if (uploadBtn) {
+        uploadBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeVaultFab();
+            openVaultUploadModal();
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!fab.contains(e.target)) {
+            closeVaultFab();
+        }
+    });
+}
+
+function vaultFormatFileSize(bytes) {
+    if (!bytes && bytes !== 0) return 'Unknown';
+    let size = bytes;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    for (const unit of units) {
+        if (size < 1024) {
+            return unit === 'B' ? `${Math.round(size)} ${unit}` : `${size.toFixed(1)} ${unit}`;
+        }
+        size /= 1024;
+    }
+    return `${size.toFixed(1)} PB`;
+}
+
+function vaultGetFolderById(folderId) {
+    return vaultState.folders.find(folder => folder.id === folderId);
+}
+
+function vaultBuildFolderPath(folderId) {
+    const path = [];
+    let current = vaultGetFolderById(folderId);
+    while (current) {
+        path.unshift(current);
+        current = vaultGetFolderById(current.parent_id);
+    }
+    return path;
+}
+
+function renderVaultBreadcrumb() {
+    const breadcrumb = document.getElementById('vault-breadcrumb');
+    if (!breadcrumb) return;
+    breadcrumb.innerHTML = '';
+    const root = document.createElement('span');
+    root.textContent = 'Vault';
+    root.addEventListener('click', () => vaultSetActiveFolder(null));
+    breadcrumb.appendChild(root);
+
+    const path = vaultBuildFolderPath(vaultState.activeFolderId);
+    path.forEach(folder => {
+        const sep = document.createElement('span');
+        sep.textContent = ' / ';
+        breadcrumb.appendChild(sep);
+
+        const crumb = document.createElement('span');
+        crumb.textContent = folder.name;
+        crumb.addEventListener('click', () => vaultSetActiveFolder(folder.id));
+        breadcrumb.appendChild(crumb);
+    });
+}
+
+function renderVaultStats() {
+    const statsEl = document.getElementById('vault-stats');
+    if (!statsEl) return;
+    if (!vaultState.stats) {
+        statsEl.textContent = '';
+        return;
+    }
+    statsEl.textContent = `${vaultState.stats.document_count} documents · ${vaultFormatFileSize(vaultState.stats.total_size)} used`;
+}
+
+function vaultGetActiveFolders() {
+    const parentId = vaultState.activeFolderId || null;
+    return vaultState.folders.filter(folder => (folder.parent_id || null) === parentId);
+}
+
+function vaultSortDocuments(items) {
+    const sorted = [...items];
+    if (vaultState.sort === 'title') {
+        sorted.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    } else if (vaultState.sort === 'size') {
+        sorted.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
+    } else if (vaultState.sort === 'type') {
+        sorted.sort((a, b) => (a.file_extension || '').localeCompare(b.file_extension || ''));
+    }
+    return sorted;
+}
+
+function renderVaultItems() {
+    const folderSection = document.getElementById('vault-folders-section');
+    const docSection = document.getElementById('vault-documents-section');
+    const folderContainer = document.getElementById('vault-folders');
+    const docContainer = document.getElementById('vault-documents');
+    const empty = document.getElementById('vault-empty');
+    if (!folderContainer || !docContainer || !empty) return;
+    const folders = vaultState.search ? [] : vaultGetActiveFolders();
+    const docs = vaultSortDocuments(vaultState.documents);
+    if (!folders.length && !docs.length) {
+        folderContainer.innerHTML = '';
+        docContainer.innerHTML = '';
+        if (folderSection) folderSection.style.display = 'none';
+        if (docSection) docSection.style.display = 'none';
+        empty.style.display = 'block';
+        return;
+    }
+    empty.style.display = 'none';
+    if (folderSection) folderSection.style.display = folders.length ? 'block' : 'none';
+    if (docSection) docSection.style.display = docs.length ? 'block' : 'none';
+    folderContainer.className = `vault-items ${vaultState.viewMode}`;
+    docContainer.className = `vault-items ${vaultState.viewMode}`;
+    folderContainer.innerHTML = '';
+    docContainer.innerHTML = '';
+
+    folders.forEach(folder => {
+        if (vaultState.viewMode === 'list') {
+            const row = document.createElement('div');
+            row.className = 'vault-row';
+            row.innerHTML = `
+                <div class="vault-row-main">
+                    <div class="vault-card-title"><i class="fa-solid fa-folder"></i> ${escapeHtml(folder.name)}</div>
+                    <div class="vault-row-meta">Folder</div>
+                </div>
+                <div class="vault-row-actions">
+                    <button class="vault-action-btn" title="Rename" type="button"><i class="fa-solid fa-pen"></i></button>
+                    <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
+                </div>
+            `;
+            row.querySelector('.vault-card-title').addEventListener('click', () => vaultSetActiveFolder(folder.id));
+            const [renameBtn, archiveBtn] = row.querySelectorAll('.vault-action-btn');
+            renameBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openVaultFolderModal(folder);
+            });
+            archiveBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vaultArchiveFolder(folder);
+            });
+            folderContainer.appendChild(row);
+            return;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'vault-card';
+        card.innerHTML = `
+            <div class="vault-card-icon folder"><i class="fa-solid fa-folder"></i></div>
+            <div class="vault-card-title">${escapeHtml(folder.name)}</div>
+            <div class="vault-card-meta">Folder</div>
+            <div class="vault-card-actions">
+                <button class="vault-action-btn" title="Rename" type="button"><i class="fa-solid fa-pen"></i></button>
+                <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
+                <button class="vault-action-btn" title="Open" type="button"><i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+        `;
+        const actions = card.querySelectorAll('.vault-action-btn');
+        actions[0].addEventListener('click', (e) => {
+            e.stopPropagation();
+            openVaultFolderModal(folder);
+        });
+        actions[1].addEventListener('click', (e) => {
+            e.stopPropagation();
+            vaultArchiveFolder(folder);
+        });
+        actions[2].addEventListener('click', (e) => {
+            e.stopPropagation();
+            vaultSetActiveFolder(folder.id);
+        });
+        card.addEventListener('click', () => vaultSetActiveFolder(folder.id));
+        folderContainer.appendChild(card);
+    });
+
+    docs.forEach(doc => {
+        const iconClass = vaultIconMap[doc.file_category] || vaultIconMap.other;
+        if (vaultState.viewMode === 'list') {
+            const row = document.createElement('div');
+            row.className = 'vault-row';
+            row.innerHTML = `
+                <div class="vault-row-main">
+                    <div class="vault-card-title"><i class="${iconClass}"></i> ${escapeHtml(doc.title)}</div>
+                    <div class="vault-row-meta">${escapeHtml(doc.original_filename)} · ${doc.file_size_formatted}</div>
+                </div>
+                <div class="vault-row-actions">
+                    <button class="vault-action-btn" title="Pin" type="button"><i class="fa-solid fa-thumbtack"></i></button>
+                    <button class="vault-action-btn" title="Open" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+                    <button class="vault-action-btn" title="Download" type="button"><i class="fa-solid fa-download"></i></button>
+                    <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
+                </div>
+            `;
+            row.querySelector('.vault-card-title').addEventListener('click', () => vaultOpenDoc(doc));
+            const [pinBtn, openBtn, downloadBtn, archiveBtn] = row.querySelectorAll('.vault-action-btn');
+            pinBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vaultTogglePin(doc);
+            });
+            openBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vaultOpenDoc(doc);
+            });
+            downloadBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vaultDownloadDoc(doc);
+            });
+            archiveBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vaultArchiveDoc(doc);
+            });
+            docContainer.appendChild(row);
+            return;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'vault-card';
+        card.innerHTML = `
+            <div class="vault-card-icon"><i class="${iconClass}"></i></div>
+            <div class="vault-card-title">${escapeHtml(doc.title)}</div>
+            <div class="vault-card-meta">${escapeHtml(doc.original_filename)}</div>
+            <div class="vault-card-meta">${doc.file_size_formatted} · ${new Date(doc.created_at).toLocaleDateString()}</div>
+            <div class="vault-card-actions">
+                <button class="vault-action-btn" title="Pin" type="button"><i class="fa-solid fa-thumbtack"></i></button>
+                <button class="vault-action-btn" title="Open" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+                <button class="vault-action-btn" title="Download" type="button"><i class="fa-solid fa-download"></i></button>
+                <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
+            </div>
+        `;
+        const actions = card.querySelectorAll('.vault-action-btn');
+        actions[0].addEventListener('click', (e) => {
+            e.stopPropagation();
+            vaultTogglePin(doc);
+        });
+        actions[1].addEventListener('click', (e) => {
+            e.stopPropagation();
+            vaultOpenDoc(doc);
+        });
+        actions[2].addEventListener('click', (e) => {
+            e.stopPropagation();
+            vaultDownloadDoc(doc);
+        });
+        actions[3].addEventListener('click', (e) => {
+            e.stopPropagation();
+            vaultArchiveDoc(doc);
+        });
+        card.addEventListener('click', () => vaultOpenDoc(doc));
+        docContainer.appendChild(card);
+    });
+}
+
+async function loadVaultFolders() {
+    try {
+        const res = await fetch('/api/vault/folders');
+        if (!res.ok) throw new Error('Folder load failed');
+        vaultState.folders = await res.json();
+        renderVaultBreadcrumb();
+        populateVaultFolderSelect();
+        renderVaultItems();
+        updateVaultUpButton();
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function loadVaultDocuments() {
+    const query = vaultState.search ? `/api/vault/search?q=${encodeURIComponent(vaultState.search)}` : `/api/vault/documents?folder_id=${vaultState.activeFolderId || ''}`;
+    try {
+        const res = await fetch(query);
+        if (!res.ok) throw new Error('Document load failed');
+        vaultState.documents = await res.json();
+        renderVaultItems();
+    } catch (err) {
+        console.error(err);
+        showToast('Could not load documents', 'error');
+    }
+}
+
+async function loadVaultStats() {
+    try {
+        const res = await fetch('/api/vault/stats');
+        if (!res.ok) throw new Error('Stats load failed');
+        vaultState.stats = await res.json();
+        renderVaultStats();
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+function vaultSetActiveFolder(folderId) {
+    vaultState.activeFolderId = folderId;
+    renderVaultBreadcrumb();
+    loadVaultDocuments();
+    renderVaultItems();
+    updateVaultUpButton();
+}
+
+function populateVaultFolderSelect() {
+    const select = document.getElementById('vault-folder-select');
+    if (!select) return;
+    select.innerHTML = '<option value="">Root</option>';
+    const buildOptions = (parentId, prefix) => {
+        vaultState.folders
+            .filter(folder => (folder.parent_id || null) === parentId)
+            .forEach(folder => {
+                const option = document.createElement('option');
+                option.value = folder.id;
+                option.textContent = `${prefix}${folder.name}`;
+                select.appendChild(option);
+                buildOptions(folder.id, `${prefix}- `);
+            });
+    };
+    buildOptions(null, '');
+}
+
+function vaultApplyViewMode() {
+    localStorage.setItem('vaultViewMode', vaultState.viewMode);
+    const toggle = document.getElementById('vault-view-toggle');
+    if (toggle) {
+        const icon = toggle.querySelector('i');
+        if (vaultState.viewMode === 'grid') {
+            icon.className = 'fa-solid fa-table-cells';
+        } else {
+            icon.className = 'fa-solid fa-list';
+        }
+    }
+    renderVaultItems();
+}
+
+function vaultToggleView() {
+    vaultState.viewMode = vaultState.viewMode === 'grid' ? 'list' : 'grid';
+    vaultApplyViewMode();
+}
+
+function openVaultFolderModal(folder = null) {
+    const modal = document.getElementById('vault-folder-modal');
+    const title = document.getElementById('vault-folder-modal-title');
+    const nameInput = document.getElementById('vault-folder-name');
+    const idInput = document.getElementById('vault-folder-id');
+    if (!modal || !title || !nameInput || !idInput) return;
+    title.textContent = folder ? 'Rename Folder' : 'New Folder';
+    nameInput.value = folder ? folder.name : '';
+    idInput.value = folder ? folder.id : '';
+    modal.classList.add('active');
+}
+
+function closeVaultFolderModal() {
+    const modal = document.getElementById('vault-folder-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function saveVaultFolder() {
+    const nameInput = document.getElementById('vault-folder-name');
+    const idInput = document.getElementById('vault-folder-id');
+    if (!nameInput) return;
+    const name = nameInput.value.trim();
+    if (!name) {
+        showToast('Folder name is required', 'warning');
+        return;
+    }
+    try {
+        let res;
+        if (idInput && idInput.value) {
+            res = await fetch(`/api/vault/folders/${idInput.value}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+        } else {
+            res = await fetch('/api/vault/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, parent_id: vaultState.activeFolderId })
+            });
+        }
+        if (!res.ok) throw new Error('Folder save failed');
+        await loadVaultFolders();
+        closeVaultFolderModal();
+        showToast('Folder saved', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not save folder', 'error');
+    }
+}
+
+function openVaultUploadModal() {
+    const modal = document.getElementById('vault-upload-modal');
+    if (modal) modal.classList.add('active');
+    const titleInput = document.getElementById('vault-title-input');
+    const tagsInput = document.getElementById('vault-tags-input');
+    if (titleInput) titleInput.value = '';
+    if (tagsInput) tagsInput.value = '';
+}
+
+function closeVaultUploadModal() {
+    const modal = document.getElementById('vault-upload-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+function vaultDownloadDoc(doc) {
+    window.location.href = `/api/vault/documents/${doc.id}/download`;
+}
+
+async function vaultTogglePin(doc) {
+    try {
+        const res = await fetch(`/api/vault/documents/${doc.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned: !doc.pinned })
+        });
+        if (!res.ok) throw new Error('Pin failed');
+        const updated = await res.json();
+        const idx = vaultState.documents.findIndex(item => item.id === updated.id);
+        if (idx !== -1) vaultState.documents[idx] = updated;
+        renderVaultItems();
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update pin', 'error');
+    }
+}
+
+function vaultOpenDoc(doc) {
+    const previewTypes = ['image', 'pdf', 'text', 'audio', 'video', 'code'];
+    const path = previewTypes.includes(doc.file_category)
+        ? `/api/vault/documents/${doc.id}/preview`
+        : `/api/vault/documents/${doc.id}/download`;
+    window.open(path, '_blank', 'noopener');
+}
+
+function vaultArchiveDoc(doc) {
+    openConfirmModal(`Archive "${doc.title}"?`, async () => {
+        try {
+            const res = await fetch(`/api/vault/documents/${doc.id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Archive failed');
+            vaultState.documents = vaultState.documents.filter(item => item.id !== doc.id);
+            renderVaultItems();
+            showToast('Archived', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not archive document', 'error');
+        }
+    });
+}
+
+function vaultArchiveFolder(folder) {
+    openConfirmModal(`Archive folder "${folder.name}"?`, async () => {
+        try {
+            const res = await fetch(`/api/vault/folders/${folder.id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Archive failed');
+            await loadVaultFolders();
+            if (vaultState.activeFolderId === folder.id) {
+                vaultSetActiveFolder(null);
+            } else {
+                loadVaultDocuments();
+            }
+            showToast('Folder archived', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not archive folder', 'error');
+        }
+    });
+}
+
+function vaultHandleUpload() {
+    const fileInput = document.getElementById('vault-file-input');
+    if (!fileInput || !fileInput.files.length) {
+        showToast('Select at least one file', 'warning');
+        return;
+    }
+    const formData = new FormData();
+    [...fileInput.files].forEach(file => formData.append('files', file));
+    const titleInput = document.getElementById('vault-title-input');
+    const tagsInput = document.getElementById('vault-tags-input');
+    const folderSelect = document.getElementById('vault-folder-select');
+    if (titleInput && titleInput.value.trim()) formData.append('title', titleInput.value.trim());
+    if (tagsInput && tagsInput.value.trim()) formData.append('tags', tagsInput.value.trim());
+    if (folderSelect) formData.append('folder_id', folderSelect.value || '');
+
+    const progressWrap = document.getElementById('vault-upload-progress');
+    const progressBar = document.getElementById('vault-upload-bar');
+    if (progressWrap && progressBar) {
+        progressWrap.style.display = 'block';
+        progressBar.style.width = '0%';
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/vault/documents');
+    xhr.upload.addEventListener('progress', (evt) => {
+        if (!progressBar || !evt.lengthComputable) return;
+        const percent = Math.round((evt.loaded / evt.total) * 100);
+        progressBar.style.width = `${percent}%`;
+    });
+    xhr.onload = async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            showToast('Upload complete', 'success');
+            closeVaultUploadModal();
+            fileInput.value = '';
+            await loadVaultDocuments();
+            await loadVaultStats();
+        } else {
+            showToast('Upload failed', 'error');
+        }
+        if (progressWrap) progressWrap.style.display = 'none';
+    };
+    xhr.onerror = () => {
+        showToast('Upload failed', 'error');
+        if (progressWrap) progressWrap.style.display = 'none';
+    };
+    xhr.send(formData);
+}
+
+function bindVaultDropZone() {
+    const dropZone = document.getElementById('vault-drop-zone');
+    const fileInput = document.getElementById('vault-file-input');
+    if (!dropZone || !fileInput) return;
+    ['dragenter', 'dragover'].forEach(evt => {
+        dropZone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+        dropZone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+        });
+    });
+    dropZone.addEventListener('drop', (e) => {
+        if (e.dataTransfer && e.dataTransfer.files.length) {
+            fileInput.files = e.dataTransfer.files;
+        }
+    });
+}
+
+function updateVaultUpButton() {
+    const upBtn = document.getElementById('vault-up-btn');
+    if (!upBtn) return;
+    if (!vaultState.activeFolderId) {
+        upBtn.style.display = 'none';
+        return;
+    }
+    upBtn.style.display = 'inline-flex';
+    const current = vaultGetFolderById(vaultState.activeFolderId);
+    upBtn.onclick = () => vaultSetActiveFolder(current ? current.parent_id : null);
+}
+
+function toggleVaultFilters() {
+    const panel = document.getElementById('vault-filters');
+    if (!panel) return;
+    panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+}
+
+function toggleVaultSearch() {
+    const panel = document.getElementById('vault-search-panel');
+    if (!panel) return;
+    const shouldShow = panel.style.display === 'none';
+    panel.style.display = shouldShow ? 'flex' : 'none';
+    if (shouldShow) {
+        const input = document.getElementById('vault-search-input');
+        if (input) input.focus();
+    }
+}
+
+function initVaultPage() {
+    if (!document.querySelector('.vault-page')) return;
+    const viewToggle = document.getElementById('vault-view-toggle');
+    const filterToggle = document.getElementById('vault-filter-toggle');
+    const searchToggle = document.getElementById('vault-search-toggle');
+    const folderSave = document.getElementById('vault-folder-save');
+    const folderCancel = document.getElementById('vault-folder-cancel');
+    const uploadCancel = document.getElementById('vault-upload-cancel');
+    const uploadSubmit = document.getElementById('vault-upload-submit');
+    const browseBtn = document.getElementById('vault-browse-btn');
+    const fileInput = document.getElementById('vault-file-input');
+    const searchInput = document.getElementById('vault-search-input');
+    const sortSelect = document.getElementById('vault-sort-select');
+
+    if (viewToggle) viewToggle.addEventListener('click', vaultToggleView);
+    if (filterToggle) filterToggle.addEventListener('click', toggleVaultFilters);
+    if (searchToggle) searchToggle.addEventListener('click', toggleVaultSearch);
+    if (folderSave) folderSave.addEventListener('click', saveVaultFolder);
+    if (folderCancel) folderCancel.addEventListener('click', closeVaultFolderModal);
+    if (uploadCancel) uploadCancel.addEventListener('click', closeVaultUploadModal);
+    if (uploadSubmit) uploadSubmit.addEventListener('click', vaultHandleUpload);
+    if (browseBtn && fileInput) browseBtn.addEventListener('click', () => fileInput.click());
+
+    if (searchInput) {
+        let searchTimer;
+        searchInput.addEventListener('input', (e) => {
+            vaultState.search = e.target.value.trim();
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(loadVaultDocuments, 250);
+        });
+    }
+
+    if (sortSelect) {
+        sortSelect.addEventListener('change', (e) => {
+            vaultState.sort = e.target.value;
+            renderVaultItems();
+        });
+    }
+
+    bindVaultDropZone();
+    vaultApplyViewMode();
+    initVaultFab();
+    loadVaultFolders();
+    loadVaultDocuments();
+    loadVaultStats();
+}
+
+document.addEventListener('DOMContentLoaded', initVaultPage);
 
 let readOnlyToastAt = 0;
 function showReadOnlyToast() {
@@ -5259,6 +5925,7 @@ function initNoteEditorPage() {
     const noteId = getNoteEditorNoteId();
 
     const protectBtn = document.getElementById('note-protect-btn');
+    const visibilityBtn = document.getElementById('note-visibility-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
@@ -5268,6 +5935,7 @@ function initNoteEditorPage() {
     if (cleanupRestoreBtn) cleanupRestoreBtn.addEventListener('click', () => restoreNoteCleanup());
     if (convertBtn) convertBtn.addEventListener('click', () => convertCurrentNoteToList());
     if (protectBtn) protectBtn.addEventListener('click', () => toggleNoteProtection());
+    if (visibilityBtn) visibilityBtn.addEventListener('click', () => toggleNoteVisibility());
     if (archiveBtn) archiveBtn.addEventListener('click', () => toggleCurrentNoteArchive());
     if (backBtn) backBtn.addEventListener('click', () => handleNoteBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleNoteExit());
@@ -5290,13 +5958,30 @@ function initNoteEditorPage() {
         });
     }
 
-    editor.addEventListener('input', () => {
+    editor.addEventListener('input', (e) => {
         if (notesState.activeNoteIsArchived) {
             showReadOnlyToast();
             return;
         }
+        tryConvertBracketLink(editor, e);
+        tryConvertMarkdownLink(editor, e);
         refreshNoteDirtyState();
         autoGenerateTitle();
+    });
+    editor.addEventListener('click', (e) => {
+        const link = e.target.closest('a.note-link');
+        if (!link) return;
+        e.preventDefault();
+        handleNoteLinkClick(link);
+    });
+    editor.addEventListener('click', (e) => {
+        const link = e.target.closest('a.external-link');
+        if (!link) return;
+        e.preventDefault();
+        const href = link.getAttribute('href') || '';
+        if (href) {
+            window.open(href, '_blank', 'noopener,noreferrer');
+        }
     });
     editor.addEventListener('beforeinput', (e) => {
         if (!notesState.activeNoteIsArchived) return;
@@ -5333,6 +6018,7 @@ function initNoteEditorPage() {
     });
 
     bindNoteToolbar();
+    setupNoteLinkModalControls();
     setupNoteExitAutosave();
 
     if (noteId) {
@@ -5369,6 +6055,332 @@ function setNoteEditorReadOnly(isReadOnly) {
     }
 }
 
+function updateNoteVisibilityButton(isListed) {
+    const visibilityBtn = document.getElementById('note-visibility-btn');
+    if (!visibilityBtn) return;
+    const icon = visibilityBtn.querySelector('i');
+    const label = visibilityBtn.querySelector('span');
+    if (isListed) {
+        if (icon) icon.className = 'fa-solid fa-eye-slash';
+        if (label) label.textContent = 'Hide from notes list';
+    } else {
+        if (icon) icon.className = 'fa-solid fa-eye';
+        if (label) label.textContent = 'Show in notes list';
+    }
+}
+
+async function toggleNoteVisibility() {
+    const noteId = notesState.activeNoteId;
+    if (!noteId) {
+        notesState.activeNoteIsListed = !notesState.activeNoteIsListed;
+        updateNoteVisibilityButton(notesState.activeNoteIsListed);
+        showToast(notesState.activeNoteIsListed ? 'Will show in notes list.' : 'Will be linked-only.', 'info', 2000);
+        return;
+    }
+    const note = notesState.notes.find(n => n.id === noteId);
+    const nextListed = !(note && note.is_listed);
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_listed: nextListed })
+        });
+        if (!res.ok) throw new Error('Failed to update visibility');
+        const updated = await res.json();
+        notesState.notes = notesState.notes.map(n => n.id === updated.id ? updated : n);
+        updateNoteVisibilityButton(!!updated.is_listed);
+        showToast(updated.is_listed ? 'Note is now listed.' : 'Note is now linked-only.', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to update visibility:', err);
+        showToast('Could not update visibility.', 'error', 2500);
+    }
+}
+
+function tryConvertBracketLink(editor, event) {
+    if (!event || event.inputType !== 'insertText' || event.data !== ']') return false;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed) return false;
+    const node = range.startContainer;
+    if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+    const text = node.nodeValue || '';
+    const offset = range.startOffset;
+    if (offset < 2 || text.slice(offset - 2, offset) !== ']]') return false;
+    const before = text.slice(0, offset - 2);
+    const openIndex = before.lastIndexOf('[[');
+    if (openIndex === -1) return false;
+    const rawTitle = before.slice(openIndex + 2);
+    const title = rawTitle.trim();
+    if (!title || title.includes('\n')) return false;
+
+    const prefix = text.slice(0, openIndex);
+    const suffix = text.slice(offset);
+    const parent = node.parentNode;
+    if (!parent) return false;
+
+    const link = document.createElement('a');
+    link.className = 'note-link';
+    link.setAttribute('data-note-title', title);
+    link.setAttribute('href', '#');
+    link.textContent = title;
+
+    const fragment = document.createDocumentFragment();
+    if (prefix) fragment.appendChild(document.createTextNode(prefix));
+    fragment.appendChild(link);
+    if (suffix) fragment.appendChild(document.createTextNode(suffix));
+    parent.insertBefore(fragment, node);
+    parent.removeChild(node);
+
+    const newRange = document.createRange();
+    newRange.setStartAfter(link);
+    newRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(newRange);
+    return true;
+}
+
+function tryConvertMarkdownLink(editor, event) {
+    if (!event || event.inputType !== 'insertText' || event.data !== ')') return false;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed) return false;
+    const node = range.startContainer;
+    if (!node || node.nodeType !== Node.TEXT_NODE) return false;
+    const text = node.nodeValue || '';
+    const offset = range.startOffset;
+    const before = text.slice(0, offset);
+    const match = before.match(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)$/i);
+    if (!match) return false;
+    const label = match[1].trim();
+    const url = match[2].trim();
+    if (!label || !url) return false;
+
+    const startIndex = before.lastIndexOf(match[0]);
+    const prefix = text.slice(0, startIndex);
+    const suffix = text.slice(offset);
+    const parent = node.parentNode;
+    if (!parent) return false;
+
+    const link = document.createElement('a');
+    link.className = 'external-link';
+    link.setAttribute('href', url);
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noopener noreferrer');
+    link.textContent = label;
+
+    const fragment = document.createDocumentFragment();
+    if (prefix) fragment.appendChild(document.createTextNode(prefix));
+    fragment.appendChild(link);
+    if (suffix) fragment.appendChild(document.createTextNode(suffix));
+    parent.insertBefore(fragment, node);
+    parent.removeChild(node);
+
+    const newRange = document.createRange();
+    newRange.setStartAfter(link);
+    newRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(newRange);
+    return true;
+}
+
+async function ensureActiveNoteIdForLink() {
+    if (notesState.activeNoteId) return notesState.activeNoteId;
+    if (notesState.activeNoteIsArchived) return null;
+    if (notesState.dirty || noteHasContent()) {
+        await saveCurrentNote({ silent: true, keepOpen: true });
+    }
+    if (notesState.activeNoteId) return notesState.activeNoteId;
+
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    if (!editor || !titleInput) return null;
+    const title = titleInput.value.trim() || titleInput.placeholder || 'Untitled Note';
+    const payload = {
+        title: title,
+        content: editor.innerHTML.trim(),
+        folder_id: notesState.activeFolderId
+    };
+    if (!noteId) {
+        payload.is_listed = notesState.activeNoteIsListed;
+    }
+    try {
+        const res = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Failed to create note');
+        const newNote = await res.json();
+    notesState.notes = [newNote, ...notesState.notes];
+    notesState.activeNoteId = newNote.id;
+    notesState.activeNoteIsListed = !!newNote.is_listed;
+        notesState.activeSnapshot = { title: payload.title, content: payload.content };
+        setNoteDirty(false);
+        return newNote.id;
+    } catch (err) {
+        console.error('Failed to create note for link:', err);
+        showToast('Save this note before linking.', 'warning', 2500);
+        return null;
+    }
+}
+
+async function handleNoteLinkClick(linkEl) {
+    const existingId = parseInt(linkEl.dataset.noteId || '', 10);
+    if (existingId) {
+        openNoteInEditor(existingId);
+        return;
+    }
+    const title = (linkEl.dataset.noteTitle || linkEl.textContent || '').trim();
+    if (!title) return;
+    const sourceNoteId = await ensureActiveNoteIdForLink();
+    if (!sourceNoteId) return;
+
+    try {
+        const res = await fetch('/api/notes/resolve-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_note_id: sourceNoteId,
+                title: title,
+                folder_id: notesState.activeFolderId
+            })
+        });
+        if (!res.ok) throw new Error('Failed to resolve link');
+        const data = await res.json();
+        if (data.status === 'choose') {
+            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId);
+            return;
+        }
+        if (data.note) {
+            applyResolvedNoteLink(linkEl, data.note);
+            openNoteInEditor(data.note.id);
+        }
+    } catch (err) {
+        console.error('Failed to resolve note link:', err);
+        showToast('Could not resolve that link.', 'error', 2500);
+    }
+}
+
+function applyResolvedNoteLink(linkEl, note) {
+    if (!linkEl || !note) return;
+    linkEl.dataset.noteId = note.id;
+    linkEl.dataset.noteTitle = note.title || linkEl.textContent || '';
+    linkEl.setAttribute('href', `/notes/${note.id}`);
+    setNoteDirty(true);
+}
+
+function openNoteLinkModal(anchor, title, matches, sourceNoteId) {
+    const modal = document.getElementById('note-link-modal');
+    const listEl = document.getElementById('note-link-match-list');
+    const titleEl = document.getElementById('note-link-modal-title');
+    const subtitleEl = document.getElementById('note-link-modal-subtitle');
+    if (!modal || !listEl) return;
+
+    noteLinkState = { anchor, title, matches: matches || [], sourceNoteId };
+    if (titleEl) titleEl.textContent = `Link: ${title}`;
+    if (subtitleEl) {
+        subtitleEl.textContent = (matches && matches.length)
+            ? 'Select an existing note or create a new one.'
+            : 'No exact matches found. Create a new note?';
+    }
+
+    listEl.innerHTML = '';
+    if (matches && matches.length) {
+        matches.forEach(match => {
+            const option = document.createElement('div');
+            option.className = 'note-link-option';
+            option.innerHTML = `
+                <div>
+                    <div class="note-link-option-title">${escapeHtml(match.title || 'Untitled Note')}</div>
+                    <div class="note-link-option-meta">${match.is_listed ? 'Listed' : 'Linked-only'}</div>
+                </div>
+                <i class="fa-solid fa-arrow-right"></i>
+            `;
+            option.onclick = () => selectNoteLinkMatch(match.id);
+            listEl.appendChild(option);
+        });
+    } else {
+        listEl.innerHTML = '<div class="note-chooser-empty">No matching notes.</div>';
+    }
+
+    modal.classList.add('active');
+}
+
+function closeNoteLinkModal() {
+    const modal = document.getElementById('note-link-modal');
+    if (modal) modal.classList.remove('active');
+    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null };
+}
+
+function setupNoteLinkModalControls() {
+    const modal = document.getElementById('note-link-modal');
+    const cancelBtn = document.getElementById('note-link-cancel-btn');
+    const createListedBtn = document.getElementById('note-link-create-listed-btn');
+    const createHiddenBtn = document.getElementById('note-link-create-hidden-btn');
+    if (!modal) return;
+
+    if (cancelBtn) cancelBtn.onclick = () => closeNoteLinkModal();
+    if (createListedBtn) createListedBtn.onclick = () => createNoteFromLinkModal(true);
+    if (createHiddenBtn) createHiddenBtn.onclick = () => createNoteFromLinkModal(false);
+    modal.onclick = (e) => {
+        if (e.target === modal) closeNoteLinkModal();
+    };
+}
+
+async function selectNoteLinkMatch(targetId) {
+    const { anchor, sourceNoteId } = noteLinkState;
+    if (!anchor || !sourceNoteId || !targetId) return;
+    try {
+        const res = await fetch('/api/notes/resolve-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_note_id: sourceNoteId,
+                target_note_id: targetId
+            })
+        });
+        if (!res.ok) throw new Error('Failed to link note');
+        const data = await res.json();
+        if (data.note) {
+            applyResolvedNoteLink(anchor, data.note);
+            closeNoteLinkModal();
+            openNoteInEditor(data.note.id);
+        }
+    } catch (err) {
+        console.error('Failed to link note:', err);
+        showToast('Could not link that note.', 'error', 2500);
+    }
+}
+
+async function createNoteFromLinkModal(isListed) {
+    const { anchor, title, sourceNoteId } = noteLinkState;
+    if (!anchor || !sourceNoteId || !title) return;
+    try {
+        const res = await fetch('/api/notes/resolve-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_note_id: sourceNoteId,
+                title: title,
+                is_listed: isListed,
+                folder_id: notesState.activeFolderId
+            })
+        });
+        if (!res.ok) throw new Error('Failed to create linked note');
+        const data = await res.json();
+        if (data.note) {
+            applyResolvedNoteLink(anchor, data.note);
+            closeNoteLinkModal();
+            openNoteInEditor(data.note.id);
+        }
+    } catch (err) {
+        console.error('Failed to create linked note:', err);
+        showToast('Could not create that note.', 'error', 2500);
+    }
+}
+
 function initListEditorPage() {
     const titleInput = document.getElementById('list-title');
     const checkboxToggle = document.getElementById('list-checkbox-toggle');
@@ -5384,6 +6396,7 @@ function initListEditorPage() {
     const notesBtn = document.getElementById('list-notes-btn');
     const actionsToggle = document.getElementById('list-actions-toggle');
     const actionsMenu = document.getElementById('list-actions-menu');
+    const duplicatesBtn = document.getElementById('list-duplicates-btn');
     const stack = document.getElementById('list-pill-stack');
     const selectToggle = document.getElementById('list-select-toggle');
     const bulkMoveBtn = document.getElementById('list-bulk-move-btn');
@@ -5396,6 +6409,9 @@ function initListEditorPage() {
     const sectionTitleInput = document.getElementById('list-section-title');
     const sectionSaveBtn = document.getElementById('list-section-save-btn');
     const sectionCancelBtn = document.getElementById('list-section-cancel-btn');
+    const duplicatesModal = document.getElementById('list-duplicates-modal');
+    const duplicatesCloseBtn = document.getElementById('list-duplicates-close-btn');
+    const duplicatesDeleteSelectedBtn = document.getElementById('list-duplicates-delete-selected-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveListMetadata({ closeAfter: true }));
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
@@ -5404,6 +6420,7 @@ function initListEditorPage() {
     if (archiveBtn) archiveBtn.addEventListener('click', () => toggleCurrentListArchive());
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
+    if (duplicatesBtn) duplicatesBtn.addEventListener('click', () => openListDuplicatesModal());
     if (selectToggle) selectToggle.addEventListener('click', () => toggleListSelectionMode());
     if (bulkMoveBtn) {
         bulkMoveBtn.addEventListener('click', (e) => {
@@ -5452,6 +6469,8 @@ function initListEditorPage() {
     }
     if (sectionSaveBtn) sectionSaveBtn.addEventListener('click', () => submitListSectionModal());
     if (sectionCancelBtn) sectionCancelBtn.addEventListener('click', () => closeListSectionModal());
+    if (duplicatesCloseBtn) duplicatesCloseBtn.addEventListener('click', () => closeListDuplicatesModal());
+    if (duplicatesDeleteSelectedBtn) duplicatesDeleteSelectedBtn.addEventListener('click', () => deleteSelectedDuplicateItems());
     if (sectionTitleInput) {
         sectionTitleInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
@@ -5467,6 +6486,11 @@ function initListEditorPage() {
     if (sectionModal) {
         sectionModal.addEventListener('click', (e) => {
             if (e.target === sectionModal) closeListSectionModal();
+        });
+    }
+    if (duplicatesModal) {
+        duplicatesModal.addEventListener('click', (e) => {
+            if (e.target === duplicatesModal) closeListDuplicatesModal();
         });
     }
 
@@ -7033,6 +8057,205 @@ async function deleteListItem(itemId) {
     if (updatedLabel) updatedLabel.textContent = formatNoteDate(new Date().toISOString());
 }
 
+function closeListDuplicatesModal() {
+    const modal = document.getElementById('list-duplicates-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+function updateListDuplicatesSubtitle() {
+    const subtitle = document.getElementById('list-duplicates-subtitle');
+    if (!subtitle) return;
+    if (listDuplicateState.method === 'embeddings') {
+        subtitle.textContent = 'AI similarity scan (embedding-based). Review matches before deleting.';
+    } else if (listDuplicateState.method === 'fuzzy') {
+        subtitle.textContent = 'Fuzzy text scan. Review matches before deleting.';
+    } else {
+        subtitle.textContent = 'Scan your list for possible duplicates.';
+    }
+}
+
+function updateListDuplicatesDeleteButton() {
+    const btn = document.getElementById('list-duplicates-delete-selected-btn');
+    if (!btn) return;
+    const count = listDuplicateState.selectedIds.size;
+    btn.disabled = count === 0;
+    btn.textContent = count ? `Delete selected (${count})` : 'Delete selected';
+}
+
+function removeDuplicateItemFromState(itemId) {
+    const nextGroups = [];
+    listDuplicateState.groups.forEach(group => {
+        const remaining = group.items.filter(item => item.id !== itemId);
+        if (remaining.length > 1) {
+            nextGroups.push({ ...group, items: remaining });
+        }
+    });
+    listDuplicateState.groups = nextGroups;
+}
+
+function removeDuplicateSelectionsFromState(itemIds) {
+    const removeSet = new Set(itemIds);
+    listDuplicateState.selectedIds = new Set(
+        Array.from(listDuplicateState.selectedIds).filter(id => !removeSet.has(id))
+    );
+    removeSet.forEach(id => removeDuplicateItemFromState(id));
+    updateListDuplicatesDeleteButton();
+}
+
+function renderListDuplicates() {
+    const list = document.getElementById('list-duplicates-list');
+    if (!list) return;
+    list.innerHTML = '';
+    updateListDuplicatesSubtitle();
+    updateListDuplicatesDeleteButton();
+    if (!listDuplicateState.groups.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.innerHTML = '<p style="color: var(--text-muted); margin: 0;">No duplicates found.</p>';
+        list.appendChild(empty);
+        return;
+    }
+
+    listDuplicateState.groups.forEach((group, index) => {
+        const groupEl = document.createElement('div');
+        groupEl.className = 'list-duplicates-group';
+        const title = document.createElement('div');
+        title.className = 'list-duplicates-group-title';
+        const label = group.representative || `Group ${index + 1}`;
+        title.textContent = label;
+        groupEl.appendChild(title);
+
+        group.items.forEach(item => {
+            const row = document.createElement('div');
+            row.className = 'list-duplicates-item';
+            const left = document.createElement('div');
+            left.className = 'list-duplicates-item-left';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = listDuplicateState.selectedIds.has(item.id);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    listDuplicateState.selectedIds.add(item.id);
+                } else {
+                    listDuplicateState.selectedIds.delete(item.id);
+                }
+                updateListDuplicatesDeleteButton();
+            });
+            left.appendChild(checkbox);
+            const main = document.createElement('div');
+            main.className = 'list-duplicates-item-main';
+            const text = document.createElement('div');
+            const baseText = (item.text || '').trim();
+            let display = baseText || '';
+            if (item.link_text && item.link_url) {
+                if (baseText && baseText !== item.link_text) {
+                    display = `${baseText} (${item.link_text})`;
+                } else {
+                    display = item.link_text;
+                }
+            }
+            text.textContent = display || '(Untitled item)';
+            if (item.section) {
+                const section = document.createElement('span');
+                section.className = 'list-duplicates-item-section';
+                section.textContent = `• ${item.section}`;
+                text.appendChild(section);
+            }
+            main.appendChild(text);
+            if (item.note) {
+                const note = document.createElement('div');
+                note.className = 'list-duplicates-item-note';
+                note.textContent = item.note;
+                main.appendChild(note);
+            }
+            left.appendChild(main);
+            row.appendChild(left);
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'btn btn-danger btn-icon';
+            deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openConfirmModal('Delete this duplicate item?', async () => {
+                    try {
+                        await deleteListItem(item.id);
+                        removeDuplicateItemFromState(item.id);
+                        listDuplicateState.selectedIds.delete(item.id);
+                        updateListDuplicatesDeleteButton();
+                        renderListDuplicates();
+                        await loadListItems();
+                        showToast('Deleted', 'success', 2000);
+                    } catch (err) {
+                        console.error('Duplicate delete failed:', err);
+                        showToast('Could not delete item', 'error');
+                    }
+                });
+            });
+            row.appendChild(deleteBtn);
+            groupEl.appendChild(row);
+        });
+        list.appendChild(groupEl);
+    });
+}
+
+async function deleteSelectedDuplicateItems() {
+    if (!listDuplicateState.selectedIds.size) return;
+    const ids = Array.from(listDuplicateState.selectedIds);
+    openConfirmModal(`Delete ${ids.length} selected item(s)?`, async () => {
+        const deleted = [];
+        for (const itemId of ids) {
+            try {
+                await deleteListItem(itemId);
+                deleted.push(itemId);
+            } catch (err) {
+                console.error('Duplicate bulk delete failed:', err);
+                showToast('Could not delete some items', 'error');
+                break;
+            }
+        }
+        if (deleted.length) {
+            removeDuplicateSelectionsFromState(deleted);
+            renderListDuplicates();
+            await loadListItems();
+            showToast('Deleted', 'success', 2000);
+            closeListDuplicatesModal();
+        }
+    });
+}
+
+async function openListDuplicatesModal() {
+    if (!listState.listId) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const modal = document.getElementById('list-duplicates-modal');
+    const list = document.getElementById('list-duplicates-list');
+    if (!modal || !list) return;
+    modal.classList.add('active');
+    list.innerHTML = '<div class="empty-state"><p style="color: var(--text-muted); margin: 0;">Scanning list...</p></div>';
+    listDuplicateState.groups = [];
+    listDuplicateState.method = null;
+    listDuplicateState.threshold = null;
+    listDuplicateState.selectedIds = new Set();
+    updateListDuplicatesSubtitle();
+    updateListDuplicatesDeleteButton();
+
+    try {
+        const res = await fetch(`/api/notes/${listState.listId}/list-items/duplicates`);
+        if (!res.ok) throw new Error('Failed to scan');
+        const data = await res.json();
+        listDuplicateState.groups = data.groups || [];
+        listDuplicateState.method = data.method || null;
+        listDuplicateState.threshold = data.threshold || null;
+        renderListDuplicates();
+    } catch (err) {
+        console.error('Duplicate scan failed:', err);
+        list.innerHTML = '<div class="empty-state"><p style="color: var(--text-muted); margin: 0;">Could not scan for duplicates.</p></div>';
+    }
+}
+
 function isMobileNotesView() {
     return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
 }
@@ -7082,10 +8305,12 @@ function prepareNewNoteEditor() {
     notesState.activeFolderId = folderId;
     notesState.checkboxMode = false;
     notesState.activeNoteIsArchived = false;
+    notesState.activeNoteIsListed = true;
     setNoteDirty(false);
     hideNoteCleanupActions();
     updateNoteToolbarStates();
     updateArchiveButton(false);
+    updateNoteVisibilityButton(true);
     setNoteEditorReadOnly(false);
 }
 
@@ -8524,6 +9749,7 @@ async function setActiveNote(noteId, options = {}) {
     notesState.activeFolderId = note.folder_id || null;
     notesState.checkboxMode = false; // Reset checkbox mode when switching notes
     notesState.activeNoteIsArchived = !!note.is_archived;
+    notesState.activeNoteIsListed = !!note.is_listed;
     setNoteDirty(false);
     hideNoteCleanupActions();
     renderNotesList();
@@ -8531,6 +9757,7 @@ async function setActiveNote(noteId, options = {}) {
     bindNoteCheckboxes(); // Bind checkbox event handlers
     updateProtectButton(note.is_pin_protected); // Update protect button state
     updateArchiveButton(!!note.is_archived);
+    updateNoteVisibilityButton(!!note.is_listed);
     setNoteEditorReadOnly(!!note.is_archived);
 }
 
@@ -8725,6 +9952,7 @@ async function saveCurrentNote(options = {}) {
             savedNote = await res.json();
             notesState.notes = [savedNote, ...notesState.notes];
             notesState.activeNoteId = savedNote.id;
+            notesState.activeNoteIsListed = !!savedNote.is_listed;
         } else {
             res = await fetch(`/api/notes/${noteId}`, {
                 method: 'PUT',
@@ -8735,6 +9963,7 @@ async function saveCurrentNote(options = {}) {
             if (!res.ok) throw new Error('Save failed');
             savedNote = await res.json();
             notesState.notes = notesState.notes.map(n => n.id === savedNote.id ? savedNote : n);
+            notesState.activeNoteIsListed = !!savedNote.is_listed;
         }
 
         if (updatedLabel) updatedLabel.textContent = `Saved ${formatNoteDate(savedNote.updated_at)}`;
@@ -8775,6 +10004,7 @@ async function createNote() {
         const newNote = await res.json();
         notesState.activeNoteId = newNote.id;
         notesState.notes = [newNote, ...notesState.notes];
+        notesState.activeNoteIsListed = !!newNote.is_listed;
         renderNotesList();
         setActiveNote(newNote.id, { skipAutosave: true });
         const titleInput = document.getElementById('note-title');
@@ -9765,6 +10995,7 @@ function updateRecurringFieldVisibility() {
     const unitEl = document.getElementById('calendar-recurring-interval-unit');
     const daysRow = document.getElementById('calendar-recurring-days-row');
     const monthRow = document.getElementById('calendar-recurring-month-row');
+    const weekdayRow = document.getElementById('calendar-recurring-weekday-row');
     const yearRow = document.getElementById('calendar-recurring-year-row');
     const customRow = document.getElementById('calendar-recurring-custom-row');
     if (!freqEl) return;
@@ -9773,10 +11004,12 @@ function updateRecurringFieldVisibility() {
     const showCustom = freq === 'custom';
     const showDays = freq === 'weekly' || freq === 'biweekly' || (showCustom && unit === 'weeks');
     const showMonth = freq === 'monthly' || freq === 'yearly' || (showCustom && (unit === 'months' || unit === 'years'));
+    const showWeekday = freq === 'monthly_weekday';
     const showYear = freq === 'yearly' || (showCustom && unit === 'years');
     if (customRow) customRow.classList.toggle('is-hidden', !showCustom);
     if (daysRow) daysRow.classList.toggle('is-hidden', !showDays);
-    if (monthRow) monthRow.classList.toggle('is-hidden', !showMonth);
+    if (monthRow) monthRow.classList.toggle('is-hidden', !showMonth || showWeekday);
+    if (weekdayRow) weekdayRow.classList.toggle('is-hidden', !showWeekday);
     if (yearRow) yearRow.classList.toggle('is-hidden', !showYear);
 }
 
@@ -9827,6 +11060,18 @@ function showRecurringFormView(editItem = null) {
     const unitEl = document.getElementById('calendar-recurring-interval-unit');
     const dayOfMonthEl = document.getElementById('calendar-recurring-day-of-month');
     const monthEl = document.getElementById('calendar-recurring-month');
+    const weekOfMonthEl = document.getElementById('calendar-recurring-week-of-month');
+    const weekdayOfMonthEl = document.getElementById('calendar-recurring-weekday-of-month');
+
+    const setWeekdayDefaults = (dateObj) => {
+        const weekday = (dateObj.getDay() + 6) % 7;
+        const firstOfMonth = new Date(dateObj.getFullYear(), dateObj.getMonth(), 1);
+        const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+        const firstOccurrence = 1 + ((weekday - firstWeekday + 7) % 7);
+        const ordinal = Math.floor((dateObj.getDate() - firstOccurrence) / 7) + 1;
+        if (weekOfMonthEl) weekOfMonthEl.value = String(ordinal);
+        if (weekdayOfMonthEl) weekdayOfMonthEl.value = String(weekday);
+    };
 
     if (editItem) {
         // Edit mode
@@ -9844,6 +11089,10 @@ function showRecurringFormView(editItem = null) {
         if (unitEl) unitEl.value = editItem.interval_unit || 'days';
         if (dayOfMonthEl) dayOfMonthEl.value = editItem.day_of_month || '';
         if (monthEl) monthEl.value = editItem.month_of_year || '';
+        if (weekOfMonthEl) weekOfMonthEl.value = editItem.week_of_month || '';
+        if (weekdayOfMonthEl) weekdayOfMonthEl.value = (editItem.weekday_of_month !== null && editItem.weekday_of_month !== undefined)
+            ? String(editItem.weekday_of_month)
+            : '';
         // Reminder
         if (reminderInput) {
             if (editItem.reminder_minutes_before) {
@@ -9865,6 +11114,14 @@ function showRecurringFormView(editItem = null) {
                 cb.checked = editItem.days_of_week && editItem.days_of_week.includes(Number(cb.value));
             });
         }
+        if ((weekOfMonthEl && !weekOfMonthEl.value) || (weekdayOfMonthEl && !weekdayOfMonthEl.value)) {
+            if (editItem.start_day) {
+                const dateObj = new Date(`${editItem.start_day}T00:00:00`);
+                if (!Number.isNaN(dateObj.valueOf())) {
+                    setWeekdayDefaults(dateObj);
+                }
+            }
+        }
     } else {
         // Add mode
         if (formTitle) formTitle.textContent = 'Add Recurring Item';
@@ -9884,6 +11141,7 @@ function showRecurringFormView(editItem = null) {
         const dateObj = new Date(`${todayStr}T00:00:00`);
         if (dayOfMonthEl) dayOfMonthEl.value = dateObj.getDate();
         if (monthEl) monthEl.value = String(dateObj.getMonth() + 1);
+        setWeekdayDefaults(dateObj);
         const dow = (dateObj.getDay() + 6) % 7;
         if (modal) {
             modal.querySelectorAll('#calendar-recurring-days-row input[type="checkbox"]').forEach(cb => {
@@ -9925,6 +11183,7 @@ function renderRecurringList(items) {
         weekly: 'Weekly',
         biweekly: 'Bi-weekly',
         monthly: 'Monthly',
+        monthly_weekday: 'Monthly (nth weekday)',
         yearly: 'Yearly',
         custom: 'Custom'
     };
@@ -9977,6 +11236,26 @@ function renderRecurringList(items) {
         return `${monthLabels[month - 1]} ${dom}`;
     }
 
+    function formatMonthlyWeekday(item) {
+        let week = item.week_of_month;
+        let weekday = item.weekday_of_month;
+        if ((week === null || week === undefined || weekday === null || weekday === undefined) && item.start_day) {
+            const date = new Date(`${item.start_day}T00:00:00`);
+            if (!Number.isNaN(date.valueOf())) {
+                weekday = (date.getDay() + 6) % 7;
+                const firstOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+                const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+                const firstOccurrence = 1 + ((weekday - firstWeekday + 7) % 7);
+                week = Math.floor((date.getDate() - firstOccurrence) / 7) + 1;
+            }
+        }
+        if (!week && week !== 0) return '';
+        if (weekday === null || weekday === undefined) return '';
+        const suffix = ['th', 'st', 'nd', 'rd'][week] || 'th';
+        const weekLabel = `${week}${suffix}`;
+        return `${weekLabel} ${weekdayLabels[weekday]}`;
+    }
+
     listEl.innerHTML = items.map(item => {
         const typeClass = item.is_event ? 'event' : '';
         const typeLabel = item.is_event ? 'Event' : 'Task';
@@ -9987,6 +11266,8 @@ function renderRecurringList(items) {
             dayDetail = formatDaysOfWeek(item);
         } else if (item.frequency === 'monthly') {
             dayDetail = formatDayOfMonth(item);
+        } else if (item.frequency === 'monthly_weekday') {
+            dayDetail = formatMonthlyWeekday(item);
         } else if (item.frequency === 'yearly') {
             dayDetail = formatYearly(item);
         } else if (item.frequency === 'custom') {
@@ -10085,6 +11366,8 @@ async function saveRecurringModal() {
     const unitEl = document.getElementById('calendar-recurring-interval-unit');
     const dayOfMonthEl = document.getElementById('calendar-recurring-day-of-month');
     const monthEl = document.getElementById('calendar-recurring-month');
+    const weekOfMonthEl = document.getElementById('calendar-recurring-week-of-month');
+    const weekdayOfMonthEl = document.getElementById('calendar-recurring-weekday-of-month');
 
     const title = titleInput ? titleInput.value.trim() : '';
     if (!title) {
@@ -10120,6 +11403,10 @@ async function saveRecurringModal() {
     }
     if (freq === 'monthly' || freq === 'yearly' || (freq === 'custom' && unitEl && (unitEl.value === 'months' || unitEl.value === 'years'))) {
         payload.day_of_month = (dayOfMonthEl && dayOfMonthEl.value) ? Number(dayOfMonthEl.value) : null;
+    }
+    if (freq === 'monthly_weekday') {
+        payload.week_of_month = (weekOfMonthEl && weekOfMonthEl.value) ? Number(weekOfMonthEl.value) : null;
+        payload.weekday_of_month = (weekdayOfMonthEl && weekdayOfMonthEl.value) ? Number(weekdayOfMonthEl.value) : null;
     }
     if (freq === 'yearly' || (freq === 'custom' && unitEl && unitEl.value === 'years')) {
         payload.month_of_year = (monthEl && monthEl.value) ? Number(monthEl.value) : null;

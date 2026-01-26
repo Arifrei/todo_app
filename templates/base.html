@@ -146,6 +146,12 @@
                             <span class="nav-label">Notes</span>
                         </a>
                     </li>
+                    <li data-nav-id="vault">
+                        <a href="/vault" class="{{ 'active' if request.path.startswith('/vault') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-folder-open"></i></span>
+                            <span class="nav-label">Vault</span>
+                        </a>
+                    </li>
                     <li data-nav-id="recalls">
                         <a href="/recalls" class="{{ 'active' if request.path.startswith('/recalls') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-inbox"></i></span>

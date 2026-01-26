@@ -32,6 +32,9 @@
                     <button class="dropdown-item" id="note-protect-btn">
                         <i class="fa-solid fa-lock"></i> <span>Protect</span>
                     </button>
+                    <button class="dropdown-item" id="note-visibility-btn">
+                        <i class="fa-solid fa-eye-slash"></i> <span>Hide from notes list</span>
+                    </button>
                     <button class="dropdown-item" id="note-archive-btn">
                         <i class="fa-solid fa-box-archive"></i> <span>Archive</span>
                     </button>
@@ -131,6 +134,26 @@
 
         <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
             <button class="btn" id="share-note-close-btn">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Linked Note Modal -->
+<div class="modal" id="note-link-modal">
+    <div class="modal-content" style="max-width: 520px;">
+        <h2 id="note-link-modal-title">Link note</h2>
+        <p class="note-link-subtitle" id="note-link-modal-subtitle">Choose an existing note or create a new one.</p>
+        <div id="note-link-match-list" class="note-link-list"></div>
+        <div class="note-link-create">
+            <button class="btn btn-secondary" id="note-link-create-listed-btn">
+                <i class="fa-solid fa-eye"></i> Show in notes list
+            </button>
+            <button class="btn btn-secondary" id="note-link-create-hidden-btn">
+                <i class="fa-solid fa-eye-slash"></i> Linked-only (hidden)
+            </button>
+        </div>
+        <div class="note-link-footer">
+            <button class="btn" id="note-link-cancel-btn">Cancel</button>
         </div>
     </div>
 </div>

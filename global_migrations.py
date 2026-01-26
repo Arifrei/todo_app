@@ -94,6 +94,29 @@ def ensure_note(cur):
     add_column(cur, "note", "archived_at", "TIMESTAMP")
     add_column(cur, "note", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "note", "is_public", "BOOLEAN DEFAULT 0 NOT NULL", default_sql="0")
+    add_column(cur, "note", "is_listed", "BOOLEAN DEFAULT 1 NOT NULL", default_sql="1")
+    add_column(cur, "note", "is_pin_protected", "BOOLEAN DEFAULT 0 NOT NULL", default_sql="0")
+
+
+def ensure_note_link(cur):
+    if not table_exists(cur, "note_link"):
+        cur.execute(
+            """
+            CREATE TABLE note_link (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_note_id INTEGER NOT NULL,
+                target_note_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source_note_id, target_note_id)
+            )
+            """
+        )
+        print("[add] note_link table created")
+        return
+    add_column(cur, "note_link", "source_note_id", "INTEGER")
+    add_column(cur, "note_link", "target_note_id", "INTEGER")
+    add_column(cur, "note_link", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
 def ensure_note_folder(cur):
@@ -257,6 +280,8 @@ def ensure_recurring_event(cur):
         add_column(cur, "recurring_event", "days_of_week", "VARCHAR(50)")
         add_column(cur, "recurring_event", "day_of_month", "INTEGER")
         add_column(cur, "recurring_event", "month_of_year", "INTEGER")
+        add_column(cur, "recurring_event", "week_of_month", "INTEGER")
+        add_column(cur, "recurring_event", "weekday_of_month", "INTEGER")
         add_column(cur, "recurring_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_column(cur, "recurring_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         return
@@ -282,6 +307,8 @@ def ensure_recurring_event(cur):
             days_of_week VARCHAR(50),
             day_of_month INTEGER,
             month_of_year INTEGER,
+            week_of_month INTEGER,
+            weekday_of_month INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -517,6 +544,7 @@ def main():
         ensure_todo_list(cur)
         ensure_todo_item(cur)
         ensure_note(cur)
+        ensure_note_link(cur)
         ensure_note_list_item(cur)
         ensure_note_folder(cur)
         ensure_calendar_event(cur)

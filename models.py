@@ -254,6 +254,7 @@ class Note(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     share_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
     is_public = db.Column(db.Boolean, default=False, nullable=False)
+    is_listed = db.Column(db.Boolean, default=True, nullable=False)
     is_pin_protected = db.Column(db.Boolean, default=False, nullable=False)
     list_items = db.relationship('NoteListItem', backref='parent_note', lazy=True, cascade="all, delete-orphan", order_by="NoteListItem.order_index")
 
@@ -277,7 +278,21 @@ class Note(db.Model):
             'is_public': self.is_public,
             'share_token': self.share_token,
             'is_pin_protected': bool(self.is_pin_protected),
+            'is_listed': bool(self.is_listed),
         }
+
+
+class NoteLink(db.Model):
+    """Directed link between notes for nested relationships."""
+    __tablename__ = 'note_link'
+    __table_args__ = (
+        db.UniqueConstraint('source_note_id', 'target_note_id', name='uq_note_link_source_target'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    source_note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
+    target_note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class NoteListItem(db.Model):
@@ -458,6 +473,8 @@ class RecurringEvent(db.Model):
     days_of_week = db.Column(db.String(50), nullable=True)  # CSV of 0-6
     day_of_month = db.Column(db.Integer, nullable=True)
     month_of_year = db.Column(db.Integer, nullable=True)
+    week_of_month = db.Column(db.Integer, nullable=True)
+    weekday_of_month = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -646,4 +663,120 @@ class QuickAccessItem(db.Model):
             'reference_id': self.reference_id,
             'order_index': self.order_index,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class DocumentFolder(db.Model):
+    """Folder for organizing documents in the vault (can be nested)."""
+    __tablename__ = 'document_folder'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('document_folder.id'), nullable=True)
+    name = db.Column(db.String(120), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+    archived_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Self-referential relationship for nested folders
+    children = db.relationship('DocumentFolder', backref=db.backref('parent', remote_side=[id]), lazy=True)
+    documents = db.relationship('Document', backref='folder', lazy=True)
+
+    def to_dict(self, include_children=False):
+        data = {
+            'id': self.id,
+            'parent_id': self.parent_id,
+            'name': self.name,
+            'order_index': self.order_index or 0,
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'is_archived': bool(self.archived_at),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_children:
+            data['children'] = [c.to_dict(include_children=True) for c in self.children if not c.archived_at]
+        return data
+
+
+class Document(db.Model):
+    """Document stored in the vault."""
+    __tablename__ = 'document'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('document_folder.id'), nullable=True)
+    title = db.Column(db.String(255), nullable=False)
+    original_filename = db.Column(db.String(255), nullable=False)
+    stored_filename = db.Column(db.String(255), nullable=False)  # UUID-based filename on disk
+    file_type = db.Column(db.String(100), nullable=True)  # MIME type
+    file_extension = db.Column(db.String(20), nullable=True)  # e.g., 'pdf', 'jpg'
+    file_size = db.Column(db.Integer, nullable=True)  # Size in bytes
+    tags = db.Column(db.Text, nullable=True)  # Comma-separated tags
+    pinned = db.Column(db.Boolean, default=False)
+    pin_order = db.Column(db.Integer, default=0)
+    archived_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def tag_list(self):
+        return _split_tags(self.tags)
+
+    def get_file_category(self):
+        """Return a category based on file extension for icon display."""
+        ext = (self.file_extension or '').lower()
+        if ext in ('jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'):
+            return 'image'
+        elif ext in ('pdf',):
+            return 'pdf'
+        elif ext in ('doc', 'docx', 'odt', 'rtf'):
+            return 'document'
+        elif ext in ('xls', 'xlsx', 'ods', 'csv'):
+            return 'spreadsheet'
+        elif ext in ('ppt', 'pptx', 'odp'):
+            return 'presentation'
+        elif ext in ('txt', 'md', 'json', 'xml', 'yaml', 'yml'):
+            return 'text'
+        elif ext in ('zip', 'rar', '7z', 'tar', 'gz', 'bz2'):
+            return 'archive'
+        elif ext in ('mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'):
+            return 'audio'
+        elif ext in ('mp4', 'webm', 'mov', 'avi', 'mkv', 'wmv'):
+            return 'video'
+        elif ext in ('js', 'py', 'html', 'css', 'java', 'cpp', 'c', 'h', 'ts', 'jsx', 'tsx', 'go', 'rs', 'rb', 'php'):
+            return 'code'
+        else:
+            return 'other'
+
+    def format_file_size(self):
+        """Return human-readable file size."""
+        if not self.file_size:
+            return 'Unknown'
+        size = self.file_size
+        for unit in ('B', 'KB', 'MB', 'GB'):
+            if size < 1024:
+                return f"{size:.1f} {unit}" if unit != 'B' else f"{size} {unit}"
+            size /= 1024
+        return f"{size:.1f} TB"
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'folder_id': self.folder_id,
+            'title': self.title,
+            'original_filename': self.original_filename,
+            'stored_filename': self.stored_filename,
+            'file_type': self.file_type,
+            'file_extension': self.file_extension,
+            'file_size': self.file_size,
+            'file_size_formatted': self.format_file_size(),
+            'file_category': self.get_file_category(),
+            'tags': self.tag_list(),
+            'pinned': bool(self.pinned),
+            'pin_order': self.pin_order or 0,
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'is_archived': bool(self.archived_at),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

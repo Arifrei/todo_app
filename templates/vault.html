@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="vault-page">
+    <header class="header-row vault-header">
+        <div>
+            <h1>Vault</h1>
+            <p class="vault-subtitle">Store and organize documents across your projects.</p>
+        </div>
+        <div class="vault-header-actions">
+            <div class="tasks-fab-container" id="vault-fab">
+                <button class="tasks-fab-main" id="vault-fab-main" aria-label="Add">
+                    <i class="fa-solid fa-plus"></i>
+                </button>
+                <div class="tasks-fab-options" id="vault-fab-options">
+                    <button class="tasks-fab-option" type="button" id="vault-new-folder-btn">
+                        <i class="fa-solid fa-folder-plus"></i>
+                        <span>Folder</span>
+                    </button>
+                    <button class="tasks-fab-option" type="button" id="vault-upload-btn">
+                        <i class="fa-solid fa-upload"></i>
+                        <span>Upload</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="vault-controls">
+        <div class="vault-breadcrumb" id="vault-breadcrumb"></div>
+        <div class="vault-controls-actions">
+            <button class="btn btn-secondary" type="button" id="vault-up-btn" style="display: none;">
+                <i class="fa-solid fa-arrow-left"></i> Up
+            </button>
+            <button class="btn-icon" type="button" id="vault-search-toggle" title="Search" aria-label="Search">
+                <i class="fa-solid fa-magnifying-glass"></i>
+            </button>
+            <button class="btn-icon" type="button" id="vault-filter-toggle" title="Filters" aria-label="Filters">
+                <i class="fa-solid fa-sliders"></i>
+            </button>
+            <button class="btn-icon" type="button" id="vault-view-toggle" title="Toggle view" aria-label="Toggle view">
+                <i class="fa-solid fa-table-cells"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="vault-panel vault-search-panel" id="vault-search-panel" style="display: none;">
+        <div class="vault-search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" id="vault-search-input" placeholder="Search documents...">
+        </div>
+    </div>
+
+    <div class="vault-panel vault-filters" id="vault-filters" style="display: none;">
+        <div class="vault-toolbar-actions">
+            <select id="vault-sort-select" class="form-control vault-sort-select">
+                <option value="recent">Newest</option>
+                <option value="title">Title</option>
+                <option value="size">File size</option>
+                <option value="type">File type</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="vault-stats" id="vault-stats"></div>
+
+    <div class="vault-section" id="vault-folders-section">
+        <div class="vault-section-label">Folders</div>
+        <div class="vault-items grid" id="vault-folders"></div>
+    </div>
+
+    <div class="vault-section" id="vault-documents-section">
+        <div class="vault-section-label">Documents</div>
+        <div class="vault-items grid" id="vault-documents"></div>
+    </div>
+
+    <div class="vault-empty" id="vault-empty" style="display: none;">
+        <i class="fa-solid fa-file-circle-plus"></i>
+        <p>No documents yet.</p>
+        <span>Upload a file to get started.</span>
+    </div>
+</div>
+
+<div class="modal" id="vault-folder-modal">
+    <div class="modal-content">
+        <h2 id="vault-folder-modal-title">New Folder</h2>
+        <div class="form-group">
+            <label>Folder name</label>
+            <input type="text" id="vault-folder-name" class="form-control" placeholder="Folder name">
+        </div>
+        <input type="hidden" id="vault-folder-id">
+        <div class="modal-actions">
+            <button class="btn" type="button" id="vault-folder-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="vault-folder-save">Save</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="vault-upload-modal">
+    <div class="modal-content">
+        <h2>Upload Documents</h2>
+        <div class="vault-drop-zone" id="vault-drop-zone">
+            <div class="vault-drop-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+            <div class="vault-drop-text">Drag and drop files here</div>
+            <button class="btn btn-secondary" type="button" id="vault-browse-btn">Browse files</button>
+            <input type="file" id="vault-file-input" multiple>
+        </div>
+        <div class="form-group">
+            <label>Title (optional)</label>
+            <input type="text" id="vault-title-input" class="form-control" placeholder="Defaults to filename">
+        </div>
+        <div class="form-group">
+            <label>Folder</label>
+            <select id="vault-folder-select" class="form-control"></select>
+        </div>
+        <div class="form-group">
+            <label>Tags (optional)</label>
+            <input type="text" id="vault-tags-input" class="form-control" placeholder="e.g. finance, reports">
+        </div>
+        <div class="vault-upload-progress" id="vault-upload-progress" style="display: none;">
+            <div class="vault-upload-bar" id="vault-upload-bar"></div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="vault-upload-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="vault-upload-submit">Upload</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

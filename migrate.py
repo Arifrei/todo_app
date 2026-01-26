@@ -173,6 +173,7 @@ def ensure_note_table(cur):
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 share_token VARCHAR(64) UNIQUE,
                 is_public BOOLEAN DEFAULT 0 NOT NULL,
+                is_listed BOOLEAN DEFAULT 1 NOT NULL,
                 is_pin_protected BOOLEAN DEFAULT 0 NOT NULL
             )
             """
@@ -195,6 +196,7 @@ def ensure_note_table(cur):
     add_column(cur, "note", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "note", "share_token", "VARCHAR(64)")
     add_column(cur, "note", "is_public", "BOOLEAN DEFAULT 0 NOT NULL")
+    add_column(cur, "note", "is_listed", "BOOLEAN DEFAULT 1 NOT NULL", default_sql="1")
     add_column(cur, "note", "is_pin_protected", "BOOLEAN DEFAULT 0 NOT NULL")
     # Create index on share_token if it doesn't exist
     cur.execute("CREATE INDEX IF NOT EXISTS idx_note_share_token ON note(share_token)")
@@ -225,6 +227,26 @@ def ensure_note_list_item_table(cur):
     add_column(cur, "note_list_item", "link_url", "VARCHAR(500)")
     add_column(cur, "note_list_item", "checked", "BOOLEAN DEFAULT 0")
     add_column(cur, "note_list_item", "order_index", "INTEGER DEFAULT 0")
+
+
+def ensure_note_link_table(cur):
+    if not table_exists(cur, "note_link"):
+        cur.execute(
+            """
+            CREATE TABLE note_link (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_note_id INTEGER NOT NULL,
+                target_note_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source_note_id, target_note_id)
+            )
+            """
+        )
+        print("[add] note_link table created")
+        return
+    add_column(cur, "note_link", "source_note_id", "INTEGER")
+    add_column(cur, "note_link", "target_note_id", "INTEGER")
+    add_column(cur, "note_link", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
 def ensure_note_folder_table(cur):
@@ -330,6 +352,8 @@ def ensure_recurring_event_table(cur):
         add_column(cur, "recurring_event", "days_of_week", "VARCHAR(50)")
         add_column(cur, "recurring_event", "day_of_month", "INTEGER")
         add_column(cur, "recurring_event", "month_of_year", "INTEGER")
+        add_column(cur, "recurring_event", "week_of_month", "INTEGER")
+        add_column(cur, "recurring_event", "weekday_of_month", "INTEGER")
         add_column(cur, "recurring_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_column(cur, "recurring_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         print("[ok] recurring_event table exists")
@@ -356,6 +380,8 @@ def ensure_recurring_event_table(cur):
             days_of_week VARCHAR(50),
             day_of_month INTEGER,
             month_of_year INTEGER,
+            week_of_month INTEGER,
+            weekday_of_month INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -613,6 +639,78 @@ def ensure_job_lock_table(cur):
     print("[add] job_lock table created")
 
 
+def ensure_document_folder_table(cur):
+    """Create or align the document_folder table for the vault."""
+    if not table_exists(cur, "document_folder"):
+        cur.execute(
+            """
+            CREATE TABLE document_folder (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                parent_id INTEGER,
+                name VARCHAR(120) NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                archived_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] document_folder table created")
+        return
+    add_column(cur, "document_folder", "parent_id", "INTEGER")
+    add_column(cur, "document_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
+    add_column(cur, "document_folder", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "document_folder", "archived_at", "TIMESTAMP")
+    add_column(cur, "document_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "document_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_document_table(cur):
+    """Create or align the document table for the vault."""
+    if not table_exists(cur, "document"):
+        cur.execute(
+            """
+            CREATE TABLE document (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                folder_id INTEGER,
+                title VARCHAR(255) NOT NULL,
+                original_filename VARCHAR(255) NOT NULL,
+                stored_filename VARCHAR(255) NOT NULL,
+                file_type VARCHAR(100),
+                file_extension VARCHAR(20),
+                file_size INTEGER,
+                tags TEXT,
+                pinned BOOLEAN DEFAULT 0,
+                pin_order INTEGER DEFAULT 0,
+                archived_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_document_user ON document(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_document_folder ON document(folder_id)")
+        print("[add] document table created")
+        return
+    add_column(cur, "document", "folder_id", "INTEGER")
+    add_column(cur, "document", "title", "VARCHAR(255) NOT NULL DEFAULT ''")
+    add_column(cur, "document", "original_filename", "VARCHAR(255) NOT NULL DEFAULT ''")
+    add_column(cur, "document", "stored_filename", "VARCHAR(255) NOT NULL DEFAULT ''")
+    add_column(cur, "document", "file_type", "VARCHAR(100)")
+    add_column(cur, "document", "file_extension", "VARCHAR(20)")
+    add_column(cur, "document", "file_size", "INTEGER")
+    add_column(cur, "document", "tags", "TEXT")
+    add_column(cur, "document", "pinned", "BOOLEAN DEFAULT 0")
+    add_column(cur, "document", "pin_order", "INTEGER DEFAULT 0")
+    add_column(cur, "document", "archived_at", "TIMESTAMP")
+    add_column(cur, "document", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "document", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_document_user ON document(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_document_folder ON document(folder_id)")
+
+
 def main():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -623,6 +721,7 @@ def main():
         ensure_todo_item_table(cur)
         ensure_task_dependency_table(cur)
         ensure_note_table(cur)
+        ensure_note_link_table(cur)
         ensure_note_list_item_table(cur)
         ensure_note_folder_table(cur)
         ensure_calendar_event_table(cur)
@@ -634,6 +733,8 @@ def main():
         ensure_embedding_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)
+        ensure_document_folder_table(cur)
+        ensure_document_table(cur)
         conn.commit()
         print("Baseline migration complete.")
     finally:

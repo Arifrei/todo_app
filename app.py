@@ -3,15 +3,20 @@ import re
 import json
 import html
 import logging
+import calendar
 import pytz
 import secrets
 import threading
+import mimetypes
+import uuid
 from datetime import datetime, date, time, timedelta
+from difflib import SequenceMatcher
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
 from html.parser import HTMLParser
+from werkzeug.utils import secure_filename
 from ai_service import run_ai_chat
-from ai_embeddings import get_openai_client
+from ai_embeddings import get_openai_client, embed_text
 from embedding_service import (
     ENTITY_BOOKMARK,
     ENTITY_CALENDAR,
@@ -21,11 +26,11 @@ from embedding_service import (
     delete_embedding_for_entity,
     refresh_embedding_for_entity,
 )
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, DocumentFolder, Document
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from markupsafe import Markup, escape
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -45,6 +50,11 @@ app.config['VAPID_PUBLIC_KEY'] = os.environ.get('VAPID_PUBLIC_KEY', '')
 app.config['VAPID_PRIVATE_KEY'] = os.environ.get('VAPID_PRIVATE_KEY', '')
 app.config['OPENAI_API_KEY'] = os.environ.get('OPENAI_API_KEY', '')
 app.config['OPENAI_STT_MODEL'] = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
+DEFAULT_VAULT_MAX_SIZE = 50 * 1024 * 1024
+try:
+    app.config['VAULT_MAX_FILE_SIZE'] = int(os.environ.get('VAULT_MAX_FILE_SIZE', DEFAULT_VAULT_MAX_SIZE))
+except (TypeError, ValueError):
+    app.config['VAULT_MAX_FILE_SIZE'] = DEFAULT_VAULT_MAX_SIZE
 
 db.init_app(app)
 scheduler = None
@@ -52,14 +62,18 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
 NOTE_LIST_CONVERSION_MAX_CHARS = 80
 NOTE_LIST_CONVERSION_MAX_WORDS = 12
 NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT = 8
+LIST_SECTION_PREFIX = '[[section]]'
+VAULT_BLOCKED_EXTENSIONS = {
+    'exe', 'bat', 'cmd', 'com', 'msi', 'scr', 'ps1', 'vbs', 'vbe', 'wsf', 'wsh'
+}
 
 LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
 
@@ -89,6 +103,14 @@ def _normalize_note_type(raw):
     if str(raw or '').lower() == 'list':
         return 'list'
     return 'note'
+
+
+def _parse_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ['1', 'true', 'yes', 'on']
 
 def _html_to_plain_text(raw_html: str) -> str:
     if not raw_html:
@@ -142,8 +164,19 @@ class _NoteHTMLSanitizer(HTMLParser):
         if tag == 'a':
             attrs_dict = {name.lower(): (value or '') for name, value in attrs}
             href = attrs_dict.get('href', '').strip()
-            if href and (href.startswith('http://') or href.startswith('https://') or href.startswith('mailto:')):
+            if href and (href.startswith('http://') or href.startswith('https://') or href.startswith('mailto:') or href.startswith('/notes/')):
                 clean_attrs.append(f'href="{html.escape(href, quote=True)}"')
+            class_name = (attrs_dict.get('class') or '').strip()
+            if class_name == 'note-link':
+                clean_attrs.append('class="note-link"')
+            if class_name == 'external-link':
+                clean_attrs.append('class="external-link"')
+            data_note_id = (attrs_dict.get('data-note-id') or '').strip()
+            if data_note_id.isdigit():
+                clean_attrs.append(f'data-note-id="{data_note_id}"')
+            data_note_title = (attrs_dict.get('data-note-title') or '').strip()
+            if data_note_title:
+                clean_attrs.append(f'data-note-title="{html.escape(data_note_title, quote=True)}"')
         if tag == 'span':
             attrs_dict = {name.lower(): (value or '') for name, value in attrs}
             class_name = (attrs_dict.get('class') or '').strip()
@@ -247,6 +280,89 @@ def _build_list_preview_text(item):
         return f"{base} {link_label}".strip()
     return base or link_label
 
+def _normalize_similarity_text(text):
+    cleaned = re.sub(r'[^\w\s]', ' ', str(text or '').lower())
+    cleaned = re.sub(r'\b0+(\d+)\b', r'\1', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+def _tokenize_similarity(text):
+    if not text:
+        return []
+    return [token for token in text.split(' ') if token]
+
+def _sequence_similarity(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
+def _substring_similarity(a, b):
+    if not a or not b:
+        return 0.0
+    short = a if len(a) <= len(b) else b
+    long = b if len(a) <= len(b) else a
+    if len(short) < 3:
+        return 0.0
+    if short in long:
+        return 0.95
+    return 0.0
+
+def _jaccard_similarity(tokens_a, tokens_b):
+    set_a = set(tokens_a)
+    set_b = set(tokens_b)
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
+
+def _containment_similarity(tokens_a, tokens_b):
+    if not tokens_a or not tokens_b:
+        return 0.0
+    set_a = set(tokens_a)
+    set_b = set(tokens_b)
+    intersection = len(set_a & set_b)
+    min_size = min(len(set_a), len(set_b))
+    if min_size == 0:
+        return 0.0
+    return intersection / min_size
+
+def _cosine_similarity(vec_a, vec_b):
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for a_val, b_val in zip(vec_a, vec_b):
+        dot += a_val * b_val
+        norm_a += a_val * a_val
+        norm_b += b_val * b_val
+    if norm_a <= 0.0 or norm_b <= 0.0:
+        return 0.0
+    return dot / ((norm_a ** 0.5) * (norm_b ** 0.5))
+
+def _group_duplicates(items, similarity_fn, threshold):
+    parent = list(range(len(items)))
+
+    def find(idx):
+        while parent[idx] != idx:
+            parent[idx] = parent[parent[idx]]
+            idx = parent[idx]
+        return idx
+
+    def union(a, b):
+        root_a = find(a)
+        root_b = find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
+
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if similarity_fn(i, j) >= threshold:
+                union(i, j)
+
+    groups = {}
+    for idx, item in enumerate(items):
+        root = find(idx)
+        groups.setdefault(root, []).append(item)
+    return [group for group in groups.values() if len(group) > 1]
+
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
     # Header-based auth for AI/service callers
@@ -281,6 +397,57 @@ def _normalize_tags(raw):
 
 def _tags_to_string(tags):
     return ','.join(_normalize_tags(tags))
+
+
+def _vault_root_for_user(user_id):
+    return os.path.join(app.instance_path, 'vault', str(user_id))
+
+
+def _vault_sanitize_extension(filename):
+    ext = os.path.splitext(filename or '')[1].lower().lstrip('.')
+    if not ext:
+        return ''
+    cleaned = re.sub(r'[^a-z0-9]+', '', ext)
+    return cleaned[:12] if cleaned else ''
+
+
+def _vault_is_blocked_file(filename, mimetype):
+    ext = _vault_sanitize_extension(filename)
+    if ext in VAULT_BLOCKED_EXTENSIONS:
+        return True
+    blocked_mimes = {
+        'application/x-msdownload',
+        'application/x-dosexec',
+        'application/x-ms-installer',
+        'application/x-bat',
+        'application/x-sh',
+    }
+    return bool(mimetype and mimetype in blocked_mimes)
+
+
+def _vault_build_download_name(title, original_filename):
+    base = (title or '').strip() or os.path.splitext(original_filename or '')[0] or 'document'
+    ext = os.path.splitext(original_filename or '')[1]
+    candidate = base if base.lower().endswith(ext.lower()) else f"{base}{ext}"
+    return secure_filename(candidate) or 'document'
+
+
+def _vault_archive_folder_recursive(user_id, folder_id, archived_at):
+    folder = DocumentFolder.query.filter_by(id=folder_id, user_id=user_id).first()
+    if not folder:
+        return
+    folder.archived_at = archived_at
+    folder.updated_at = archived_at
+    Document.query.filter_by(user_id=user_id, folder_id=folder_id).update(
+        {'archived_at': archived_at, 'updated_at': archived_at},
+        synchronize_session=False
+    )
+    child_ids = [child.id for child in DocumentFolder.query.filter_by(
+        user_id=user_id,
+        parent_id=folder_id
+    ).all()]
+    for child_id in child_ids:
+        _vault_archive_folder_recursive(user_id, child_id, archived_at)
 
 
 def _parse_reminder(dt_str):
@@ -941,6 +1108,32 @@ def _parse_days_of_week(raw):
     return sorted(set(days))
 
 
+def _weekday_occurrence_in_month(day_value):
+    weekday = day_value.weekday()
+    month_cal = calendar.monthcalendar(day_value.year, day_value.month)
+    count = 0
+    for week in month_cal:
+        if week[weekday]:
+            count += 1
+            if week[weekday] == day_value.day:
+                return count
+    return None
+
+
+def _nth_weekday_of_month(year, month, weekday, nth):
+    if weekday is None or nth is None:
+        return None
+    month_cal = calendar.monthcalendar(year, month)
+    days = [week[weekday] for week in month_cal if week[weekday]]
+    if not days:
+        return None
+    if nth > len(days):
+        day = days[-1]
+    else:
+        day = days[max(nth, 1) - 1]
+    return date(year, month, day)
+
+
 def _recurrence_occurs_on(rule, day_value):
     if day_value < rule.start_day:
         return False
@@ -951,6 +1144,20 @@ def _recurrence_occurs_on(rule, day_value):
     interval = max(int(rule.interval or 1), 1)
     unit = (rule.interval_unit or '').lower()
     days_of_week = _parse_days_of_week(rule.days_of_week)
+
+    if freq == 'monthly_weekday':
+        start_day = rule.start_day
+        months_since = (day_value.year - start_day.year) * 12 + (day_value.month - start_day.month)
+        if months_since < 0 or months_since % interval != 0:
+            return False
+        weekday = rule.weekday_of_month
+        if weekday is None:
+            weekday = start_day.weekday()
+        week_of_month = rule.week_of_month
+        if week_of_month is None:
+            week_of_month = _weekday_occurrence_in_month(start_day)
+        target = _nth_weekday_of_month(day_value.year, day_value.month, weekday, week_of_month)
+        return bool(target) and day_value == target
 
     if freq == 'daily':
         unit = 'days'
@@ -989,6 +1196,9 @@ def _recurrence_occurs_on(rule, day_value):
         if months_since < 0 or months_since % interval != 0:
             return False
         target_dom = rule.day_of_month or start_day.day
+        _, last_dom = calendar.monthrange(day_value.year, day_value.month)
+        if target_dom > last_dom:
+            target_dom = last_dom
         return day_value.day == target_dom
     if unit == 'years':
         years_since = day_value.year - start_day.year
@@ -996,6 +1206,9 @@ def _recurrence_occurs_on(rule, day_value):
             return False
         target_month = rule.month_of_year or start_day.month
         target_dom = rule.day_of_month or start_day.day
+        _, last_dom = calendar.monthrange(day_value.year, target_month)
+        if target_dom > last_dom:
+            target_dom = last_dom
         return day_value.month == target_month and day_value.day == target_dom
     return False
 
@@ -1057,6 +1270,27 @@ def _ensure_recurring_instances(user_id, start_day, end_day):
             if ev.reminder_minutes_before is not None and ev.start_time:
                 _schedule_reminder_job(ev)
             start_embedding_job(user_id, ENTITY_CALENDAR, ev.id)
+
+
+def _prune_recurring_instances(rule, user_id):
+    instances = CalendarEvent.query.filter_by(user_id=user_id, recurrence_id=rule.id).all()
+    to_delete = [ev for ev in instances if not _recurrence_occurs_on(rule, ev.day)]
+    if to_delete:
+        delete_ids = [ev.id for ev in to_delete]
+        for ev in to_delete:
+            if ev.reminder_job_id:
+                _cancel_reminder_job(ev)
+            db.session.delete(ev)
+        db.session.commit()
+        for ev_id in delete_ids:
+            delete_embedding(user_id, ENTITY_CALENDAR, ev_id)
+
+    exceptions = RecurrenceException.query.filter_by(user_id=user_id, recurrence_id=rule.id).all()
+    stale_exceptions = [ex for ex in exceptions if not _recurrence_occurs_on(rule, ex.day)]
+    if stale_exceptions:
+        for ex in stale_exceptions:
+            db.session.delete(ex)
+        db.session.commit()
 
 
 def _rollover_incomplete_events():
@@ -2124,6 +2358,14 @@ def notes_page():
     return render_template('notes.html', current_folder=None)
 
 
+@app.route('/vault')
+def vault_page():
+    user = get_current_user()
+    if not user:
+        return redirect(url_for('select_user'))
+    return render_template('vault.html')
+
+
 @app.route('/notes/new')
 def new_note_page():
     """New note editor page."""
@@ -2387,8 +2629,9 @@ def handle_notes():
         return jsonify({'error': 'No user selected'}), 401
     folder_id = request.args.get('folder_id')
     folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
-    include_all = str(request.args.get('all') or '').lower() in ['1', 'true', 'yes', 'on']
-    archived_only = str(request.args.get('archived') or '').lower() in ['1', 'true', 'yes', 'on']
+    include_all = _parse_bool(request.args.get('all'))
+    include_hidden = _parse_bool(request.args.get('include_hidden'))
+    archived_only = _parse_bool(request.args.get('archived'))
 
     if request.method == 'POST':
         data = request.json or {}
@@ -2396,7 +2639,8 @@ def handle_notes():
         content = data.get('content') or ''
         note_type = _normalize_note_type(data.get('note_type') or data.get('type'))
         title = raw_title or ('Untitled List' if note_type == 'list' else 'Untitled Note')
-        checkbox_mode = str(data.get('checkbox_mode') or '').lower() in ['1', 'true', 'yes', 'on']
+        checkbox_mode = _parse_bool(data.get('checkbox_mode'))
+        is_listed = _parse_bool(data.get('is_listed'), True)
         todo_item_id = data.get('todo_item_id')
         calendar_event_id = data.get('calendar_event_id')
         folder_id_value = data.get('folder_id')
@@ -2436,7 +2680,8 @@ def handle_notes():
             calendar_event_id=linked_event.id if linked_event else None,
             folder_id=folder_id_value,
             note_type=note_type,
-            checkbox_mode=checkbox_mode if note_type == 'list' else False
+            checkbox_mode=checkbox_mode if note_type == 'list' else False,
+            is_listed=is_listed
         )
         db.session.add(note)
         db.session.commit()
@@ -2452,6 +2697,8 @@ def handle_notes():
             notes_query = notes_query.filter(Note.folder_id.is_(None))
         else:
             notes_query = notes_query.filter_by(folder_id=folder_id_int)
+    if not include_hidden:
+        notes_query = notes_query.filter(Note.is_listed.is_(True))
     notes = notes_query.order_by(
         Note.pinned.desc(),
         Note.pin_order.asc(),
@@ -2488,6 +2735,82 @@ def handle_notes():
                 else:
                     payload['list_preview'] = preview_map.get(payload['id'], [])
     return jsonify(note_payload)
+
+
+@app.route('/api/notes/resolve-link', methods=['POST'])
+def resolve_note_link():
+    """Resolve or create a linked note from a note editor."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    source_note_id = data.get('source_note_id')
+    title = (data.get('title') or '').strip()
+    target_note_id = data.get('target_note_id')
+    is_listed = _parse_bool(data.get('is_listed'), True)
+    folder_id_value = data.get('folder_id')
+    folder_id_value = int(folder_id_value) if folder_id_value and str(folder_id_value).isdigit() else None
+
+    if not source_note_id or not str(source_note_id).isdigit():
+        return jsonify({'error': 'Invalid source_note_id'}), 400
+    source_note = Note.query.filter_by(id=int(source_note_id), user_id=user.id).first()
+    if not source_note:
+        return jsonify({'error': 'Source note not found'}), 404
+
+    if target_note_id:
+        if not str(target_note_id).isdigit():
+            return jsonify({'error': 'Invalid target_note_id'}), 400
+        target = Note.query.filter_by(id=int(target_note_id), user_id=user.id).first()
+        if not target:
+            return jsonify({'error': 'Target note not found'}), 404
+        existing = NoteLink.query.filter_by(source_note_id=source_note.id, target_note_id=target.id).first()
+        if not existing:
+            db.session.add(NoteLink(source_note_id=source_note.id, target_note_id=target.id))
+            db.session.commit()
+        return jsonify({'status': 'linked', 'note': target.to_dict()})
+
+    if not title:
+        return jsonify({'error': 'Missing title'}), 400
+
+    matches = Note.query.filter(
+        Note.user_id == user.id,
+        func.lower(Note.title) == title.lower()
+    ).order_by(Note.updated_at.desc()).all()
+    if len(matches) > 1:
+        payload = [
+            {
+                'id': note.id,
+                'title': note.title,
+                'is_listed': bool(note.is_listed),
+                'updated_at': note.updated_at.isoformat() if note.updated_at else None
+            }
+            for note in matches
+        ]
+        return jsonify({'status': 'choose', 'title': title, 'matches': payload})
+    if len(matches) == 1:
+        target = matches[0]
+        existing = NoteLink.query.filter_by(source_note_id=source_note.id, target_note_id=target.id).first()
+        if not existing:
+            db.session.add(NoteLink(source_note_id=source_note.id, target_note_id=target.id))
+            db.session.commit()
+        return jsonify({'status': 'linked', 'note': target.to_dict()})
+
+    if folder_id_value is not None:
+        NoteFolder.query.filter_by(id=folder_id_value, user_id=user.id).first_or_404()
+    note = Note(
+        title=title,
+        content='',
+        user_id=user.id,
+        folder_id=folder_id_value,
+        note_type='note',
+        checkbox_mode=False,
+        is_listed=is_listed
+    )
+    db.session.add(note)
+    db.session.flush()
+    db.session.add(NoteLink(source_note_id=source_note.id, target_note_id=note.id))
+    db.session.commit()
+    return jsonify({'status': 'created', 'note': note.to_dict()})
 
 
 @app.route('/api/notes/cleanup', methods=['POST'])
@@ -2762,6 +3085,351 @@ def move_notes():
     return jsonify({'updated': updated, 'folder_id': folder_id_int})
 
 
+@app.route('/api/vault/folders', methods=['GET', 'POST'])
+def vault_folders():
+    """List or create vault folders for the current user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    archived_only = str(request.args.get('archived') or '').lower() in ['1', 'true', 'yes', 'on']
+    parent_id = request.args.get('parent_id')
+    parent_id_int = int(parent_id) if parent_id and str(parent_id).isdigit() else None
+
+    if request.method == 'POST':
+        data = request.json or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'Folder name required'}), 400
+        parent_id = data.get('parent_id')
+        parent_id_int = int(parent_id) if parent_id and str(parent_id).isdigit() else None
+        if parent_id_int is not None:
+            DocumentFolder.query.filter_by(id=parent_id_int, user_id=user.id).first_or_404()
+        max_order = db.session.query(db.func.coalesce(db.func.max(DocumentFolder.order_index), 0)).filter(
+            DocumentFolder.user_id == user.id,
+            DocumentFolder.parent_id == parent_id_int
+        ).scalar()
+        folder = DocumentFolder(
+            user_id=user.id,
+            parent_id=parent_id_int,
+            name=name,
+            order_index=(max_order or 0) + 1
+        )
+        db.session.add(folder)
+        db.session.commit()
+        return jsonify(folder.to_dict()), 201
+
+    folder_query = DocumentFolder.query.filter_by(user_id=user.id)
+    if archived_only:
+        folder_query = folder_query.filter(DocumentFolder.archived_at.isnot(None))
+    else:
+        folder_query = folder_query.filter(DocumentFolder.archived_at.is_(None))
+    if parent_id is not None and str(parent_id).strip() != '':
+        if not str(parent_id).isdigit():
+            return jsonify({'error': 'Invalid parent_id'}), 400
+        folder_query = folder_query.filter(DocumentFolder.parent_id == parent_id_int)
+    folders = folder_query.order_by(
+        DocumentFolder.parent_id.asc(),
+        DocumentFolder.order_index.asc(),
+        DocumentFolder.name.asc()
+    ).all()
+    return jsonify([f.to_dict() for f in folders])
+
+
+@app.route('/api/vault/folders/<int:folder_id>', methods=['GET', 'PUT', 'DELETE'])
+def vault_folder_detail(folder_id):
+    """Get, update, or archive a vault folder."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    folder = DocumentFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+
+    if request.method == 'GET':
+        return jsonify(folder.to_dict())
+
+    if request.method == 'DELETE':
+        archived_at = _now_local()
+        _vault_archive_folder_recursive(user.id, folder.id, archived_at)
+        db.session.commit()
+        return jsonify({'archived': True, 'folder': folder.to_dict()})
+
+    data = request.json or {}
+    if 'name' in data:
+        name_val = (data.get('name') or '').strip()
+        if name_val:
+            folder.name = name_val
+    folder.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(folder.to_dict())
+
+
+@app.route('/api/vault/documents', methods=['GET', 'POST'])
+def vault_documents():
+    """List or upload vault documents."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    if request.method == 'GET':
+        archived_only = str(request.args.get('archived') or '').lower() in ['1', 'true', 'yes', 'on']
+        folder_id = request.args.get('folder_id')
+        folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
+        query = Document.query.filter_by(user_id=user.id)
+        if archived_only:
+            query = query.filter(Document.archived_at.isnot(None))
+        else:
+            query = query.filter(Document.archived_at.is_(None))
+        if folder_id is not None:
+            if str(folder_id).strip() == '':
+                query = query.filter(Document.folder_id.is_(None))
+            elif folder_id_int is not None:
+                query = query.filter(Document.folder_id == folder_id_int)
+            else:
+                return jsonify({'error': 'Invalid folder_id'}), 400
+        else:
+            query = query.filter(Document.folder_id.is_(None))
+        docs = query.order_by(
+            Document.pinned.desc(),
+            Document.pin_order.desc(),
+            Document.created_at.desc()
+        ).all()
+        return jsonify([doc.to_dict() for doc in docs])
+
+    files = request.files.getlist('files') or []
+    if not files:
+        single = request.files.get('file')
+        if single:
+            files = [single]
+    if not files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    folder_id = request.form.get('folder_id')
+    folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
+    if folder_id_int is not None:
+        DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+
+    prepared = []
+    for file in files:
+        if not file or not file.filename:
+            continue
+        original_filename = os.path.basename(file.filename)
+        if not original_filename:
+            continue
+        guessed_type = mimetypes.guess_type(original_filename)[0]
+        file_type = file.mimetype or guessed_type or 'application/octet-stream'
+        if _vault_is_blocked_file(original_filename, file_type):
+            return jsonify({'error': f'Blocked file type: {original_filename}'}), 400
+        title = (request.form.get('title') or '').strip()
+        if not title or len(files) > 1:
+            title = os.path.splitext(original_filename)[0] or 'Untitled'
+        tags = _tags_to_string(request.form.get('tags'))
+        extension = _vault_sanitize_extension(original_filename)
+        prepared.append({
+            'file': file,
+            'original_filename': original_filename,
+            'file_type': file_type,
+            'title': title,
+            'tags': tags,
+            'extension': extension
+        })
+
+    if not prepared:
+        return jsonify({'error': 'No valid files to upload'}), 400
+
+    created = []
+    saved_paths = []
+    vault_dir = _vault_root_for_user(user.id)
+    os.makedirs(vault_dir, exist_ok=True)
+    max_size = app.config.get('VAULT_MAX_FILE_SIZE', DEFAULT_VAULT_MAX_SIZE)
+
+    try:
+        for item in prepared:
+            stored_filename = f"{uuid.uuid4().hex}{('.' + item['extension']) if item['extension'] else ''}"
+            file_path = os.path.join(vault_dir, stored_filename)
+            item['file'].save(file_path)
+            saved_paths.append(file_path)
+            file_size = os.path.getsize(file_path)
+            if max_size and file_size > max_size:
+                raise ValueError('File exceeds size limit')
+            doc = Document(
+                user_id=user.id,
+                folder_id=folder_id_int,
+                title=item['title'],
+                original_filename=item['original_filename'],
+                stored_filename=stored_filename,
+                file_type=item['file_type'],
+                file_extension=item['extension'],
+                file_size=file_size,
+                tags=item['tags'],
+                pinned=False,
+                pin_order=0
+            )
+            db.session.add(doc)
+            created.append(doc)
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        for path in saved_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return jsonify({'error': str(exc)}), 400
+
+    if len(created) == 1:
+        return jsonify(created[0].to_dict()), 201
+    return jsonify([doc.to_dict() for doc in created]), 201
+
+
+@app.route('/api/vault/documents/<int:doc_id>', methods=['GET', 'PUT', 'DELETE'])
+def vault_document_detail(doc_id):
+    """Get, update, or archive a single document."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+
+    if request.method == 'GET':
+        return jsonify(doc.to_dict())
+
+    if request.method == 'DELETE':
+        doc.archived_at = _now_local()
+        doc.pinned = False
+        doc.pin_order = 0
+        doc.updated_at = _now_local()
+        db.session.commit()
+        return jsonify(doc.to_dict())
+
+    data = request.json or {}
+    if 'title' in data:
+        title_val = (data.get('title') or '').strip()
+        if not title_val:
+            return jsonify({'error': 'Title is required'}), 400
+        doc.title = title_val
+    if 'tags' in data:
+        doc.tags = _tags_to_string(data.get('tags'))
+    if 'folder_id' in data:
+        folder_id = data.get('folder_id')
+        if folder_id in (None, ''):
+            doc.folder_id = None
+        else:
+            try:
+                folder_id_int = int(folder_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid folder_id'}), 400
+            DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+            doc.folder_id = folder_id_int
+    if 'pinned' in data:
+        pinned = _parse_bool(data.get('pinned'))
+        if pinned and not doc.pinned:
+            max_pin = db.session.query(db.func.coalesce(db.func.max(Document.pin_order), 0)).filter(
+                Document.user_id == user.id,
+                Document.pinned.is_(True)
+            ).scalar()
+            doc.pin_order = (max_pin or 0) + 1
+        if not pinned:
+            doc.pin_order = 0
+        doc.pinned = pinned
+    doc.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(doc.to_dict())
+
+
+@app.route('/api/vault/documents/<int:doc_id>/download', methods=['GET'])
+def vault_document_download(doc_id):
+    """Download the original file."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    vault_dir = _vault_root_for_user(user.id)
+    download_name = _vault_build_download_name(doc.title, doc.original_filename)
+    return send_from_directory(vault_dir, doc.stored_filename, as_attachment=True, download_name=download_name)
+
+
+@app.route('/api/vault/documents/<int:doc_id>/preview', methods=['GET'])
+def vault_document_preview(doc_id):
+    """Preview supported document types."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    if doc.get_file_category() not in ['image', 'pdf', 'text', 'audio', 'video', 'code']:
+        return jsonify({'error': 'Preview not supported'}), 400
+    vault_dir = _vault_root_for_user(user.id)
+    return send_from_directory(vault_dir, doc.stored_filename, as_attachment=False)
+
+
+@app.route('/api/vault/documents/<int:doc_id>/move', methods=['POST'])
+def vault_document_move(doc_id):
+    """Move a document to another folder."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    data = request.json or {}
+    folder_id = data.get('folder_id')
+    if folder_id in (None, ''):
+        doc.folder_id = None
+    else:
+        try:
+            folder_id_int = int(folder_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid folder_id'}), 400
+        DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+        doc.folder_id = folder_id_int
+    doc.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(doc.to_dict())
+
+
+@app.route('/api/vault/search', methods=['GET'])
+def vault_search():
+    """Search documents by title, filename, type, or tags."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    query = (request.args.get('q') or '').strip()
+    if not query:
+        return jsonify([])
+    like = f"%{query}%"
+    results = Document.query.filter(
+        Document.user_id == user.id,
+        Document.archived_at.is_(None),
+        or_(
+            Document.title.ilike(like),
+            Document.original_filename.ilike(like),
+            Document.file_type.ilike(like),
+            Document.tags.ilike(like)
+        )
+    ).order_by(
+        Document.pinned.desc(),
+        Document.pin_order.desc(),
+        Document.created_at.desc()
+    ).all()
+    return jsonify([doc.to_dict() for doc in results])
+
+
+@app.route('/api/vault/stats', methods=['GET'])
+def vault_stats():
+    """Return storage usage stats for the current user."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    total_size = db.session.query(db.func.coalesce(db.func.sum(Document.file_size), 0)).filter(
+        Document.user_id == user.id,
+        Document.archived_at.is_(None)
+    ).scalar() or 0
+    total_count = Document.query.filter_by(user_id=user.id).filter(Document.archived_at.is_(None)).count()
+    pinned_count = Document.query.filter_by(user_id=user.id, pinned=True).filter(Document.archived_at.is_(None)).count()
+    return jsonify({
+        'total_size': int(total_size),
+        'document_count': int(total_count),
+        'pinned_count': int(pinned_count)
+    })
+
+
 @app.route('/api/recalls', methods=['GET', 'POST'])
 def handle_recalls():
     """List or create recall items."""
@@ -2890,6 +3558,9 @@ def handle_note(note_id):
             pin = str(data.get('pin', '')).strip()
             if not pin or not user.check_notes_pin(pin):
                 return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
+        NoteLink.query.filter(
+            or_(NoteLink.source_note_id == note.id, NoteLink.target_note_id == note.id)
+        ).delete(synchronize_session=False)
         db.session.delete(note)
         db.session.commit()
         return '', 204
@@ -2909,7 +3580,9 @@ def handle_note(note_id):
         if 'content' in data and note.note_type == 'note':
             note.content = data.get('content', note.content)
         if 'checkbox_mode' in data and note.note_type == 'list':
-            note.checkbox_mode = str(data.get('checkbox_mode') or '').lower() in ['1', 'true', 'yes', 'on']
+            note.checkbox_mode = _parse_bool(data.get('checkbox_mode'))
+        if 'is_listed' in data:
+            note.is_listed = _parse_bool(data.get('is_listed'), True)
         note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
         if 'pinned' in data:
             is_pin = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
@@ -3147,6 +3820,111 @@ def note_list_items(note_id):
     db.session.add(item)
     db.session.commit()
     return jsonify(item.to_dict()), 201
+
+
+@app.route('/api/notes/<int:note_id>/list-items/duplicates', methods=['GET'])
+def note_list_item_duplicates(note_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.note_type != 'list':
+        return jsonify({'error': 'Not a list note'}), 400
+
+    items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+        NoteListItem.order_index.asc(),
+        NoteListItem.id.asc()
+    ).all()
+
+    section_by_id = {}
+    current_section = None
+    for item in items:
+        text_value = (item.text or '').strip()
+        if text_value.startswith(LIST_SECTION_PREFIX):
+            title = text_value[len(LIST_SECTION_PREFIX):].strip()
+            current_section = title or 'Untitled section'
+            section_by_id[item.id] = current_section
+            continue
+        section_by_id[item.id] = current_section
+
+    candidates = []
+    for item in items:
+        if (item.text or '').strip().startswith(LIST_SECTION_PREFIX):
+            continue
+        preview = _build_list_preview_text(item).strip()
+        if not preview:
+            continue
+        candidates.append({
+            'id': item.id,
+            'text': item.text or '',
+            'note': item.note,
+            'link_text': item.link_text,
+            'link_url': item.link_url,
+            'order_index': item.order_index or 0,
+            'preview': preview,
+            'section': section_by_id.get(item.id)
+        })
+
+    if len(candidates) < 2:
+        return jsonify({'groups': [], 'method': 'none', 'threshold': None})
+
+    normalized = [_normalize_similarity_text(item['preview']) for item in candidates]
+    tokens = [_tokenize_similarity(text) for text in normalized]
+
+    embeddings = []
+    for text in normalized:
+        embedding = embed_text(text)
+        if embedding is None:
+            embeddings = None
+            break
+        embeddings.append(embedding)
+
+    if embeddings:
+        threshold = 0.8
+
+        def similarity_fn(i, j):
+            cosine = _cosine_similarity(embeddings[i], embeddings[j])
+            containment = _containment_similarity(tokens[i], tokens[j])
+            substring = _substring_similarity(normalized[i], normalized[j])
+            return max(cosine, containment, substring)
+
+        grouped = _group_duplicates(candidates, similarity_fn, threshold)
+        method = 'embeddings'
+    else:
+        threshold = 0.6
+
+        def similarity_fn(i, j):
+            seq_score = _sequence_similarity(normalized[i], normalized[j])
+            token_score = _jaccard_similarity(tokens[i], tokens[j])
+            containment = _containment_similarity(tokens[i], tokens[j])
+            substring = _substring_similarity(normalized[i], normalized[j])
+            return max(seq_score, token_score, containment, substring)
+
+        grouped = _group_duplicates(candidates, similarity_fn, threshold)
+        method = 'fuzzy'
+
+    groups = []
+    for group in grouped:
+        sorted_group = sorted(group, key=lambda entry: entry['order_index'])
+        groups.append({
+            'representative': sorted_group[0]['preview'],
+            'items': [
+                {
+                    'id': entry['id'],
+                    'text': entry['text'],
+                    'note': entry['note'],
+                    'link_text': entry['link_text'],
+                    'link_url': entry['link_url'],
+                    'order_index': entry['order_index'],
+                    'section': entry.get('section')
+                }
+                for entry in sorted_group
+            ]
+        })
+
+    groups.sort(key=lambda entry: len(entry['items']), reverse=True)
+    return jsonify({'groups': groups, 'method': method, 'threshold': threshold})
 
 
 @app.route('/api/notes/<int:note_id>/list-items/<int:item_id>', methods=['PUT', 'DELETE'])
@@ -4212,7 +4990,7 @@ def create_recurring_calendar_event():
         return jsonify({'error': 'Invalid start day'}), 400
 
     frequency = (data.get('frequency') or '').lower()
-    allowed_freq = {'daily', 'weekly', 'biweekly', 'monthly', 'yearly', 'custom'}
+    allowed_freq = {'daily', 'weekly', 'biweekly', 'monthly', 'monthly_weekday', 'yearly', 'custom'}
     if frequency not in allowed_freq:
         return jsonify({'error': 'Invalid frequency'}), 400
 
@@ -4221,6 +4999,8 @@ def create_recurring_calendar_event():
     days_of_week = _parse_days_of_week(data.get('days_of_week'))
     day_of_month = data.get('day_of_month')
     month_of_year = data.get('month_of_year')
+    week_of_month = data.get('week_of_month')
+    weekday_of_month = data.get('weekday_of_month')
     try:
         day_of_month = int(day_of_month) if day_of_month is not None else None
     except (TypeError, ValueError):
@@ -4229,6 +5009,14 @@ def create_recurring_calendar_event():
         month_of_year = int(month_of_year) if month_of_year is not None else None
     except (TypeError, ValueError):
         month_of_year = None
+    try:
+        week_of_month = int(week_of_month) if week_of_month is not None else None
+    except (TypeError, ValueError):
+        week_of_month = None
+    try:
+        weekday_of_month = int(weekday_of_month) if weekday_of_month is not None else None
+    except (TypeError, ValueError):
+        weekday_of_month = None
 
     if frequency == 'daily':
         interval = 1
@@ -4248,6 +5036,13 @@ def create_recurring_calendar_event():
         interval_unit = 'months'
         if day_of_month is None:
             day_of_month = start_day.day
+    elif frequency == 'monthly_weekday':
+        interval = 1
+        interval_unit = 'months'
+        if weekday_of_month is None:
+            weekday_of_month = start_day.weekday()
+        if week_of_month is None:
+            week_of_month = _weekday_occurrence_in_month(start_day)
     elif frequency == 'yearly':
         interval = 1
         interval_unit = 'years'
@@ -4274,6 +5069,10 @@ def create_recurring_calendar_event():
         return jsonify({'error': 'Invalid day of month'}), 400
     if month_of_year is not None and not (1 <= month_of_year <= 12):
         return jsonify({'error': 'Invalid month of year'}), 400
+    if week_of_month is not None and not (1 <= week_of_month <= 5):
+        return jsonify({'error': 'Invalid week of month'}), 400
+    if weekday_of_month is not None and not (0 <= weekday_of_month <= 6):
+        return jsonify({'error': 'Invalid weekday of month'}), 400
 
     start_time = _parse_time_str(data.get('start_time'))
     end_time = _parse_time_str(data.get('end_time'))
@@ -4311,7 +5110,9 @@ def create_recurring_calendar_event():
         interval_unit=interval_unit,
         days_of_week=(','.join(str(d) for d in days_of_week) if days_of_week else None),
         day_of_month=day_of_month,
-        month_of_year=month_of_year
+        month_of_year=month_of_year,
+        week_of_month=week_of_month,
+        weekday_of_month=weekday_of_month
     )
     db.session.add(rule)
     db.session.commit()
@@ -4347,7 +5148,9 @@ def list_recurring_events():
             'interval_unit': r.interval_unit,
             'days_of_week': [int(d) for d in r.days_of_week.split(',')] if r.days_of_week else [],
             'day_of_month': r.day_of_month,
-            'month_of_year': r.month_of_year
+            'month_of_year': r.month_of_year,
+            'week_of_month': r.week_of_month,
+            'weekday_of_month': r.weekday_of_month
         })
     return jsonify(result)
 
@@ -4395,9 +5198,26 @@ def recurring_event_detail(rule_id):
             rule.reminder_minutes_before = int(data['reminder_minutes_before']) if data['reminder_minutes_before'] else None
         except (TypeError, ValueError):
             pass
+    if 'day' in data or 'start_day' in data:
+        start_raw = data.get('day') if 'day' in data else data.get('start_day')
+        if not start_raw:
+            return jsonify({'error': 'Invalid start day'}), 400
+        start_day = _parse_day_value(start_raw)
+        if not start_day:
+            return jsonify({'error': 'Invalid start day'}), 400
+        rule.start_day = start_day
+    if 'end_day' in data:
+        end_raw = data.get('end_day')
+        if not end_raw:
+            rule.end_day = None
+        else:
+            end_day = _parse_day_value(end_raw)
+            if not end_day:
+                return jsonify({'error': 'Invalid end day'}), 400
+            rule.end_day = end_day
     if 'frequency' in data:
         freq = (data.get('frequency') or '').lower()
-        if freq in {'daily', 'weekly', 'biweekly', 'monthly', 'yearly', 'custom'}:
+        if freq in {'daily', 'weekly', 'biweekly', 'monthly', 'monthly_weekday', 'yearly', 'custom'}:
             rule.frequency = freq
     if 'interval' in data:
         try:
@@ -4424,8 +5244,29 @@ def recurring_event_detail(rule_id):
                 rule.month_of_year = moy
         except (TypeError, ValueError):
             pass
+    if 'week_of_month' in data:
+        try:
+            wom = int(data['week_of_month']) if data['week_of_month'] else None
+            if wom is None or 1 <= wom <= 5:
+                rule.week_of_month = wom
+        except (TypeError, ValueError):
+            pass
+    if 'weekday_of_month' in data:
+        try:
+            wom = int(data['weekday_of_month']) if data['weekday_of_month'] else None
+            if wom is None or 0 <= wom <= 6:
+                rule.weekday_of_month = wom
+        except (TypeError, ValueError):
+            pass
+
+    if rule.frequency == 'monthly_weekday':
+        if rule.weekday_of_month is None:
+            rule.weekday_of_month = rule.start_day.weekday()
+        if rule.week_of_month is None:
+            rule.week_of_month = _weekday_occurrence_in_month(rule.start_day)
 
     db.session.commit()
+    _prune_recurring_instances(rule, user.id)
     return jsonify({'id': rule.id})
 
 

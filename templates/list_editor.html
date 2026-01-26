@@ -24,6 +24,9 @@
                     <button class="dropdown-item" id="list-select-toggle">
                         <i class="fa-solid fa-check-square"></i> Select
                     </button>
+                    <button class="dropdown-item" id="list-duplicates-btn">
+                        <i class="fa-solid fa-clone"></i> Find duplicates
+                    </button>
                     <button class="dropdown-item" id="list-share-btn">
                         <i class="fa-solid fa-share-nodes"></i> Share
                     </button>
@@ -95,6 +98,18 @@
             <div class="modal-actions">
                 <button class="btn" id="list-section-cancel-btn">Cancel</button>
                 <button class="btn btn-primary" id="list-section-save-btn">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="list-duplicates-modal">
+        <div class="modal-content list-duplicates-content">
+            <h2>Possible duplicates</h2>
+            <p id="list-duplicates-subtitle" style="color: var(--text-muted); margin: 0.5rem 0 1rem 0;">Scanning your list...</p>
+            <div class="list-duplicates-list" id="list-duplicates-list"></div>
+            <div class="modal-actions">
+                <button class="btn btn-danger" id="list-duplicates-delete-selected-btn">Delete selected</button>
+                <button class="btn" id="list-duplicates-close-btn">Close</button>
             </div>
         </div>
     </div>
