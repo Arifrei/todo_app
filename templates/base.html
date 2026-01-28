@@ -164,6 +164,12 @@
                             <span class="nav-label">Bookmarks</span>
                         </a>
                     </li>
+                    <li data-nav-id="planner">
+                        <a href="/planner" class="{{ 'active' if request.path.startswith('/planner') else '' }}">
+                            <span class="icon-bubble"><i class="fa-solid fa-folder-tree"></i></span>
+                            <span class="nav-label">Planner</span>
+                        </a>
+                    </li>
                     <li data-nav-id="feed">
                         <a href="/feed" class="{{ 'active' if request.path.startswith('/feed') else '' }}">
                             <span class="icon-bubble"><i class="fa-solid fa-bolt"></i></span>

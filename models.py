@@ -610,6 +610,168 @@ class DoFeedItem(db.Model):
         }
 
 
+class PlannerFolder(db.Model):
+    """Folder for Planner items (simple or multi-level)."""
+    __tablename__ = 'planner_folder'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=True)
+    name = db.Column(db.String(150), nullable=False)
+    folder_type = db.Column(db.String(20), nullable=False, default='simple')  # simple | multi
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    children = db.relationship(
+        'PlannerFolder',
+        backref=db.backref('parent', remote_side=[id]),
+        lazy=True,
+        cascade="all, delete-orphan"
+    )
+    simple_items = db.relationship('PlannerSimpleItem', backref='folder', lazy=True, cascade="all, delete-orphan")
+    groups = db.relationship('PlannerGroup', backref='folder', lazy=True, cascade="all, delete-orphan")
+    multi_items = db.relationship(
+        'PlannerMultiItem',
+        backref='folder',
+        lazy=True,
+        cascade="all, delete-orphan",
+        foreign_keys='PlannerMultiItem.folder_id'
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'parent_id': self.parent_id,
+            'name': self.name,
+            'folder_type': self.folder_type,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PlannerSimpleItem(db.Model):
+    """Single-line Planner item stored inside a simple folder."""
+    __tablename__ = 'planner_simple_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    value = db.Column(db.String(600), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'folder_id': self.folder_id,
+            'title': self.title,
+            'value': self.value,
+            'description': self.description,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PlannerGroup(db.Model):
+    """Group container inside a multi-level Planner folder."""
+    __tablename__ = 'planner_group'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = db.relationship(
+        'PlannerMultiItem',
+        backref='group',
+        lazy=True,
+        cascade="all, delete-orphan",
+        foreign_keys='PlannerMultiItem.group_id'
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'folder_id': self.folder_id,
+            'title': self.title,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PlannerMultiItem(db.Model):
+    """Multi-line item that lives inside a multi-level folder or group."""
+    __tablename__ = 'planner_multi_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('planner_group.id'), nullable=True)
+    title = db.Column(db.String(200), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    lines = db.relationship(
+        'PlannerMultiLine',
+        backref='item',
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="PlannerMultiLine.order_index"
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'folder_id': self.folder_id,
+            'group_id': self.group_id,
+            'title': self.title,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class PlannerMultiLine(db.Model):
+    """One line of content within a Planner multi-line item."""
+    __tablename__ = 'planner_multi_line'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=False)
+    line_type = db.Column(db.String(20), nullable=False, default='text')  # text | url
+    value = db.Column(db.String(600), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'item_id': self.item_id,
+            'line_type': self.line_type,
+            'value': self.value,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class EmbeddingRecord(db.Model):
     """Stored embeddings for semantic search across app entities."""
     __tablename__ = 'embedding_record'

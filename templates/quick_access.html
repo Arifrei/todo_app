@@ -747,6 +747,20 @@ let qaFolderNavState = {
     selectedFolderName: ''
 };
 
+function buildFolderStack(folderId, folders) {
+    if (!folderId) return [];
+    const folderMap = new Map((folders || []).map(folder => [folder.id, folder]));
+    const path = [];
+    let current = folderId;
+    while (current) {
+        path.unshift(current);
+        const folder = folderMap.get(current);
+        if (!folder) break;
+        current = folder.parent_id || null;
+    }
+    return [null, ...path.slice(0, -1)];
+}
+
 function resetQAFolderNavState() {
     qaFolderNavState = {
         currentFolderId: null,
@@ -761,12 +775,15 @@ async function loadFoldersForQuickAccess(selectedFolderId = null) {
     try {
         const res = await fetch('/api/note-folders');
         qaFolderNavState.folders = res.ok ? await res.json() : [];
-        qaFolderNavState.currentFolderId = null;
-        qaFolderNavState.stack = [];
         if (selectedFolderId) {
             qaFolderNavState.selectedFolderId = selectedFolderId;
             const folder = qaFolderNavState.folders.find(f => f.id === selectedFolderId);
             qaFolderNavState.selectedFolderName = folder ? folder.name : '';
+            qaFolderNavState.currentFolderId = selectedFolderId;
+            qaFolderNavState.stack = buildFolderStack(selectedFolderId, qaFolderNavState.folders);
+        } else {
+            qaFolderNavState.currentFolderId = null;
+            qaFolderNavState.stack = [];
         }
         renderQAFolderNavigation();
     } catch (error) {
@@ -787,6 +804,24 @@ function renderQAFolderNavigation() {
         .filter(folder => (folder.parent_id || null) === (folderId || null))
         .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
 
+    if (folderId) {
+        const currentFolder = qaFolderNavState.folders.find(f => f.id === folderId);
+        const currentItem = document.createElement('button');
+        currentItem.className = 'qa-nav-item qa-nav-current';
+        currentItem.dataset.folderId = folderId;
+        currentItem.innerHTML = `
+            <i class="fa-solid fa-folder-open"></i>
+            <span>Add "${escapeHtml(currentFolder ? currentFolder.name : 'Folder')}" (This Folder)</span>
+        `;
+        currentItem.onclick = () => selectQAFolder(folderId, currentFolder ? currentFolder.name : 'Folder');
+        container.appendChild(currentItem);
+
+        const divider = document.createElement('div');
+        divider.className = 'qa-nav-divider';
+        divider.textContent = 'Or choose a subfolder:';
+        container.appendChild(divider);
+    }
+
     if (folders.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'qa-nav-empty';
@@ -801,7 +836,7 @@ function renderQAFolderNavigation() {
         item.dataset.folderId = folder.id;
 
         const hasChildren = qaFolderNavState.folders.some(f => f.parent_id === folder.id);
-        const arrow = hasChildren ? '<i class="fa-solid fa-chevron-right"></i>' : '';
+        const arrow = '<i class="fa-solid fa-chevron-right"></i>';
         const lockIcon = folder.is_pin_protected ? '<i class="fa-solid fa-lock" style="margin-left: 0.5rem; color: var(--text-muted);"></i>' : '';
 
         item.innerHTML = `
@@ -812,21 +847,8 @@ function renderQAFolderNavigation() {
 
         item.onclick = (e) => {
             e.preventDefault();
-            if (hasChildren) {
-                // Show option to select this folder or navigate into it
-                selectQAFolder(folder.id, folder.name);
-            } else {
-                selectQAFolder(folder.id, folder.name);
-            }
+            navigateQAFolder(folder.id);
         };
-
-        // Double-click to navigate into folder with children
-        if (hasChildren) {
-            item.ondblclick = (e) => {
-                e.preventDefault();
-                navigateQAFolder(folder.id);
-            };
-        }
 
         container.appendChild(item);
     });

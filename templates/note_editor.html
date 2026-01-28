@@ -158,4 +158,43 @@
     </div>
 </div>
 
+<!-- Edit Note Link Modal -->
+<div class="modal" id="note-edit-link-modal">
+    <div class="modal-content" style="max-width: 520px;">
+        <h2>Edit link</h2>
+        <br>
+        <div class="form-group">
+            <label>Text</label>
+            <input type="text" id="note-edit-link-text" class="form-control" placeholder="Link text">
+        </div>
+        <div class="form-group">
+            <label>Link type</label>
+            <select id="note-edit-link-type" class="form-control">
+                <option value="note">Note</option>
+                <option value="external">External URL</option>
+            </select>
+        </div>
+        <div class="form-group" id="note-edit-link-url-group" style="display:none;">
+            <label>URL</label>
+            <input type="text" id="note-edit-link-url" class="form-control" placeholder="https://example.com">
+        </div>
+        <div class="form-group" id="note-edit-link-note-group">
+            <button class="btn btn-secondary" id="note-edit-link-relink-btn">
+                <i class="fa-solid fa-link"></i> Relink note
+            </button>
+        </div>
+        <div class="note-link-footer note-edit-link-footer">
+            <button class="btn btn-danger btn-icon-only" id="note-edit-link-remove-btn" title="Remove link" aria-label="Remove link">
+                <i class="fa-solid fa-link-slash"></i>
+            </button>
+            <button class="btn btn-icon-only" id="note-edit-link-cancel-btn" title="Cancel" aria-label="Cancel">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <button class="btn btn-primary btn-icon-only" id="note-edit-link-save-btn" title="Save" aria-label="Save">
+                <i class="fa-solid fa-check"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
 {% endblock %}

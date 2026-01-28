@@ -13,6 +13,11 @@ Creates/aligns all core tables to the current models:
 - recall_items
 - bookmark_item
 - do_feed_item
+- planner_folder
+- planner_simple_item
+- planner_group
+- planner_multi_item
+- planner_multi_line
 The script is idempotent: it only adds missing tables/columns and backfills
 order indexes and legacy statuses.
 """
@@ -504,6 +509,141 @@ def ensure_do_feed_table(cur):
     add_column(cur, "do_feed_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_planner_folder_table(cur):
+    if not table_exists(cur, "planner_folder"):
+        cur.execute(
+            """
+            CREATE TABLE planner_folder (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                parent_id INTEGER,
+                name VARCHAR(150) NOT NULL,
+                folder_type VARCHAR(20) NOT NULL DEFAULT 'simple',
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] planner_folder table created")
+        return
+    add_column(cur, "planner_folder", "user_id", "INTEGER")
+    add_column(cur, "planner_folder", "parent_id", "INTEGER")
+    add_column(cur, "planner_folder", "name", "VARCHAR(150) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_folder", "folder_type", "VARCHAR(20) NOT NULL DEFAULT 'simple'")
+    add_column(cur, "planner_folder", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "planner_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "planner_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_planner_simple_item_table(cur):
+    if not table_exists(cur, "planner_simple_item"):
+        cur.execute(
+            """
+            CREATE TABLE planner_simple_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                folder_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                value VARCHAR(600) NOT NULL,
+                description TEXT,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] planner_simple_item table created")
+        return
+    add_column(cur, "planner_simple_item", "user_id", "INTEGER")
+    add_column(cur, "planner_simple_item", "folder_id", "INTEGER")
+    add_column(cur, "planner_simple_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_simple_item", "value", "VARCHAR(600) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_simple_item", "description", "TEXT")
+    add_column(cur, "planner_simple_item", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "planner_simple_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "planner_simple_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_planner_group_table(cur):
+    if not table_exists(cur, "planner_group"):
+        cur.execute(
+            """
+            CREATE TABLE planner_group (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                folder_id INTEGER NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] planner_group table created")
+        return
+    add_column(cur, "planner_group", "user_id", "INTEGER")
+    add_column(cur, "planner_group", "folder_id", "INTEGER")
+    add_column(cur, "planner_group", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_group", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "planner_group", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "planner_group", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_planner_multi_item_table(cur):
+    if not table_exists(cur, "planner_multi_item"):
+        cur.execute(
+            """
+            CREATE TABLE planner_multi_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                folder_id INTEGER NOT NULL,
+                group_id INTEGER,
+                title VARCHAR(200) NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] planner_multi_item table created")
+        return
+    add_column(cur, "planner_multi_item", "user_id", "INTEGER")
+    add_column(cur, "planner_multi_item", "folder_id", "INTEGER")
+    add_column(cur, "planner_multi_item", "group_id", "INTEGER")
+    add_column(cur, "planner_multi_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_multi_item", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "planner_multi_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "planner_multi_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def ensure_planner_multi_line_table(cur):
+    if not table_exists(cur, "planner_multi_line"):
+        cur.execute(
+            """
+            CREATE TABLE planner_multi_line (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_id INTEGER NOT NULL,
+                line_type VARCHAR(20) NOT NULL DEFAULT 'text',
+                value VARCHAR(600) NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        print("[add] planner_multi_line table created")
+        return
+    add_column(cur, "planner_multi_line", "user_id", "INTEGER")
+    add_column(cur, "planner_multi_line", "item_id", "INTEGER")
+    add_column(cur, "planner_multi_line", "line_type", "VARCHAR(20) NOT NULL DEFAULT 'text'")
+    add_column(cur, "planner_multi_line", "value", "VARCHAR(600) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_multi_line", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "planner_multi_line", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "planner_multi_line", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
 def ensure_embedding_table(cur):
     """Create or align the embeddings table used for semantic search."""
     if not table_exists(cur, "embedding_record"):
@@ -730,6 +870,11 @@ def main():
         ensure_recall_table(cur)
         ensure_bookmark_table(cur)
         ensure_do_feed_table(cur)
+        ensure_planner_folder_table(cur)
+        ensure_planner_simple_item_table(cur)
+        ensure_planner_group_table(cur)
+        ensure_planner_multi_item_table(cur)
+        ensure_planner_multi_line_table(cur)
         ensure_embedding_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)

@@ -1,0 +1,1155 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="planner-page" data-folder-id="{{ folder_id or '' }}">
+    <header class="header-row">
+        <div>
+            <h1><a class="planner-title-link" href="/planner">Planner</a></h1>
+            <p style="color: var(--text-muted);">Things to revisit later, organized by strict folders.</p>
+            {% if folder_id %}
+            <div class="planner-breadcrumb planner-breadcrumb-header">
+                <button class="planner-crumb planner-back-btn" type="button" onclick="plannerGoBack()" title="Back">
+                    <i class="fa-solid fa-arrow-left"></i>
+                    <span class="planner-back-text">Back</span>
+                </button>
+                <span class="planner-crumb-sep">/</span>
+                <span class="planner-crumb current" id="planner-current-name">Folder</span>
+            </div>
+            {% endif %}
+        </div>
+        <div class="planner-fab" id="planner-fab">
+            <button class="tasks-fab-main" id="planner-fab-main" aria-label="Add">
+                <i class="fa-solid fa-plus"></i>
+            </button>
+            <div class="planner-fab-options" id="planner-fab-options"></div>
+        </div>
+    </header>
+
+    <div class="feed-add-form planner-simple-add-form" id="planner-simple-add-form">
+        <div class="feed-add-row">
+            <input type="text" id="planner-simple-input" class="feed-add-input" placeholder="Title; https://example.com; optional note">
+            <button class="planner-simple-close" type="button" id="planner-simple-close" aria-label="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="feed-add-hint">Format: Title; URL; optional short description</div>
+        <div class="feed-state-row">
+            <div class="feed-state-chips" id="planner-folder-chips"></div>
+            <div class="feed-state-add" id="planner-folder-add">
+                <input type="text" class="feed-state-input" id="planner-folder-input" placeholder="Folder">
+                <button class="feed-state-confirm" type="button" id="planner-folder-confirm" aria-label="Add folder">
+                    <i class="fa-solid fa-check"></i>
+                </button>
+                <button class="feed-state-cancel" type="button" id="planner-folder-cancel" aria-label="Cancel">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="planner-content" id="planner-content"></div>
+</div>
+
+<div class="modal" id="planner-modal">
+    <div class="modal-content planner-modal-content">
+        <h2 id="planner-modal-title">Add</h2>
+        <div id="planner-modal-body"></div>
+        <div class="modal-actions">
+            <button class="btn" type="button" onclick="closePlannerModal()">Cancel</button>
+            <button class="btn btn-primary" type="button" id="planner-modal-submit">Save</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const plannerState = {
+    folders: [],
+    simpleItems: [],
+    multiItems: [],
+    multiLines: [],
+    currentFolderId: null,
+    expandedSimple: new Set(),
+    expandedMulti: new Set(),
+    activeAddType: null,
+    simpleAddOpen: false,
+    addingSimpleFolder: false
+};
+
+function getPlannerFolder(folderId) {
+    return plannerState.folders.find(folder => folder.id === folderId);
+}
+
+function getFolderChildren(parentId) {
+    return plannerState.folders.filter(folder => folder.parent_id === parentId);
+}
+
+function normalizeUrl(value) {
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('www.')) return `https://${value}`;
+    return `https://${value}`;
+}
+
+function looksLikeUrl(value) {
+    return /^(https?:\/\/|www\.)/i.test((value || '').trim());
+}
+
+function parsePlannerSimpleInput(raw) {
+    if (!raw) return null;
+    const parts = raw.split(';');
+    const title = (parts[0] || '').trim();
+    const url = (parts[1] || '').trim();
+    const description = parts.slice(2).join(';').trim();
+    return { title, url, description };
+}
+
+function getPlannerAddOptions() {
+    const folder = getPlannerFolder(plannerState.currentFolderId);
+    if (!folder) {
+        return [
+            { id: 'simple-item', label: 'Simple item' },
+            { id: 'folder-simple', label: 'Simple folder' },
+            { id: 'folder-multi', label: 'Multi folder' }
+        ];
+    }
+    if (folder.folder_type === 'simple') {
+        return [{ id: 'simple-item', label: 'Simple item' }];
+    }
+    return [
+        { id: 'subfolder', label: 'Folder' },
+        { id: 'group-item', label: 'Group item' }
+    ];
+}
+
+function renderPlannerFab() {
+    const optionsWrap = document.getElementById('planner-fab-options');
+    if (!optionsWrap) return;
+    const options = getPlannerAddOptions();
+    optionsWrap.innerHTML = options.map(opt => `
+        <button class="planner-pill" type="button" onclick="openPlannerAddModal('${opt.id}')">${opt.label}</button>
+    `).join('');
+}
+
+function openPlannerAddModal(type) {
+    if (type === 'simple-item') {
+        togglePlannerSimpleAddForm();
+        return;
+    }
+    closePlannerSimpleAddForm();
+    plannerState.activeAddType = type;
+    const modal = document.getElementById('planner-modal');
+    const title = document.getElementById('planner-modal-title');
+    const body = document.getElementById('planner-modal-body');
+    const submitBtn = document.getElementById('planner-modal-submit');
+    const fabWrapper = document.getElementById('planner-fab');
+    if (!modal || !title || !body || !submitBtn) return;
+
+    const folder = getPlannerFolder(plannerState.currentFolderId);
+    const config = buildPlannerModalForm(type, folder);
+    title.textContent = config.title;
+    body.innerHTML = config.body;
+    submitBtn.onclick = config.onSubmit;
+    modal.classList.add('active');
+    if (fabWrapper) fabWrapper.classList.remove('expanded');
+}
+
+function closePlannerModal() {
+    const modal = document.getElementById('planner-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+function togglePlannerSimpleAddForm() {
+    if (plannerState.simpleAddOpen) {
+        closePlannerSimpleAddForm();
+    } else {
+        openPlannerSimpleAddForm();
+    }
+}
+
+function openPlannerSimpleAddForm() {
+    plannerState.simpleAddOpen = true;
+    renderPlannerSimpleAddForm();
+    const input = document.getElementById('planner-simple-input');
+    if (input) input.focus();
+    const fabWrapper = document.getElementById('planner-fab');
+    if (fabWrapper) fabWrapper.classList.remove('expanded');
+}
+
+function closePlannerSimpleAddForm() {
+    plannerState.simpleAddOpen = false;
+    plannerState.addingSimpleFolder = false;
+    const form = document.getElementById('planner-simple-add-form');
+    if (form) form.classList.remove('open');
+}
+
+function getSimplePlannerFolders() {
+    return plannerState.folders
+        .filter(folder => folder.folder_type === 'simple')
+        .sort((a, b) => {
+            const aOrder = a.order_index ?? 0;
+            const bOrder = b.order_index ?? 0;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return (a.created_at || '').localeCompare(b.created_at || '');
+        });
+}
+
+function renderPlannerSimpleAddForm() {
+    const form = document.getElementById('planner-simple-add-form');
+    if (!form) return;
+    const folder = getPlannerFolder(plannerState.currentFolderId);
+    const allowSimpleAdd = !folder || folder.folder_type === 'simple';
+    if (!allowSimpleAdd) {
+        form.classList.remove('open');
+        return;
+    }
+    form.classList.toggle('open', plannerState.simpleAddOpen);
+    if (plannerState.simpleAddOpen) {
+        renderPlannerFolderChips();
+    }
+}
+
+function renderPlannerFolderChips() {
+    const chipWrap = document.getElementById('planner-folder-chips');
+    const addWrap = document.getElementById('planner-folder-add');
+    if (!chipWrap || !addWrap) return;
+    chipWrap.innerHTML = '';
+    const folders = getSimplePlannerFolders();
+    folders.forEach(folder => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isActive = plannerState.currentFolderId === folder.id;
+        btn.className = `feed-state-chip ${isActive ? 'active' : ''}`;
+        btn.textContent = folder.name;
+        btn.addEventListener('click', () => {
+            addPlannerSimpleItemFromInput(folder.id);
+        });
+        chipWrap.appendChild(btn);
+    });
+
+    const addChip = document.createElement('button');
+    addChip.type = 'button';
+    addChip.className = 'feed-state-chip add';
+    addChip.textContent = '+ Add folder';
+    addChip.addEventListener('click', () => {
+        plannerState.addingSimpleFolder = true;
+        renderPlannerFolderChips();
+        const input = document.getElementById('planner-folder-input');
+        if (input) input.focus();
+    });
+
+    if (!plannerState.addingSimpleFolder) {
+        chipWrap.appendChild(addChip);
+    }
+    addWrap.classList.toggle('active', plannerState.addingSimpleFolder);
+}
+
+function buildPlannerModalForm(type, folder) {
+    if (type === 'folder-simple' || type === 'folder-multi') {
+        return {
+            title: type === 'folder-simple' ? 'New Simple Folder' : 'New Multi Folder',
+            body: `
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="planner-modal-name" class="form-control" placeholder="Folder name">
+                </div>
+            `,
+            onSubmit: () => submitPlannerFolder(type === 'folder-simple' ? 'simple' : 'multi')
+        };
+    }
+    if (type === 'subfolder' && folder) {
+        return {
+            title: 'New Subfolder',
+            body: `
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="planner-modal-name" class="form-control" placeholder="Subfolder name">
+                </div>
+            `,
+            onSubmit: () => submitPlannerSubfolder(folder.id)
+        };
+    }
+    if (type === 'simple-item' && folder) {
+        return {
+            title: 'New Simple Item',
+            body: `
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Title">
+                </div>
+                <div class="form-group">
+                    <label>Value</label>
+                    <input type="text" id="planner-modal-value" class="form-control" placeholder="URL or value">
+                </div>
+                <div class="form-group">
+                    <label>Description (optional)</label>
+                    <input type="text" id="planner-modal-description" class="form-control" placeholder="Optional description">
+                </div>
+            `,
+            onSubmit: () => submitPlannerSimpleItem(folder.id)
+        };
+    }
+    if (type === 'group-item' && folder) {
+        return {
+            title: 'New Group Item',
+            body: `
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Group item title">
+                </div>
+                <div class="form-group">
+                    <label>Lines</label>
+                    <textarea id="planner-modal-lines" class="form-control" rows="3" placeholder="One line per value"></textarea>
+                </div>
+            `,
+            onSubmit: () => submitPlannerGroupItem(folder.id)
+        };
+    }
+    return { title: 'Add', body: '<div class="planner-empty">Nothing to add here.</div>', onSubmit: closePlannerModal };
+}
+
+function renderRootFolders() {
+    const content = document.getElementById('planner-content');
+    if (!content) return;
+    const roots = getFolderChildren(null);
+    const simpleFolders = roots.filter(folder => folder.folder_type === 'simple');
+    const multiFolders = roots.filter(folder => folder.folder_type === 'multi');
+    content.innerHTML = `
+        <div class="planner-section">
+            <div class="planner-section-header">
+                <h3>Simple folders</h3>
+            </div>
+            <div class="planner-tile-grid planner-folder-grid">
+                ${simpleFolders.length ? '' : '<div class="planner-empty">No simple folders yet.</div>'}
+            </div>
+        </div>
+        <div class="planner-section planner-section-subtle">
+            <div class="planner-section-header">
+                <h3>Multi folders</h3>
+            </div>
+            <div class="planner-tile-grid planner-folder-grid planner-folder-grid-multi">
+                ${multiFolders.length ? '' : '<div class="planner-empty">No multi folders yet.</div>'}
+            </div>
+        </div>
+    `;
+    const grids = content.querySelectorAll('.planner-tile-grid');
+    const simpleGrid = grids[0];
+    const multiGrid = grids[1];
+    simpleFolders.forEach(folder => simpleGrid.appendChild(renderFolderTile(folder, 'simple')));
+    multiFolders.forEach(folder => multiGrid.appendChild(renderFolderTile(folder, 'multi')));
+}
+
+function renderFolderView(folder) {
+    const content = document.getElementById('planner-content');
+    if (!content) return;
+
+    if (folder.folder_type === 'simple') {
+        renderSimpleFolder(folder, content);
+    } else {
+        renderMultiFolder(folder, content);
+    }
+}
+
+function renderSimpleFolder(folder, content) {
+    const items = plannerState.simpleItems.filter(item => item.folder_id === folder.id);
+    content.innerHTML = `
+        <div class="planner-section">
+            <div class="planner-section-header">
+                <h3>Items</h3>
+            </div>
+            <div class="feed-grid planner-feed-grid">
+                ${items.length ? '' : '<div class="planner-empty">No items yet.</div>'}
+            </div>
+        </div>
+    `;
+
+    const grid = content.querySelector('.planner-feed-grid');
+    items.forEach(item => {
+        const expanded = plannerState.expandedSimple.has(item.id);
+        const card = document.createElement('div');
+        card.className = `feed-card ${expanded ? 'expanded' : ''}`;
+        card.addEventListener('click', () => togglePlannerSimple(item.id));
+        card.innerHTML = `
+            <div class="feed-card-content">
+                <div class="feed-card-header">
+                    <div class="feed-card-title">${escapeHtml(item.title)}</div>
+                </div>
+                ${expanded ? `<div class="feed-card-details">${escapeHtml(item.value)}</div>` : ''}
+                ${expanded && item.description ? `<div class="feed-card-details">${escapeHtml(item.description)}</div>` : ''}
+            </div>
+            <div class="feed-card-actions">
+                ${looksLikeUrl(item.value) ? `
+                    <button class="feed-open-btn" type="button" onclick="handlePlannerSimpleAction(event, 'open', ${item.id})" title="Open link">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                    </button>
+                ` : ''}
+                ${expanded ? `
+                    <button class="feed-open-btn" type="button" onclick="handlePlannerSimpleAction(event, 'copy', ${item.id})" title="Copy">
+                        <i class="fa-solid fa-copy"></i>
+                    </button>
+                    <button class="feed-open-btn" type="button" onclick="handlePlannerSimpleAction(event, 'edit', ${item.id})" title="Edit">
+                        <i class="fa-solid fa-pen"></i>
+                    </button>
+                    <button class="feed-done-btn" type="button" onclick="handlePlannerSimpleAction(event, 'remove', ${item.id})">Remove</button>
+                ` : ''}
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
+
+function renderMultiFolder(folder, content) {
+    const subfolders = getFolderChildren(folder.id);
+    const items = getSortedMultiItems(folder.id);
+    content.innerHTML = `
+        <div class="planner-section">
+            <div class="planner-section-header">
+                <h3>Group items</h3>
+            </div>
+            <div class="planner-row-list" id="planner-group-list">
+                ${items.length ? '' : '<div class="planner-empty">No group items yet.</div>'}
+            </div>
+        </div>
+        <div class="planner-section planner-section-subtle">
+            <div class="planner-section-header">
+                <h3>Folders</h3>
+            </div>
+            <div class="planner-tile-grid planner-folder-grid">
+                ${subfolders.length ? '' : '<div class="planner-empty">No folders yet.</div>'}
+            </div>
+        </div>
+    `;
+    const groupList = content.querySelector('#planner-group-list');
+    const folderGrid = content.querySelector('.planner-folder-grid');
+    items.forEach(item => groupList.appendChild(renderMultiItemTile(item, 'row')));
+    subfolders.forEach(subfolder => folderGrid.appendChild(renderFolderTile(subfolder, 'multi')));
+}
+
+function renderFolderTile(folder, variant = 'simple') {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = `planner-folder-tile planner-folder-tile-${variant}`;
+    tile.innerHTML = `
+        <div class="planner-folder-tile-icon"><i class="fa-solid fa-folder"></i></div>
+        <div>
+            <div class="planner-folder-tile-name">${escapeHtml(folder.name)}</div>
+            <div class="planner-folder-tile-meta">${folder.folder_type === 'multi' ? 'Multi-level' : 'Simple'}</div>
+        </div>
+    `;
+    tile.addEventListener('click', () => {
+        window.location.href = `/planner/folder/${folder.id}`;
+    });
+    return tile;
+}
+
+function renderMultiItemTile(item, variant = 'tile') {
+    const isExpanded = plannerState.expandedMulti.has(item.id);
+    const lines = plannerState.multiLines.filter(line => line.item_id === item.id);
+    const tile = document.createElement('div');
+    tile.className = `planner-item-tile ${variant === 'row' ? 'planner-item-row' : ''} ${isExpanded ? 'expanded' : ''}`;
+    if (variant === 'row') {
+        tile.setAttribute('draggable', 'true');
+        tile.dataset.itemId = String(item.id);
+        tile.addEventListener('dragstart', handlePlannerDragStart);
+        tile.addEventListener('dragover', handlePlannerDragOver);
+        tile.addEventListener('dragleave', handlePlannerDragLeave);
+        tile.addEventListener('drop', handlePlannerDrop);
+        tile.addEventListener('dragend', handlePlannerDragEnd);
+    }
+    tile.innerHTML = `
+        <div class="planner-item-header" onclick="togglePlannerMulti(${item.id})">
+            <div>
+                <div class="planner-item-title">${escapeHtml(item.title)}</div>
+                <div class="planner-item-meta">${lines.length} line${lines.length === 1 ? '' : 's'}</div>
+            </div>
+            <div class="planner-item-toggle"><i class="fa-solid fa-chevron-${isExpanded ? 'up' : 'down'}"></i></div>
+        </div>
+        <div class="planner-item-body">
+            <div class="planner-line-list">
+                ${lines.length ? '' : '<div class="planner-empty">No lines yet.</div>'}
+            </div>
+            <div class="planner-item-actions">
+                <button class="btn btn-ghost" type="button" onclick="togglePlannerInlineLine(${item.id})">Add line</button>
+                <button class="btn btn-ghost" type="button" onclick="openPlannerEditGroupItem(event, ${item.id})">Edit</button>
+                <button class="btn btn-danger" type="button" onclick="deletePlannerMultiItem(${item.id})">Delete</button>
+            </div>
+            <div class="planner-inline-add">
+                <div class="planner-inline-line" id="planner-inline-line-${item.id}">
+                    <input type="text" id="planner-inline-line-input-${item.id}" placeholder="Line value">
+                    <button class="btn btn-secondary" type="button" onclick="submitPlannerInlineLine(${item.id})">Save</button>
+                </div>
+            </div>
+        </div>
+    `;
+    const lineList = tile.querySelector('.planner-line-list');
+    lines.forEach(line => {
+        const row = document.createElement('div');
+        row.className = 'planner-line-row';
+        row.innerHTML = `
+            <div class="planner-line-value">${escapeHtml(line.value)}</div>
+            <div class="planner-line-actions">
+                ${line.line_type === 'url' ? `
+                    <button class="btn-icon" type="button" onclick="openPlannerLine(${line.id})" title="Open">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                    </button>
+                ` : ''}
+                <button class="btn-icon" type="button" onclick="copyPlannerLine(${line.id})" title="Copy">
+                    <i class="fa-solid fa-copy"></i>
+                </button>
+                <button class="btn-icon" type="button" onclick="deletePlannerLine(${line.id})" title="Delete">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+        `;
+        lineList.appendChild(row);
+    });
+    return tile;
+}
+
+function getSortedMultiItems(folderId) {
+    return plannerState.multiItems
+        .filter(item => item.folder_id === folderId)
+        .sort((a, b) => {
+            const aOrder = a.order_index ?? 0;
+            const bOrder = b.order_index ?? 0;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return (a.created_at || '').localeCompare(b.created_at || '');
+        });
+}
+
+const plannerDragState = {
+    itemId: null
+};
+
+function handlePlannerDragStart(event) {
+    const target = event.currentTarget;
+    plannerDragState.itemId = parseInt(target.dataset.itemId, 10);
+    target.classList.add('dragging');
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+    }
+}
+
+function handlePlannerDragOver(event) {
+    event.preventDefault();
+    const target = event.currentTarget;
+    if (!target || !plannerDragState.itemId) return;
+    const targetId = parseInt(target.dataset.itemId, 10);
+    if (targetId !== plannerDragState.itemId) {
+        target.classList.add('drag-over');
+    }
+}
+
+function handlePlannerDragLeave(event) {
+    event.currentTarget.classList.remove('drag-over');
+}
+
+function handlePlannerDrop(event) {
+    event.preventDefault();
+    const target = event.currentTarget;
+    target.classList.remove('drag-over');
+    const targetId = parseInt(target.dataset.itemId, 10);
+    if (!plannerDragState.itemId || !targetId || plannerDragState.itemId === targetId) {
+        return;
+    }
+    reorderPlannerMultiItems(plannerDragState.itemId, targetId);
+}
+
+function handlePlannerDragEnd(event) {
+    event.currentTarget.classList.remove('dragging');
+    plannerDragState.itemId = null;
+}
+
+function reorderPlannerMultiItems(dragId, targetId) {
+    const folderId = plannerState.currentFolderId;
+    const items = getSortedMultiItems(folderId);
+    const dragIndex = items.findIndex(item => item.id === dragId);
+    const targetIndex = items.findIndex(item => item.id === targetId);
+    if (dragIndex === -1 || targetIndex === -1) return;
+
+    const [moved] = items.splice(dragIndex, 1);
+    items.splice(targetIndex, 0, moved);
+    items.forEach((item, index) => {
+        item.order_index = index;
+        const stateIdx = plannerState.multiItems.findIndex(stateItem => stateItem.id === item.id);
+        if (stateIdx !== -1) plannerState.multiItems[stateIdx].order_index = index;
+    });
+    persistPlannerMultiOrder(folderId, items.map(item => item.id));
+    renderPlanner();
+}
+
+async function persistPlannerMultiOrder(folderId, order) {
+    try {
+        const res = await fetch('/api/planner/multi-items/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_id: folderId, order })
+        });
+        if (!res.ok) throw new Error('Order update failed');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not save order', 'error');
+    }
+}
+
+function togglePlannerSimple(itemId) {
+    if (plannerState.expandedSimple.has(itemId)) {
+        plannerState.expandedSimple.delete(itemId);
+    } else {
+        plannerState.expandedSimple.add(itemId);
+    }
+    renderPlanner();
+}
+
+function togglePlannerMulti(itemId) {
+    if (plannerState.expandedMulti.has(itemId)) {
+        plannerState.expandedMulti.delete(itemId);
+    } else {
+        plannerState.expandedMulti.add(itemId);
+    }
+    renderPlanner();
+}
+
+function handlePlannerSimpleAction(event, action, itemId) {
+    if (event) event.stopPropagation();
+    if (action === 'open') {
+        openPlannerSimpleItem(itemId);
+    } else if (action === 'copy') {
+        copyPlannerSimpleItem(itemId);
+    } else if (action === 'edit') {
+        openPlannerEditSimpleItem(itemId);
+    } else if (action === 'remove') {
+        deletePlannerSimpleItem(itemId);
+    }
+}
+
+function openPlannerSimpleItem(itemId) {
+    const item = plannerState.simpleItems.find(entry => entry.id === itemId);
+    if (item && looksLikeUrl(item.value)) {
+        window.open(normalizeUrl(item.value), '_blank', 'noopener');
+    }
+}
+
+function copyPlannerSimpleItem(itemId) {
+    const item = plannerState.simpleItems.find(entry => entry.id === itemId);
+    if (item) copyPlannerValue(item.value);
+}
+
+function openPlannerEditSimpleItem(itemId) {
+    const item = plannerState.simpleItems.find(entry => entry.id === itemId);
+    if (!item) return;
+    const modal = document.getElementById('planner-modal');
+    const title = document.getElementById('planner-modal-title');
+    const body = document.getElementById('planner-modal-body');
+    const submitBtn = document.getElementById('planner-modal-submit');
+    if (!modal || !title || !body || !submitBtn) return;
+
+    title.textContent = 'Edit Simple Item';
+    body.innerHTML = `
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="planner-modal-title-input" class="form-control" value="${escapeHtml(item.title)}">
+        </div>
+        <div class="form-group">
+            <label>Value</label>
+            <input type="text" id="planner-modal-value" class="form-control" value="${escapeHtml(item.value)}">
+        </div>
+        <div class="form-group">
+            <label>Description (optional)</label>
+            <input type="text" id="planner-modal-description" class="form-control" value="${escapeHtml(item.description || '')}">
+        </div>
+    `;
+    submitBtn.onclick = () => submitPlannerEditSimpleItem(itemId);
+    modal.classList.add('active');
+}
+
+async function submitPlannerEditSimpleItem(itemId) {
+    const titleEl = document.getElementById('planner-modal-title-input');
+    const valueEl = document.getElementById('planner-modal-value');
+    const descEl = document.getElementById('planner-modal-description');
+    if (!titleEl || !valueEl) return;
+    const title = titleEl.value.trim();
+    const value = valueEl.value.trim();
+    const description = descEl ? descEl.value.trim() : '';
+    if (!title || !value) {
+        showToast('Title and value required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/planner/simple-items/${itemId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, value, description })
+        });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        const idx = plannerState.simpleItems.findIndex(item => item.id === updated.id);
+        if (idx !== -1) plannerState.simpleItems[idx] = updated;
+        closePlannerModal();
+        renderPlanner();
+        showToast('Item updated', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update item', 'error');
+    }
+}
+
+function openPlannerEditGroupItem(event, itemId) {
+    if (event) event.stopPropagation();
+    const item = plannerState.multiItems.find(entry => entry.id === itemId);
+    if (!item) return;
+    const lines = plannerState.multiLines
+        .filter(line => line.item_id === itemId)
+        .map(line => line.value);
+    const modal = document.getElementById('planner-modal');
+    const title = document.getElementById('planner-modal-title');
+    const body = document.getElementById('planner-modal-body');
+    const submitBtn = document.getElementById('planner-modal-submit');
+    if (!modal || !title || !body || !submitBtn) return;
+
+    title.textContent = 'Edit Group Item';
+    body.innerHTML = `
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="planner-modal-title-input" class="form-control" value="${escapeHtml(item.title)}">
+        </div>
+        <div class="form-group">
+            <label>Lines</label>
+            <textarea id="planner-modal-lines" class="form-control" rows="4">${escapeHtml(lines.join('\n'))}</textarea>
+        </div>
+    `;
+    submitBtn.onclick = () => submitPlannerEditGroupItem(itemId);
+    modal.classList.add('active');
+}
+
+async function submitPlannerEditGroupItem(itemId) {
+    const titleEl = document.getElementById('planner-modal-title-input');
+    const linesEl = document.getElementById('planner-modal-lines');
+    if (!titleEl || !linesEl) return;
+    const title = titleEl.value.trim();
+    const lines = linesEl.value.split('\n').map(line => line.trim()).filter(Boolean);
+    if (!title) {
+        showToast('Title required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/planner/multi-items/${itemId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title })
+        });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        const idx = plannerState.multiItems.findIndex(item => item.id === updated.id);
+        if (idx !== -1) plannerState.multiItems[idx] = updated;
+
+        const existingLines = plannerState.multiLines.filter(line => line.item_id === itemId);
+        await Promise.all(existingLines.map(line =>
+            fetch(`/api/planner/multi-lines/${line.id}`, { method: 'DELETE' })
+        ));
+        plannerState.multiLines = plannerState.multiLines.filter(line => line.item_id !== itemId);
+
+        for (const value of lines) {
+            const createRes = await fetch('/api/planner/multi-lines', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_id: itemId, value })
+            });
+            if (createRes.ok) {
+                const created = await createRes.json();
+                plannerState.multiLines.push(created);
+            }
+        }
+
+        closePlannerModal();
+        renderPlanner();
+        showToast('Item updated', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update item', 'error');
+    }
+}
+function togglePlannerInlineLine(itemId) {
+    const row = document.getElementById(`planner-inline-line-${itemId}`);
+    if (row) row.classList.toggle('open');
+}
+
+async function submitPlannerInlineLine(itemId) {
+    const input = document.getElementById(`planner-inline-line-input-${itemId}`);
+    if (!input) return;
+    const value = input.value.trim();
+    if (!value) {
+        showToast('Line value required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/multi-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_id: itemId, value })
+        });
+        if (!res.ok) throw new Error('Failed to add line');
+        const line = await res.json();
+        plannerState.multiLines.push(line);
+        input.value = '';
+        plannerState.expandedMulti.add(itemId);
+        renderPlanner();
+        showToast('Line added', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add line', 'error');
+    }
+}
+
+function openPlannerLine(lineId) {
+    const line = plannerState.multiLines.find(entry => entry.id === lineId);
+    if (line && line.line_type === 'url') {
+        window.open(normalizeUrl(line.value), '_blank', 'noopener');
+    }
+}
+
+function copyPlannerLine(lineId) {
+    const line = plannerState.multiLines.find(entry => entry.id === lineId);
+    if (line) copyPlannerValue(line.value);
+}
+
+async function copyPlannerValue(value) {
+    const text = value || '';
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast('Copied to clipboard', 'success');
+    } catch (err) {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;opacity:0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            showToast('Copied to clipboard', 'success');
+        } catch (fallbackErr) {
+            console.error(fallbackErr);
+            showToast('Copy failed', 'error');
+        }
+    }
+}
+
+async function deletePlannerSimpleItem(itemId) {
+    openConfirmModal('Remove this item?', async () => {
+        try {
+            const res = await fetch(`/api/planner/simple-items/${itemId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            plannerState.simpleItems = plannerState.simpleItems.filter(item => item.id !== itemId);
+            plannerState.expandedSimple.delete(itemId);
+            renderPlanner();
+            showToast('Item removed', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not remove item', 'error');
+        }
+    });
+}
+
+async function submitPlannerFolder(folderType) {
+    const input = document.getElementById('planner-modal-name');
+    if (!input) return;
+    const name = input.value.trim();
+    if (!name) {
+        showToast('Folder name required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, folder_type: folderType })
+        });
+        if (!res.ok) throw new Error('Failed to create folder');
+        const folder = await res.json();
+        plannerState.folders.push(folder);
+        closePlannerModal();
+        renderPlanner();
+        showToast('Folder added', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add folder', 'error');
+    }
+}
+
+async function submitPlannerSubfolder(parentId) {
+    const input = document.getElementById('planner-modal-name');
+    if (!input) return;
+    const name = input.value.trim();
+    if (!name) {
+        showToast('Subfolder name required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, parent_id: parentId })
+        });
+        if (!res.ok) throw new Error('Failed to create subfolder');
+        const folder = await res.json();
+        plannerState.folders.push(folder);
+        closePlannerModal();
+        renderPlanner();
+        showToast('Subfolder added', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add subfolder', 'error');
+    }
+}
+
+async function submitPlannerSimpleItem(folderId) {
+    const titleEl = document.getElementById('planner-modal-title-input');
+    const valueEl = document.getElementById('planner-modal-value');
+    const descEl = document.getElementById('planner-modal-description');
+    if (!titleEl || !valueEl) return;
+    const title = titleEl.value.trim();
+    const value = valueEl.value.trim();
+    const description = descEl ? descEl.value.trim() : '';
+    if (!title || !value) {
+        showToast('Title and value required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/simple-items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_id: folderId, title, value, description })
+        });
+        if (!res.ok) throw new Error('Failed to add item');
+        const item = await res.json();
+        plannerState.simpleItems.unshift(item);
+        closePlannerModal();
+        renderPlanner();
+        showToast('Item added', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add item', 'error');
+    }
+}
+
+async function createPlannerSimpleItem(folderId, parsed) {
+    try {
+        const res = await fetch('/api/planner/simple-items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                folder_id: folderId,
+                title: parsed.title,
+                value: parsed.url,
+                description: parsed.description
+            })
+        });
+        if (!res.ok) throw new Error('Failed to add item');
+        const item = await res.json();
+        plannerState.simpleItems.unshift(item);
+        renderPlanner();
+        showToast('Item added', 'success');
+        return item;
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add item', 'error');
+        return null;
+    }
+}
+
+async function addPlannerSimpleItemFromInput(folderId) {
+    const input = document.getElementById('planner-simple-input');
+    if (!input) return;
+    const parsed = parsePlannerSimpleInput(input.value.trim());
+    if (!parsed || !parsed.title || !parsed.url) {
+        showToast('Use: Title; URL; optional description', 'error');
+        input.focus();
+        return;
+    }
+    const created = await createPlannerSimpleItem(folderId, parsed);
+    if (created) {
+        input.value = '';
+        closePlannerSimpleAddForm();
+    }
+}
+
+async function addPlannerSimpleFolderAndItem() {
+    const nameInput = document.getElementById('planner-folder-input');
+    const itemInput = document.getElementById('planner-simple-input');
+    if (!nameInput || !itemInput) return;
+    const folderName = nameInput.value.trim();
+    if (!folderName) {
+        showToast('Folder name required', 'error');
+        nameInput.focus();
+        return;
+    }
+    const parsed = parsePlannerSimpleInput(itemInput.value.trim());
+    if (!parsed || !parsed.title || !parsed.url) {
+        showToast('Use: Title; URL; optional description', 'error');
+        itemInput.focus();
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: folderName, folder_type: 'simple' })
+        });
+        if (!res.ok) throw new Error('Failed to add folder');
+        const folder = await res.json();
+        plannerState.folders.push(folder);
+        const created = await createPlannerSimpleItem(folder.id, parsed);
+        if (created) {
+            itemInput.value = '';
+            nameInput.value = '';
+            plannerState.addingSimpleFolder = false;
+            closePlannerSimpleAddForm();
+        }
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add folder', 'error');
+    }
+}
+
+async function submitPlannerGroupItem(folderId) {
+    const titleEl = document.getElementById('planner-modal-title-input');
+    const linesEl = document.getElementById('planner-modal-lines');
+    if (!titleEl || !linesEl) return;
+    const title = titleEl.value.trim();
+    const lines = linesEl.value.split('\n').map(line => line.trim()).filter(Boolean);
+    if (!title) {
+        showToast('Group item title required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/multi-items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                folder_id: folderId,
+                title,
+                lines
+            })
+        });
+        if (!res.ok) throw new Error('Failed to add group item');
+        await res.json();
+        closePlannerModal();
+        await loadPlannerData();
+        showToast('Group item added', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add group item', 'error');
+    }
+}
+
+async function deletePlannerLine(lineId) {
+    openConfirmModal('Delete this line?', async () => {
+        try {
+            const res = await fetch(`/api/planner/multi-lines/${lineId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            plannerState.multiLines = plannerState.multiLines.filter(line => line.id !== lineId);
+            renderPlanner();
+            showToast('Line deleted', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not delete line', 'error');
+        }
+    });
+}
+
+async function loadPlannerData() {
+    try {
+        const res = await fetch('/api/planner');
+        if (!res.ok) throw new Error('Failed to load planner data');
+        const data = await res.json();
+        plannerState.folders = data.folders || [];
+        plannerState.simpleItems = data.simple_items || [];
+        plannerState.multiItems = data.multi_items || [];
+        plannerState.multiLines = data.multi_lines || [];
+        renderPlanner();
+    } catch (err) {
+        console.error(err);
+        const content = document.getElementById('planner-content');
+        if (content) content.innerHTML = '<div class="planner-empty">Could not load Planner data.</div>';
+    }
+}
+
+function renderPlanner() {
+    const folder = getPlannerFolder(plannerState.currentFolderId);
+    const headerName = document.getElementById('planner-current-name');
+    if (headerName) {
+        headerName.textContent = folder ? folder.name : 'Planner';
+    }
+    if (!folder) {
+        renderRootFolders();
+    } else {
+        renderFolderView(folder);
+    }
+    renderPlannerSimpleAddForm();
+    renderPlannerFab();
+}
+
+function plannerGoBack() {
+    if (window.history.length > 1) {
+        window.history.back();
+        return;
+    }
+    window.location.href = '/planner';
+}
+
+function plannerGoHome() {
+    window.location.href = '/planner';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const wrapper = document.querySelector('.planner-page');
+    const rawFolder = wrapper ? wrapper.getAttribute('data-folder-id') : '';
+    plannerState.currentFolderId = rawFolder ? parseInt(rawFolder, 10) : null;
+
+    const fabWrapper = document.getElementById('planner-fab');
+    const fabMain = document.getElementById('planner-fab-main');
+    const fabOptions = document.getElementById('planner-fab-options');
+    if (fabMain && fabOptions && fabWrapper) {
+        fabMain.addEventListener('click', (e) => {
+            e.stopPropagation();
+            fabWrapper.classList.toggle('expanded');
+            renderPlannerFab();
+        });
+    }
+
+    const folderConfirm = document.getElementById('planner-folder-confirm');
+    const folderCancel = document.getElementById('planner-folder-cancel');
+    const folderInput = document.getElementById('planner-folder-input');
+    const simpleClose = document.getElementById('planner-simple-close');
+    if (folderConfirm) {
+        folderConfirm.addEventListener('click', () => {
+            addPlannerSimpleFolderAndItem();
+        });
+    }
+    if (folderCancel) {
+        folderCancel.addEventListener('click', () => {
+            plannerState.addingSimpleFolder = false;
+            if (folderInput) folderInput.value = '';
+            renderPlannerFolderChips();
+        });
+    }
+    if (simpleClose) {
+        simpleClose.addEventListener('click', () => {
+            closePlannerSimpleAddForm();
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        if (fabWrapper && !fabWrapper.contains(e.target)) {
+            fabWrapper.classList.remove('expanded');
+        }
+        const modal = document.getElementById('planner-modal');
+        if (modal && e.target === modal) {
+            closePlannerModal();
+        }
+    });
+
+    loadPlannerData();
+});
+</script>
+{% endblock %}

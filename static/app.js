@@ -86,7 +86,6 @@ let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true };
-let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
 let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false };
 let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
@@ -340,7 +339,7 @@ function renderVaultItems() {
             row.innerHTML = `
                 <div class="vault-row-main">
                     <div class="vault-card-title"><i class="${iconClass}"></i> ${escapeHtml(doc.title)}</div>
-                    <div class="vault-row-meta">${escapeHtml(doc.original_filename)} · ${doc.file_size_formatted}</div>
+                    <div class="vault-row-meta">${doc.file_size_formatted}</div>
                 </div>
                 <div class="vault-row-actions">
                     <button class="vault-action-btn" title="Pin" type="button"><i class="fa-solid fa-thumbtack"></i></button>
@@ -376,7 +375,6 @@ function renderVaultItems() {
         card.innerHTML = `
             <div class="vault-card-icon"><i class="${iconClass}"></i></div>
             <div class="vault-card-title">${escapeHtml(doc.title)}</div>
-            <div class="vault-card-meta">${escapeHtml(doc.original_filename)}</div>
             <div class="vault-card-meta">${doc.file_size_formatted} · ${new Date(doc.created_at).toLocaleDateString()}</div>
             <div class="vault-card-actions">
                 <button class="vault-action-btn" title="Pin" type="button"><i class="fa-solid fa-thumbtack"></i></button>
@@ -775,7 +773,7 @@ function showReadOnlyToast() {
     readOnlyToastAt = now;
     showToast('Archived notes are read-only.', 'info', 2000);
 }
-let noteMoveState = { ids: [], destinationFolderId: null, navStack: [] };
+let noteMoveState = { ids: [], destinationFolderId: null, navStack: [], itemType: 'note' };
 let activeListItemMenu = null;
 let activeListItemActionPill = null;
 let listSelectionState = { active: false, ids: new Set() };
@@ -797,6 +795,12 @@ let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
 let datePickerState = { itemId: null };
 let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
+let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true };
+let linkEditState = { anchor: null };
+let suppressLinkClickUntil = 0;
+let linkLongPressTimer = null;
+let linkLongPressTriggered = false;
+let linkLongPressStart = null;
 let calendarNoteChoiceState = { event: null };
 let calendarItemNoteState = { event: null, mode: 'view', isNew: false };
 const CALENDAR_ITEM_NOTE_MAX_CHARS = window.CALENDAR_ITEM_NOTE_MAX_CHARS || 500;
@@ -5153,6 +5157,9 @@ function toggleFolderActionsMenu(folderId, event) {
         <button class="notes-item-menu-option" data-action="rename">
             <i class="fa-solid fa-pen"></i> Rename
         </button>
+        <button class="notes-item-menu-option" data-action="move">
+            <i class="fa-solid fa-folder-open"></i> Move
+        </button>
         <button class="notes-item-menu-option" data-action="protect">
             <i class="fa-solid ${protectIcon}"></i> ${protectLabel}
         </button>
@@ -5169,6 +5176,7 @@ function toggleFolderActionsMenu(folderId, event) {
             const action = opt.dataset.action;
             closeNotesDropdown();
             if (action === 'rename') handleFolderMenuRename(folderId, folderName);
+            else if (action === 'move') handleFolderMenuMove(folderId);
             else if (action === 'protect') handleFolderMenuProtect(folderId);
             else if (action === 'archive') handleFolderMenuArchive(folderId);
             else if (action === 'restore') handleFolderMenuRestore(folderId);
@@ -5304,17 +5312,17 @@ async function handleNoteMenuShare(noteId) {
 async function handleNoteMenuDuplicate(noteId) {
     const note = getNoteById(noteId);
     if (!note) return;
+    if (note.is_pin_protected) {
+        pinState.pendingNoteId = noteId;
+        pinState.pendingAction = 'duplicate';
+        openPinModal();
+        return;
+    }
 
     try {
-        const res = await fetch('/api/notes', {
+        const res = await fetch(`/api/notes/${noteId}/duplicate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                title: (note.title || 'Untitled') + ' (copy)',
-                content: note.content || '',
-                folder_id: note.folder_id,
-                note_type: note.note_type || 'note'
-            })
+            headers: { 'Content-Type': 'application/json' }
         });
 
         if (!res.ok) throw new Error('Failed to duplicate');
@@ -5423,6 +5431,10 @@ function handleFolderMenuRename(folderId, currentName) {
 
     modal.classList.add('active');
     nameInput.focus();
+}
+
+function handleFolderMenuMove(folderId) {
+    openNoteMoveModal(folderId, 'folder');
 }
 
 async function handleFolderMenuDelete(folderId) {
@@ -5971,17 +5983,64 @@ function initNoteEditorPage() {
     editor.addEventListener('click', (e) => {
         const link = e.target.closest('a.note-link');
         if (!link) return;
+        if (Date.now() < suppressLinkClickUntil || linkLongPressTriggered) return;
+        if (e.ctrlKey) {
+            e.preventDefault();
+            openEditNoteLinkModal(link);
+            return;
+        }
         e.preventDefault();
         handleNoteLinkClick(link);
     });
     editor.addEventListener('click', (e) => {
         const link = e.target.closest('a.external-link');
         if (!link) return;
+        if (Date.now() < suppressLinkClickUntil || linkLongPressTriggered) return;
+        if (e.ctrlKey) {
+            e.preventDefault();
+            openEditNoteLinkModal(link);
+            return;
+        }
         e.preventDefault();
         const href = link.getAttribute('href') || '';
         if (href) {
             window.open(href, '_blank', 'noopener,noreferrer');
         }
+    });
+    editor.addEventListener('touchstart', (e) => {
+        const link = e.target.closest('a.note-link, a.external-link');
+        if (!link) return;
+        if (!e.touches || !e.touches.length) return;
+        const touch = e.touches[0];
+        linkLongPressStart = { x: touch.clientX, y: touch.clientY };
+        linkLongPressTriggered = false;
+        if (linkLongPressTimer) clearTimeout(linkLongPressTimer);
+        linkLongPressTimer = setTimeout(() => {
+            linkLongPressTimer = null;
+            linkLongPressTriggered = true;
+            suppressLinkClickUntil = Date.now() + 400;
+            openEditNoteLinkModal(link);
+        }, 450);
+    }, { passive: true });
+    editor.addEventListener('touchmove', (e) => {
+        if (!linkLongPressTimer || !linkLongPressStart || !e.touches || !e.touches.length) return;
+        const touch = e.touches[0];
+        const dx = Math.abs(touch.clientX - linkLongPressStart.x);
+        const dy = Math.abs(touch.clientY - linkLongPressStart.y);
+        if (dx > 10 || dy > 10) {
+            clearTimeout(linkLongPressTimer);
+            linkLongPressTimer = null;
+        }
+    }, { passive: true });
+    editor.addEventListener('touchend', () => {
+        if (linkLongPressTimer) {
+            clearTimeout(linkLongPressTimer);
+            linkLongPressTimer = null;
+        }
+        if (linkLongPressTriggered) {
+            linkLongPressTriggered = false;
+        }
+        linkLongPressStart = null;
     });
     editor.addEventListener('beforeinput', (e) => {
         if (!notesState.activeNoteIsArchived) return;
@@ -6046,6 +6105,8 @@ function setNoteEditorReadOnly(isReadOnly) {
             el.disabled = isReadOnly;
         });
     }
+
+    setupEditNoteLinkModalControls();
     if (editor) {
         editor.classList.toggle('read-only', isReadOnly);
         editor.onpointerdown = isReadOnly ? (e) => {
@@ -6271,14 +6332,20 @@ function applyResolvedNoteLink(linkEl, note) {
     setNoteDirty(true);
 }
 
-function openNoteLinkModal(anchor, title, matches, sourceNoteId) {
+function openNoteLinkModal(anchor, title, matches, sourceNoteId, options = {}) {
     const modal = document.getElementById('note-link-modal');
     const listEl = document.getElementById('note-link-match-list');
     const titleEl = document.getElementById('note-link-modal-title');
     const subtitleEl = document.getElementById('note-link-modal-subtitle');
     if (!modal || !listEl) return;
 
-    noteLinkState = { anchor, title, matches: matches || [], sourceNoteId };
+    noteLinkState = {
+        anchor,
+        title,
+        matches: matches || [],
+        sourceNoteId,
+        openOnResolve: options.openOnResolve !== false
+    };
     if (titleEl) titleEl.textContent = `Link: ${title}`;
     if (subtitleEl) {
         subtitleEl.textContent = (matches && matches.length)
@@ -6311,7 +6378,7 @@ function openNoteLinkModal(anchor, title, matches, sourceNoteId) {
 function closeNoteLinkModal() {
     const modal = document.getElementById('note-link-modal');
     if (modal) modal.classList.remove('active');
-    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null };
+    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true };
 }
 
 function setupNoteLinkModalControls() {
@@ -6326,6 +6393,143 @@ function setupNoteLinkModalControls() {
     if (createHiddenBtn) createHiddenBtn.onclick = () => createNoteFromLinkModal(false);
     modal.onclick = (e) => {
         if (e.target === modal) closeNoteLinkModal();
+    };
+}
+
+function openEditNoteLinkModal(linkEl) {
+    const modal = document.getElementById('note-edit-link-modal');
+    const textInput = document.getElementById('note-edit-link-text');
+    const typeSelect = document.getElementById('note-edit-link-type');
+    const urlGroup = document.getElementById('note-edit-link-url-group');
+    const urlInput = document.getElementById('note-edit-link-url');
+    const noteGroup = document.getElementById('note-edit-link-note-group');
+    if (!modal || !textInput || !typeSelect || !urlGroup || !urlInput || !noteGroup) return;
+
+    linkEditState.anchor = linkEl;
+    const isExternal = linkEl.classList.contains('external-link');
+    textInput.value = linkEl.textContent || '';
+    typeSelect.value = isExternal ? 'external' : 'note';
+    urlInput.value = isExternal ? (linkEl.getAttribute('href') || '') : '';
+    urlGroup.style.display = isExternal ? 'block' : 'none';
+    noteGroup.style.display = isExternal ? 'none' : 'block';
+    modal.classList.add('active');
+    textInput.focus();
+    textInput.select();
+}
+
+function closeEditNoteLinkModal() {
+    const modal = document.getElementById('note-edit-link-modal');
+    if (modal) modal.classList.remove('active');
+    linkEditState.anchor = null;
+}
+
+async function relinkNoteFromEditModal() {
+    const anchor = linkEditState.anchor;
+    const textInput = document.getElementById('note-edit-link-text');
+    if (!anchor || !textInput) return;
+    const title = textInput.value.trim();
+    if (!title) return;
+    const sourceNoteId = await ensureActiveNoteIdForLink();
+    if (!sourceNoteId) return;
+
+    try {
+        const res = await fetch('/api/notes/resolve-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_note_id: sourceNoteId,
+                title: title,
+                folder_id: notesState.activeFolderId
+            })
+        });
+        if (!res.ok) throw new Error('Failed to resolve link');
+        const data = await res.json();
+        if (data.status === 'choose') {
+            openNoteLinkModal(anchor, title, data.matches || [], sourceNoteId, { openOnResolve: false });
+            return;
+        }
+        if (data.note) {
+            applyResolvedNoteLink(anchor, data.note);
+            anchor.textContent = title;
+            setNoteDirty(true);
+        }
+    } catch (err) {
+        console.error('Failed to relink note:', err);
+        showToast('Could not relink that note.', 'error', 2500);
+    }
+}
+
+function removeNoteLinkFromEditModal() {
+    const anchor = linkEditState.anchor;
+    const textInput = document.getElementById('note-edit-link-text');
+    if (!anchor) return;
+    const label = (textInput && textInput.value.trim()) || anchor.textContent || '';
+    const textNode = document.createTextNode(label);
+    anchor.replaceWith(textNode);
+    setNoteDirty(true);
+    closeEditNoteLinkModal();
+}
+
+function saveEditNoteLinkModal() {
+    const anchor = linkEditState.anchor;
+    const textInput = document.getElementById('note-edit-link-text');
+    const typeSelect = document.getElementById('note-edit-link-type');
+    const urlInput = document.getElementById('note-edit-link-url');
+    if (!anchor || !textInput || !typeSelect || !urlInput) return;
+
+    const label = textInput.value.trim() || 'Link';
+    const type = typeSelect.value;
+
+    anchor.textContent = label;
+    anchor.dataset.noteTitle = label;
+
+    if (type === 'external') {
+        const url = urlInput.value.trim();
+        anchor.classList.remove('note-link');
+        anchor.classList.add('external-link');
+        anchor.removeAttribute('data-note-id');
+        anchor.removeAttribute('data-note-title');
+        anchor.setAttribute('href', url || '#');
+        anchor.setAttribute('target', '_blank');
+        anchor.setAttribute('rel', 'noopener noreferrer');
+    } else {
+        anchor.classList.remove('external-link');
+        anchor.classList.add('note-link');
+        anchor.setAttribute('href', anchor.dataset.noteId ? `/notes/${anchor.dataset.noteId}` : '#');
+        anchor.removeAttribute('target');
+        anchor.removeAttribute('rel');
+        anchor.dataset.noteTitle = label;
+    }
+
+    setNoteDirty(true);
+    closeEditNoteLinkModal();
+}
+
+function setupEditNoteLinkModalControls() {
+    const modal = document.getElementById('note-edit-link-modal');
+    const cancelBtn = document.getElementById('note-edit-link-cancel-btn');
+    const saveBtn = document.getElementById('note-edit-link-save-btn');
+    const removeBtn = document.getElementById('note-edit-link-remove-btn');
+    const relinkBtn = document.getElementById('note-edit-link-relink-btn');
+    const typeSelect = document.getElementById('note-edit-link-type');
+    const urlGroup = document.getElementById('note-edit-link-url-group');
+    const noteGroup = document.getElementById('note-edit-link-note-group');
+
+    if (!modal) return;
+
+    if (cancelBtn) cancelBtn.onclick = () => closeEditNoteLinkModal();
+    if (saveBtn) saveBtn.onclick = () => saveEditNoteLinkModal();
+    if (removeBtn) removeBtn.onclick = () => removeNoteLinkFromEditModal();
+    if (relinkBtn) relinkBtn.onclick = () => relinkNoteFromEditModal();
+    if (typeSelect && urlGroup && noteGroup) {
+        typeSelect.onchange = () => {
+            const isExternal = typeSelect.value === 'external';
+            urlGroup.style.display = isExternal ? 'block' : 'none';
+            noteGroup.style.display = isExternal ? 'none' : 'block';
+        };
+    }
+    modal.onclick = (e) => {
+        if (e.target === modal) closeEditNoteLinkModal();
     };
 }
 
@@ -6346,7 +6550,9 @@ async function selectNoteLinkMatch(targetId) {
         if (data.note) {
             applyResolvedNoteLink(anchor, data.note);
             closeNoteLinkModal();
-            openNoteInEditor(data.note.id);
+            if (noteLinkState.openOnResolve) {
+                openNoteInEditor(data.note.id);
+            }
         }
     } catch (err) {
         console.error('Failed to link note:', err);
@@ -6368,13 +6574,15 @@ async function createNoteFromLinkModal(isListed) {
                 folder_id: notesState.activeFolderId
             })
         });
-        if (!res.ok) throw new Error('Failed to create linked note');
-        const data = await res.json();
-        if (data.note) {
-            applyResolvedNoteLink(anchor, data.note);
-            closeNoteLinkModal();
+    if (!res.ok) throw new Error('Failed to create linked note');
+    const data = await res.json();
+    if (data.note) {
+        applyResolvedNoteLink(anchor, data.note);
+        closeNoteLinkModal();
+        if (noteLinkState.openOnResolve) {
             openNoteInEditor(data.note.id);
         }
+    }
     } catch (err) {
         console.error('Failed to create linked note:', err);
         showToast('Could not create that note.', 'error', 2500);
@@ -8652,13 +8860,13 @@ function deleteNoteFolder(folderId, folderName) {
     });
 }
 
-function openNoteMoveModal(noteId = null) {
+function openNoteMoveModal(noteId = null, itemType = 'note') {
     const modal = document.getElementById('note-move-modal');
     if (!modal) return;
     let ids = [];
     if (noteId) {
         ids = [noteId];
-    } else if (selectedNotes.size > 0) {
+    } else if (itemType === 'note' && selectedNotes.size > 0) {
         ids = Array.from(selectedNotes);
     } else {
         return;
@@ -8666,9 +8874,14 @@ function openNoteMoveModal(noteId = null) {
     noteMoveState.ids = ids;
     noteMoveState.destinationFolderId = null;
     noteMoveState.navStack = [];
+    noteMoveState.itemType = itemType === 'folder' ? 'folder' : 'note';
     const title = document.getElementById('note-move-title');
     if (title) {
-        title.textContent = ids.length > 1 ? `Move ${ids.length} notes` : 'Move Note';
+        if (noteMoveState.itemType === 'folder') {
+            title.textContent = 'Move Folder';
+        } else {
+            title.textContent = ids.length > 1 ? `Move ${ids.length} notes` : 'Move Note';
+        }
     }
     modal.classList.add('active');
     if (!noteFolderState.folders.length) {
@@ -8683,6 +8896,7 @@ function closeNoteMoveModal() {
     noteMoveState.ids = [];
     noteMoveState.destinationFolderId = null;
     noteMoveState.navStack = [];
+    noteMoveState.itemType = 'note';
     updateNoteMoveBackButton();
 }
 
@@ -8711,12 +8925,15 @@ function renderNoteMoveRoot() {
     if (!panel) return;
     noteMoveState.navStack = [renderNoteMoveRoot];
     updateNoteMoveBackButton();
+    const isFolderMove = noteMoveState.itemType === 'folder';
     panel.innerHTML = `
         <div class="move-heading"><i class="fa-solid fa-folder-tree" style="margin-right: 0.5rem;"></i>Choose destination</div>
     `;
     const mainBtn = document.createElement('button');
     mainBtn.className = 'btn';
-    mainBtn.innerHTML = '<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move to main notes';
+    mainBtn.innerHTML = isFolderMove
+        ? '<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move to top level'
+        : '<i class="fa-solid fa-house" style="margin-right: 0.5rem;"></i>Move to main notes';
     mainBtn.addEventListener('click', () => performNoteMove(null));
     panel.appendChild(mainBtn);
 
@@ -8745,6 +8962,7 @@ function renderNoteMoveFolderList(parentId, titleText) {
 
     const folders = noteFolderState.folders
         .filter(f => (f.parent_id || null) === (parentId || null))
+        .filter(f => isFolderMoveTargetAllowed(f.id))
         .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
 
     if (!folders.length) {
@@ -8767,12 +8985,36 @@ function renderNoteMoveFolderList(parentId, titleText) {
     });
 }
 
+function isFolderMoveTargetAllowed(targetFolderId) {
+    if (noteMoveState.itemType !== 'folder') return true;
+    if (!noteMoveState.ids.length) return true;
+    const movingId = noteMoveState.ids[0];
+    if (movingId === targetFolderId) return false;
+    return !isDescendantFolder(targetFolderId, movingId);
+}
+
+function isDescendantFolder(folderId, ancestorId) {
+    const folderMap = new Map((noteFolderState.folders || []).map(f => [f.id, f]));
+    let current = folderId;
+    while (current) {
+        const folder = folderMap.get(current);
+        if (!folder) return false;
+        if (folder.parent_id === ancestorId) return true;
+        current = folder.parent_id || null;
+    }
+    return false;
+}
+
 async function performNoteMove(folderId) {
     try {
-        const res = await fetch('/api/notes/move', {
+        const endpoint = noteMoveState.itemType === 'folder' ? '/api/note-folders/move' : '/api/notes/move';
+        const payload = noteMoveState.itemType === 'folder'
+            ? { ids: noteMoveState.ids, parent_id: folderId }
+            : { ids: noteMoveState.ids, folder_id: folderId };
+        const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: noteMoveState.ids, folder_id: folderId })
+            body: JSON.stringify(payload)
         });
         if (!res.ok) throw new Error('Move failed');
         closeNoteMoveModal();
@@ -8781,7 +9023,7 @@ async function performNoteMove(folderId) {
         await loadNotesUnified();
     } catch (err) {
         console.error('Error moving notes:', err);
-        showToast('Could not move notes', 'error');
+        showToast('Could not move', 'error');
     }
 }
 
@@ -16811,6 +17053,28 @@ async function verifyPin(pin) {
                 pinState.pendingNoteId = null;
                 pinState.pendingAction = null;
                 showToast('Restored', 'success', 2000);
+                await loadNotesUnified();
+                return true;
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+        }
+
+        if (pendingAction === 'duplicate') {
+            const res = await fetch(`/api/notes/${noteId}/duplicate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+            if (res.ok) {
+                closePinModal();
+                pinState.pendingNoteId = null;
+                pinState.pendingAction = null;
+                showToast('Note duplicated', 'success', 2000);
                 await loadNotesUnified();
                 return true;
             } else {

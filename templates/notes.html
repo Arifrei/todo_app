@@ -4,32 +4,39 @@
 <div class="notes-page" data-folder-id="{{ current_folder.id if current_folder else '' }}">
     <header class="notes-page-header">
         <div class="notes-page-title">
-            <h1>Notes</h1>
+            <a href="/notes" class="notes-home-link"><h1>Notes</h1></a>
             {% if current_folder %}
             <div class="notes-folder-breadcrumb">
-                <a class="notes-folder-link" href="/notes"><i class="fa-solid fa-arrow-left"></i> Back</a>
+                <div class="notes-folder-actions">
+                    <a class="notes-folder-link" href="/notes">
+                        <i class="fa-solid fa-arrow-left"></i>
+                        <span class="btn-text">Back</span>
+                    </a>
+                </div>
                 <span class="notes-folder-name">{{ current_folder.name }}</span>
             </div>
             {% endif %}
         </div>
-        <!-- FAB Button -->
-        <div class="notes-fab-container notes-fab-header" id="notes-fab">
-            <button class="notes-fab-main" id="notes-fab-main">
-                <i class="fa-solid fa-plus"></i>
-            </button>
-            <div class="notes-fab-options" id="notes-fab-options">
-                <button class="notes-fab-option" data-action="new-note">
-                    <i class="fa-solid fa-note-sticky"></i>
-                    <span>Note</span>
+        <div class="notes-header-actions">
+            <!-- FAB Button -->
+            <div class="notes-fab-container notes-fab-header" id="notes-fab">
+                <button class="notes-fab-main" id="notes-fab-main">
+                    <i class="fa-solid fa-plus"></i>
                 </button>
-                <button class="notes-fab-option" data-action="new-list">
-                    <i class="fa-solid fa-list"></i>
-                    <span>List</span>
-                </button>
-                <button class="notes-fab-option" data-action="new-folder">
-                    <i class="fa-solid fa-folder-plus"></i>
-                    <span>Folder</span>
-                </button>
+                <div class="notes-fab-options" id="notes-fab-options">
+                    <button class="notes-fab-option" data-action="new-note">
+                        <i class="fa-solid fa-note-sticky"></i>
+                        <span>Note</span>
+                    </button>
+                    <button class="notes-fab-option" data-action="new-list">
+                        <i class="fa-solid fa-list"></i>
+                        <span>List</span>
+                    </button>
+                    <button class="notes-fab-option" data-action="new-folder">
+                        <i class="fa-solid fa-folder-plus"></i>
+                        <span>Folder</span>
+                    </button>
+                </div>
             </div>
         </div>
     </header>

@@ -26,7 +26,7 @@ from embedding_service import (
     delete_embedding_for_entity,
     refresh_embedding_for_entity,
 )
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, DocumentFolder, Document
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -62,8 +62,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'planner', 'feed', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'planner', 'feed', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
@@ -2501,6 +2501,20 @@ def bookmarks_page():
         return redirect(url_for('select_user'))
     return render_template('bookmarks.html')
 
+@app.route('/planner')
+def planner_page():
+    """Planner module page."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('planner.html', folder_id=None)
+
+@app.route('/planner/folder/<int:folder_id>')
+def planner_folder_page(folder_id):
+    """Planner folder page."""
+    if not get_current_user():
+        return redirect(url_for('select_user'))
+    return render_template('planner.html', folder_id=folder_id)
+
 @app.route('/feed')
 def feed_page():
     """Everfeed module page."""
@@ -3083,6 +3097,60 @@ def move_notes():
             updated += 1
     db.session.commit()
     return jsonify({'updated': updated, 'folder_id': folder_id_int})
+
+
+@app.route('/api/note-folders/move', methods=['POST'])
+def move_note_folders():
+    """Move one or more note folders under a new parent (or to root)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    data = request.json or {}
+    ids = data.get('ids')
+    parent_id = data.get('parent_id')
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'ids array required'}), 400
+    parent_id_int = int(parent_id) if parent_id and str(parent_id).isdigit() else None
+    if parent_id_int is not None:
+        NoteFolder.query.filter_by(id=parent_id_int, user_id=user.id).first_or_404()
+
+    folders = NoteFolder.query.filter(NoteFolder.user_id == user.id, NoteFolder.id.in_(ids)).all()
+    folder_map = {f.id: f for f in folders}
+
+    def is_descendant(candidate_id, ancestor_id):
+        seen = set()
+        current = candidate_id
+        while current and current not in seen:
+            seen.add(current)
+            folder = folder_map.get(current)
+            if not folder:
+                folder = NoteFolder.query.filter_by(id=current, user_id=user.id).first()
+            if not folder:
+                return False
+            if folder.parent_id == ancestor_id:
+                return True
+            current = folder.parent_id
+        return False
+
+    updated = 0
+    for raw_id in ids:
+        try:
+            fid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        folder = folder_map.get(fid)
+        if not folder:
+            continue
+        if parent_id_int is not None:
+            if parent_id_int == folder.id:
+                continue
+            if is_descendant(parent_id_int, folder.id):
+                continue
+        folder.parent_id = parent_id_int
+        updated += 1
+
+    db.session.commit()
+    return jsonify({'updated': updated, 'parent_id': parent_id_int})
 
 
 @app.route('/api/vault/folders', methods=['GET', 'POST'])
@@ -3710,6 +3778,59 @@ def restore_note(note_id):
     note.updated_at = _now_local()
     db.session.commit()
     return jsonify(note.to_dict())
+
+
+@app.route('/api/notes/<int:note_id>/duplicate', methods=['POST'])
+def duplicate_note(note_id):
+    """Duplicate a note or list, including list items when applicable."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    note = Note.query.filter_by(id=note_id, user_id=user.id).first_or_404()
+    if note.is_pin_protected:
+        data = request.json or {}
+        pin = str(data.get('pin', '')).strip()
+        if not pin or not user.check_notes_pin(pin):
+            return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
+
+    copy_note = Note(
+        title=f"{note.title or 'Untitled'} (copy)",
+        content=note.content or '' if note.note_type != 'list' else '',
+        user_id=user.id,
+        todo_item_id=None,
+        calendar_event_id=None,
+        folder_id=note.folder_id,
+        note_type=note.note_type or 'note',
+        checkbox_mode=bool(note.checkbox_mode) if note.note_type == 'list' else False,
+        is_listed=bool(note.is_listed)
+    )
+    db.session.add(copy_note)
+    db.session.flush()
+
+    if note.note_type == 'list':
+        items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
+        ).all()
+        if items:
+            copied_items = [
+                NoteListItem(
+                    note_id=copy_note.id,
+                    text=item.text,
+                    note=item.note,
+                    link_text=item.link_text,
+                    link_url=item.link_url,
+                    checked=bool(item.checked),
+                    order_index=item.order_index or 0
+                )
+                for item in items
+            ]
+            db.session.add_all(copied_items)
+
+    copy_note.updated_at = _now_local()
+    db.session.commit()
+    return jsonify(copy_note.to_dict()), 201
 
 
 @app.route('/api/notes/<int:note_id>/convert-to-list', methods=['POST'])
@@ -4461,6 +4582,409 @@ def bookmark_detail(item_id):
     db.session.delete(item)
     db.session.commit()
     return jsonify({'message': 'Deleted'})
+
+
+def _planner_line_type(value: str) -> str:
+    raw = (value or '').strip()
+    if re.match(r'^(https?://|www\.)', raw, re.IGNORECASE):
+        return 'url'
+    return 'text'
+
+
+# Planner API
+@app.route('/api/planner', methods=['GET'])
+def get_planner_data():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    folders = PlannerFolder.query.filter_by(user_id=user.id).order_by(
+        PlannerFolder.order_index.asc(),
+        PlannerFolder.created_at.asc()
+    ).all()
+    simple_items = PlannerSimpleItem.query.filter_by(user_id=user.id).order_by(
+        PlannerSimpleItem.order_index.asc(),
+        PlannerSimpleItem.created_at.asc()
+    ).all()
+    groups = PlannerGroup.query.filter_by(user_id=user.id).order_by(
+        PlannerGroup.order_index.asc(),
+        PlannerGroup.created_at.asc()
+    ).all()
+    multi_items = PlannerMultiItem.query.filter_by(user_id=user.id).order_by(
+        PlannerMultiItem.order_index.asc(),
+        PlannerMultiItem.created_at.asc()
+    ).all()
+    multi_lines = PlannerMultiLine.query.filter_by(user_id=user.id).order_by(
+        PlannerMultiLine.order_index.asc(),
+        PlannerMultiLine.created_at.asc()
+    ).all()
+
+    return jsonify({
+        'folders': [f.to_dict() for f in folders],
+        'simple_items': [i.to_dict() for i in simple_items],
+        'groups': [g.to_dict() for g in groups],
+        'multi_items': [i.to_dict() for i in multi_items],
+        'multi_lines': [l.to_dict() for l in multi_lines],
+    })
+
+
+@app.route('/api/planner/folders', methods=['POST'])
+def create_planner_folder():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    payload = request.get_json() or {}
+    name = (payload.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Folder name required'}), 400
+
+    parent_id = payload.get('parent_id')
+    folder_type = (payload.get('folder_type') or 'simple').strip().lower()
+    if parent_id:
+        parent = PlannerFolder.query.filter_by(id=parent_id, user_id=user.id).first()
+        if not parent:
+            return jsonify({'error': 'Parent folder not found'}), 404
+        if parent.folder_type != 'multi':
+            return jsonify({'error': 'Cannot create subfolder inside a simple folder'}), 400
+        folder_type = parent.folder_type
+    else:
+        if folder_type not in ('simple', 'multi'):
+            return jsonify({'error': 'Invalid folder type'}), 400
+
+    folder = PlannerFolder(
+        user_id=user.id,
+        parent_id=parent_id,
+        name=name,
+        folder_type=folder_type
+    )
+    db.session.add(folder)
+    db.session.commit()
+    return jsonify(folder.to_dict())
+
+
+@app.route('/api/planner/folders/<int:folder_id>', methods=['PUT', 'DELETE'])
+def update_planner_folder(folder_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    folder = PlannerFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+    if request.method == 'DELETE':
+        db.session.delete(folder)
+        db.session.commit()
+        return jsonify({'message': 'Deleted'})
+
+    payload = request.get_json() or {}
+    name = payload.get('name')
+    if name is not None:
+        folder.name = name.strip() or folder.name
+    db.session.commit()
+    return jsonify(folder.to_dict())
+
+
+@app.route('/api/planner/simple-items', methods=['POST'])
+def create_planner_simple_item():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    payload = request.get_json() or {}
+    folder_id = payload.get('folder_id')
+    title = (payload.get('title') or '').strip()
+    value = (payload.get('value') or '').strip()
+    description = (payload.get('description') or '').strip()
+    if not folder_id or not title or not value:
+        return jsonify({'error': 'Folder, title, and value required'}), 400
+
+    folder = PlannerFolder.query.filter_by(id=folder_id, user_id=user.id).first()
+    if not folder:
+        return jsonify({'error': 'Folder not found'}), 404
+    if folder.folder_type != 'simple':
+        return jsonify({'error': 'Simple items can only be added to simple folders'}), 400
+
+    item = PlannerSimpleItem(
+        user_id=user.id,
+        folder_id=folder_id,
+        title=title,
+        value=value,
+        description=description or None
+    )
+    db.session.add(item)
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@app.route('/api/planner/simple-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def update_planner_simple_item(item_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    item = PlannerSimpleItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        db.session.delete(item)
+        db.session.commit()
+        return jsonify({'message': 'Deleted'})
+
+    payload = request.get_json() or {}
+    if 'title' in payload:
+        item.title = (payload.get('title') or '').strip() or item.title
+    if 'value' in payload:
+        item.value = (payload.get('value') or '').strip() or item.value
+    if 'description' in payload:
+        item.description = (payload.get('description') or '').strip() or None
+    if 'folder_id' in payload:
+        new_folder_id = payload.get('folder_id')
+        if new_folder_id and new_folder_id != item.folder_id:
+            folder = PlannerFolder.query.filter_by(id=new_folder_id, user_id=user.id).first()
+            if not folder:
+                return jsonify({'error': 'Folder not found'}), 404
+            if folder.folder_type != 'simple':
+                return jsonify({'error': 'Simple items can only move to simple folders'}), 400
+            item.folder_id = new_folder_id
+
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@app.route('/api/planner/groups', methods=['POST'])
+def create_planner_group():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    payload = request.get_json() or {}
+    folder_id = payload.get('folder_id')
+    title = (payload.get('title') or '').strip()
+    if not folder_id or not title:
+        return jsonify({'error': 'Folder and title required'}), 400
+
+    folder = PlannerFolder.query.filter_by(id=folder_id, user_id=user.id).first()
+    if not folder:
+        return jsonify({'error': 'Folder not found'}), 404
+    if folder.folder_type != 'multi':
+        return jsonify({'error': 'Groups can only be added to multi folders'}), 400
+
+    group = PlannerGroup(
+        user_id=user.id,
+        folder_id=folder_id,
+        title=title
+    )
+    db.session.add(group)
+    db.session.commit()
+    return jsonify(group.to_dict())
+
+
+@app.route('/api/planner/groups/<int:group_id>', methods=['PUT', 'DELETE'])
+def update_planner_group(group_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    group = PlannerGroup.query.filter_by(id=group_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        db.session.delete(group)
+        db.session.commit()
+        return jsonify({'message': 'Deleted'})
+
+    payload = request.get_json() or {}
+    if 'title' in payload:
+        group.title = (payload.get('title') or '').strip() or group.title
+    if 'folder_id' in payload:
+        new_folder_id = payload.get('folder_id')
+        if new_folder_id and new_folder_id != group.folder_id:
+            folder = PlannerFolder.query.filter_by(id=new_folder_id, user_id=user.id).first()
+            if not folder:
+                return jsonify({'error': 'Folder not found'}), 404
+            if folder.folder_type != 'multi':
+                return jsonify({'error': 'Groups can only move to multi folders'}), 400
+            group.folder_id = new_folder_id
+            PlannerMultiItem.query.filter_by(group_id=group.id, user_id=user.id).update(
+                {'folder_id': new_folder_id}
+            )
+
+    db.session.commit()
+    return jsonify(group.to_dict())
+
+
+@app.route('/api/planner/multi-items', methods=['POST'])
+def create_planner_multi_item():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    payload = request.get_json() or {}
+    title = (payload.get('title') or '').strip()
+    folder_id = payload.get('folder_id')
+    group_id = payload.get('group_id')
+    lines = payload.get('lines') or []
+    if not title or (not folder_id and not group_id):
+        return jsonify({'error': 'Title and destination required'}), 400
+
+    if group_id:
+        group = PlannerGroup.query.filter_by(id=group_id, user_id=user.id).first()
+        if not group:
+            return jsonify({'error': 'Group not found'}), 404
+        folder_id = group.folder_id
+
+    folder = PlannerFolder.query.filter_by(id=folder_id, user_id=user.id).first()
+    if not folder:
+        return jsonify({'error': 'Folder not found'}), 404
+    if folder.folder_type != 'multi':
+        return jsonify({'error': 'Multi items can only be added to multi folders'}), 400
+
+    item = PlannerMultiItem(
+        user_id=user.id,
+        folder_id=folder_id,
+        group_id=group_id,
+        title=title
+    )
+    db.session.add(item)
+    db.session.flush()
+
+    order_index = 0
+    for raw in lines:
+        line_value = (raw or '').strip()
+        if not line_value:
+            continue
+        db.session.add(PlannerMultiLine(
+            user_id=user.id,
+            item_id=item.id,
+            line_type=_planner_line_type(line_value),
+            value=line_value,
+            order_index=order_index
+        ))
+        order_index += 1
+
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@app.route('/api/planner/multi-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def update_planner_multi_item(item_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    item = PlannerMultiItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        db.session.delete(item)
+        db.session.commit()
+        return jsonify({'message': 'Deleted'})
+
+    payload = request.get_json() or {}
+    if 'title' in payload:
+        item.title = (payload.get('title') or '').strip() or item.title
+
+    if 'group_id' in payload:
+        group_id = payload.get('group_id')
+        if group_id:
+            group = PlannerGroup.query.filter_by(id=group_id, user_id=user.id).first()
+            if not group:
+                return jsonify({'error': 'Group not found'}), 404
+            item.group_id = group.id
+            item.folder_id = group.folder_id
+        else:
+            item.group_id = None
+
+    if 'folder_id' in payload:
+        new_folder_id = payload.get('folder_id')
+        if new_folder_id and new_folder_id != item.folder_id:
+            folder = PlannerFolder.query.filter_by(id=new_folder_id, user_id=user.id).first()
+            if not folder:
+                return jsonify({'error': 'Folder not found'}), 404
+            if folder.folder_type != 'multi':
+                return jsonify({'error': 'Multi items can only move to multi folders'}), 400
+            item.folder_id = new_folder_id
+            if 'group_id' not in payload:
+                item.group_id = None
+
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@app.route('/api/planner/multi-items/order', methods=['POST'])
+def update_planner_multi_item_order():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+
+    payload = request.get_json() or {}
+    folder_id = payload.get('folder_id')
+    order = payload.get('order') or []
+    if not folder_id or not isinstance(order, list):
+        return jsonify({'error': 'Folder and order list required'}), 400
+
+    folder = PlannerFolder.query.filter_by(id=folder_id, user_id=user.id).first()
+    if not folder:
+        return jsonify({'error': 'Folder not found'}), 404
+    if folder.folder_type != 'multi':
+        return jsonify({'error': 'Order can only be set for multi folders'}), 400
+
+    items = PlannerMultiItem.query.filter_by(user_id=user.id, folder_id=folder_id).all()
+    item_ids = [item.id for item in items]
+    if len(order) != len(item_ids) or set(order) != set(item_ids):
+        return jsonify({'error': 'Order list does not match folder items'}), 400
+
+    items_by_id = {item.id: item for item in items}
+    for index, item_id in enumerate(order):
+        item = items_by_id.get(item_id)
+        if item:
+            item.order_index = index
+
+    db.session.commit()
+    return jsonify({'message': 'Order updated'})
+
+
+@app.route('/api/planner/multi-lines', methods=['POST'])
+def create_planner_multi_line():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    payload = request.get_json() or {}
+    item_id = payload.get('item_id')
+    value = (payload.get('value') or '').strip()
+    if not item_id or not value:
+        return jsonify({'error': 'Item and value required'}), 400
+
+    item = PlannerMultiItem.query.filter_by(id=item_id, user_id=user.id).first()
+    if not item:
+        return jsonify({'error': 'Multi item not found'}), 404
+
+    max_order = db.session.query(func.max(PlannerMultiLine.order_index)).filter_by(
+        item_id=item.id,
+        user_id=user.id
+    ).scalar()
+    order_index = (max_order + 1) if max_order is not None else 0
+    line = PlannerMultiLine(
+        user_id=user.id,
+        item_id=item.id,
+        line_type=_planner_line_type(value),
+        value=value,
+        order_index=order_index
+    )
+    db.session.add(line)
+    db.session.commit()
+    return jsonify(line.to_dict())
+
+
+@app.route('/api/planner/multi-lines/<int:line_id>', methods=['PUT', 'DELETE'])
+def update_planner_multi_line(line_id):
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    line = PlannerMultiLine.query.filter_by(id=line_id, user_id=user.id).first_or_404()
+
+    if request.method == 'DELETE':
+        db.session.delete(line)
+        db.session.commit()
+        return jsonify({'message': 'Deleted'})
+
+    payload = request.get_json() or {}
+    if 'value' in payload:
+        value = (payload.get('value') or '').strip()
+        if value:
+            line.value = value
+            line.line_type = _planner_line_type(value)
+    db.session.commit()
+    return jsonify(line.to_dict())
 
 
 @app.route('/api/feed', methods=['GET', 'POST'])
