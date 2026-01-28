@@ -166,6 +166,8 @@ def ensure_note_table(cur):
                 user_id INTEGER NOT NULL,
                 todo_item_id INTEGER,
                 calendar_event_id INTEGER,
+                planner_multi_item_id INTEGER,
+                planner_multi_line_id INTEGER,
                 folder_id INTEGER,
                 title VARCHAR(150) NOT NULL DEFAULT 'Untitled Note',
                 content TEXT,
@@ -189,6 +191,8 @@ def ensure_note_table(cur):
         return
     add_column(cur, "note", "todo_item_id", "INTEGER")
     add_column(cur, "note", "calendar_event_id", "INTEGER")
+    add_column(cur, "note", "planner_multi_item_id", "INTEGER")
+    add_column(cur, "note", "planner_multi_line_id", "INTEGER")
     add_column(cur, "note", "folder_id", "INTEGER")
     add_column(cur, "note", "title", "VARCHAR(150) NOT NULL DEFAULT 'Untitled Note'")
     add_column(cur, "note", "content", "TEXT")

@@ -261,6 +261,18 @@ def _extract_note_list_lines(raw_html):
             return None, f'Lines must be short phrases (max {NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT} words if punctuated).'
     return cleaned_lines, None
 
+def _is_note_linked(note, linked_targets=None, linked_sources=None):
+    """True if note is linked to another entity or involved in a note link (source or target)."""
+    if not note:
+        return False
+    if note.todo_item_id or note.calendar_event_id or note.planner_multi_item_id or note.planner_multi_line_id:
+        return True
+    if linked_targets is not None and note.id in linked_targets:
+        return True
+    if linked_sources is not None and note.id in linked_sources:
+        return True
+    return False
+
 def _normalize_calendar_item_note(raw):
     if raw is None:
         return None
@@ -2646,6 +2658,13 @@ def handle_notes():
     include_all = _parse_bool(request.args.get('all'))
     include_hidden = _parse_bool(request.args.get('include_hidden'))
     archived_only = _parse_bool(request.args.get('archived'))
+    planner_multi_item_id = request.args.get('planner_multi_item_id')
+    planner_multi_line_id = request.args.get('planner_multi_line_id')
+    planner_multi_item_id = int(planner_multi_item_id) if planner_multi_item_id and str(planner_multi_item_id).isdigit() else None
+    planner_multi_line_id = int(planner_multi_line_id) if planner_multi_line_id and str(planner_multi_line_id).isdigit() else None
+    planner_filter = bool(planner_multi_item_id or planner_multi_line_id)
+    if planner_filter and request.args.get('include_hidden') is None:
+        include_hidden = True
 
     if request.method == 'POST':
         data = request.json or {}
@@ -2654,7 +2673,16 @@ def handle_notes():
         note_type = _normalize_note_type(data.get('note_type') or data.get('type'))
         title = raw_title or ('Untitled List' if note_type == 'list' else 'Untitled Note')
         checkbox_mode = _parse_bool(data.get('checkbox_mode'))
+        has_is_listed = 'is_listed' in data
+        planner_item_id = data.get('planner_multi_item_id')
+        planner_line_id = data.get('planner_multi_line_id')
+        planner_item_id = int(planner_item_id) if planner_item_id and str(planner_item_id).isdigit() else None
+        planner_line_id = int(planner_line_id) if planner_line_id and str(planner_line_id).isdigit() else None
+        if planner_item_id and planner_line_id:
+            return jsonify({'error': 'Provide either planner_multi_item_id or planner_multi_line_id, not both'}), 400
         is_listed = _parse_bool(data.get('is_listed'), True)
+        if not has_is_listed and (planner_item_id or planner_line_id):
+            is_listed = False
         todo_item_id = data.get('todo_item_id')
         calendar_event_id = data.get('calendar_event_id')
         folder_id_value = data.get('folder_id')
@@ -2686,12 +2714,23 @@ def handle_notes():
             if not linked_event:
                 return jsonify({'error': 'Calendar event not found for this user'}), 404
 
+        if planner_item_id:
+            planner_item = PlannerMultiItem.query.filter_by(id=planner_item_id, user_id=user.id).first()
+            if not planner_item:
+                return jsonify({'error': 'Planner group item not found'}), 404
+        if planner_line_id:
+            planner_line = PlannerMultiLine.query.filter_by(id=planner_line_id, user_id=user.id).first()
+            if not planner_line:
+                return jsonify({'error': 'Planner line not found'}), 404
+
         note = Note(
             title=title,
             content=content if note_type == 'note' else '',
             user_id=user.id,
             todo_item_id=linked_item.id if linked_item else None,
             calendar_event_id=linked_event.id if linked_event else None,
+            planner_multi_item_id=planner_item_id,
+            planner_multi_line_id=planner_line_id,
             folder_id=folder_id_value,
             note_type=note_type,
             checkbox_mode=checkbox_mode if note_type == 'list' else False,
@@ -2706,11 +2745,15 @@ def handle_notes():
         notes_query = notes_query.filter(Note.archived_at.isnot(None))
     else:
         notes_query = notes_query.filter(Note.archived_at.is_(None))
-    if not include_all:
+    if not include_all and not planner_filter:
         if folder_id_int is None:
             notes_query = notes_query.filter(Note.folder_id.is_(None))
         else:
             notes_query = notes_query.filter_by(folder_id=folder_id_int)
+    if planner_multi_item_id:
+        notes_query = notes_query.filter(Note.planner_multi_item_id == planner_multi_item_id)
+    if planner_multi_line_id:
+        notes_query = notes_query.filter(Note.planner_multi_line_id == planner_multi_line_id)
     if not include_hidden:
         notes_query = notes_query.filter(Note.is_listed.is_(True))
     notes = notes_query.order_by(
@@ -2718,9 +2761,19 @@ def handle_notes():
         Note.pin_order.asc(),
         Note.updated_at.desc()
     ).all()
+    linked_targets = set()
+    linked_sources = set()
+    if notes:
+        note_ids = [n.id for n in notes]
+        links = NoteLink.query.filter(
+            or_(NoteLink.target_note_id.in_(note_ids), NoteLink.source_note_id.in_(note_ids))
+        ).all()
+        linked_targets = {link.target_note_id for link in links}
+        linked_sources = {link.source_note_id for link in links}
     note_payload = []
     for n in notes:
         note_dict = n.to_dict()
+        note_dict['is_linked_note'] = _is_note_linked(n, linked_targets, linked_sources)
         # Hide content from protected notes (always locked in list view)
         if n.is_pin_protected:
             note_dict['content'] = ''
@@ -3729,6 +3782,8 @@ def handle_note(note_id):
             'note_type': note.note_type,
             'pinned': note.pinned,
             'folder_id': note.folder_id,
+            'planner_multi_item_id': note.planner_multi_item_id,
+            'planner_multi_line_id': note.planner_multi_line_id,
             'archived_at': note.archived_at.isoformat() if note.archived_at else None,
             'is_archived': bool(note.archived_at),
             'created_at': note.created_at.isoformat() if note.created_at else None,
@@ -3737,6 +3792,10 @@ def handle_note(note_id):
         return jsonify(payload)
 
     payload = note.to_dict()
+    link_exists = NoteLink.query.filter(
+        or_(NoteLink.target_note_id == note.id, NoteLink.source_note_id == note.id)
+    ).first() is not None
+    payload['is_linked_note'] = _is_note_linked(note) or link_exists
     if note.note_type == 'list':
         payload['items'] = [item.to_dict() for item in note.list_items]
     return jsonify(payload)
@@ -4618,6 +4677,41 @@ def get_planner_data():
         PlannerMultiLine.order_index.asc(),
         PlannerMultiLine.created_at.asc()
     ).all()
+    planner_notes = Note.query.filter_by(user_id=user.id).filter(
+        Note.archived_at.is_(None),
+        or_(
+            Note.planner_multi_item_id.isnot(None),
+            Note.planner_multi_line_id.isnot(None)
+        )
+    ).order_by(Note.updated_at.desc()).all()
+    planner_note_payload = []
+    for note in planner_notes:
+        note_dict = note.to_dict()
+        if note.is_pin_protected:
+            note_dict['content'] = ''
+            note_dict['locked'] = True
+        planner_note_payload.append(note_dict)
+    list_ids = [n.id for n in planner_notes if n.note_type == 'list' and not n.is_pin_protected]
+    if list_ids:
+        items = NoteListItem.query.filter(NoteListItem.note_id.in_(list_ids)).order_by(
+            NoteListItem.note_id.asc(),
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
+        ).all()
+        preview_map = {lid: [] for lid in list_ids}
+        for item in items:
+            previews = preview_map.get(item.note_id)
+            if previews is None or len(previews) >= 3:
+                continue
+            label = _build_list_preview_text(item)
+            if label:
+                previews.append(label)
+        for payload in planner_note_payload:
+            if payload.get('note_type') == 'list':
+                if payload.get('locked'):
+                    payload['list_preview'] = []
+                else:
+                    payload['list_preview'] = preview_map.get(payload['id'], [])
 
     return jsonify({
         'folders': [f.to_dict() for f in folders],
@@ -4625,6 +4719,7 @@ def get_planner_data():
         'groups': [g.to_dict() for g in groups],
         'multi_items': [i.to_dict() for i in multi_items],
         'multi_lines': [l.to_dict() for l in multi_lines],
+        'planner_notes': planner_note_payload,
     })
 
 

@@ -12056,6 +12056,49 @@ button.meta-chip {
     color: var(--text-color);
 }
 
+.planner-attachment-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.planner-attachment-title {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.planner-attachment-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.planner-note-attachment {
+    text-align: left;
+    padding: 0.65rem 0.75rem;
+    border-radius: 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow);
+}
+
+.planner-note-attachment .note-updated {
+    font-size: 0.75rem;
+}
+
+.planner-note-attachment-line {
+    background: rgba(59, 130, 246, 0.04);
+    border: 1px solid rgba(59, 130, 246, 0.12);
+    padding: 0.55rem 0.7rem;
+}
+
+.planner-line-attachments {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-top: 0.35rem;
+}
+
 .planner-inline-add {
     display: flex;
     flex-direction: column;

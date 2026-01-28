@@ -67,12 +67,14 @@ const plannerState = {
     simpleItems: [],
     multiItems: [],
     multiLines: [],
+    plannerNotes: [],
     currentFolderId: null,
     expandedSimple: new Set(),
     expandedMulti: new Set(),
     activeAddType: null,
     simpleAddOpen: false,
-    addingSimpleFolder: false
+    addingSimpleFolder: false,
+    activeAttachmentContext: null
 };
 
 function getPlannerFolder(folderId) {
@@ -94,6 +96,14 @@ function looksLikeUrl(value) {
     return /^(https?:\/\/|www\.)/i.test((value || '').trim());
 }
 
+function getPlannerNotesForItem(itemId) {
+    return plannerState.plannerNotes.filter(note => note.planner_multi_item_id === itemId);
+}
+
+function getPlannerNotesForLine(lineId) {
+    return plannerState.plannerNotes.filter(note => note.planner_multi_line_id === lineId);
+}
+
 function parsePlannerSimpleInput(raw) {
     if (!raw) return null;
     const parts = raw.split(';');
@@ -108,12 +118,16 @@ function getPlannerAddOptions() {
     if (!folder) {
         return [
             { id: 'simple-item', label: 'Simple item' },
+            { id: 'text-item', label: 'Text item' },
             { id: 'folder-simple', label: 'Simple folder' },
             { id: 'folder-multi', label: 'Multi folder' }
         ];
     }
     if (folder.folder_type === 'simple') {
-        return [{ id: 'simple-item', label: 'Simple item' }];
+        return [
+            { id: 'simple-item', label: 'Simple item' },
+            { id: 'text-item', label: 'Text item' }
+        ];
     }
     return [
         { id: 'subfolder', label: 'Folder' },
@@ -156,6 +170,7 @@ function openPlannerAddModal(type) {
 function closePlannerModal() {
     const modal = document.getElementById('planner-modal');
     if (modal) modal.classList.remove('active');
+    plannerState.activeAttachmentContext = null;
 }
 
 function togglePlannerSimpleAddForm() {
@@ -286,6 +301,39 @@ function buildPlannerModalForm(type, folder) {
                 </div>
             `,
             onSubmit: () => submitPlannerSimpleItem(folder.id)
+        };
+    }
+    if (type === 'text-item') {
+        const simpleFolders = getSimplePlannerFolders();
+        if (!folder && !simpleFolders.length) {
+            return {
+                title: 'New Text Item',
+                body: '<div class="planner-empty">Create a simple folder first.</div>',
+                onSubmit: closePlannerModal
+            };
+        }
+        const folderSelect = !folder ? `
+            <div class="form-group">
+                <label>Folder</label>
+                <select id="planner-modal-folder" class="form-control">
+                    ${simpleFolders.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('')}
+                </select>
+            </div>
+        ` : '';
+        return {
+            title: 'New Text Item',
+            body: `
+                ${folderSelect}
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Title">
+                </div>
+                <div class="form-group">
+                    <label>Text</label>
+                    <textarea id="planner-modal-text" class="form-control" rows="5" placeholder="Long text"></textarea>
+                </div>
+            `,
+            onSubmit: () => submitPlannerTextItem(folder ? folder.id : null)
         };
     }
     if (type === 'group-item' && folder) {
@@ -444,6 +492,7 @@ function renderFolderTile(folder, variant = 'simple') {
 function renderMultiItemTile(item, variant = 'tile') {
     const isExpanded = plannerState.expandedMulti.has(item.id);
     const lines = plannerState.multiLines.filter(line => line.item_id === item.id);
+    const attachments = getPlannerNotesForItem(item.id);
     const tile = document.createElement('div');
     tile.className = `planner-item-tile ${variant === 'row' ? 'planner-item-row' : ''} ${isExpanded ? 'expanded' : ''}`;
     if (variant === 'row') {
@@ -467,10 +516,16 @@ function renderMultiItemTile(item, variant = 'tile') {
             <div class="planner-line-list">
                 ${lines.length ? '' : '<div class="planner-empty">No lines yet.</div>'}
             </div>
+            <div class="planner-attachment-block" id="planner-item-attachments-${item.id}">
+                <div class="planner-attachment-title">Attachments</div>
+                <div class="planner-attachment-list"></div>
+            </div>
             <div class="planner-item-actions">
                 <button class="btn btn-ghost" type="button" onclick="togglePlannerInlineLine(${item.id})">Add line</button>
                 <button class="btn btn-ghost" type="button" onclick="openPlannerEditGroupItem(event, ${item.id})">Edit</button>
                 <button class="btn btn-danger" type="button" onclick="deletePlannerMultiItem(${item.id})">Delete</button>
+                <button class="btn btn-ghost" type="button" onclick="openPlannerNewNote({ itemId: ${item.id} })">Add note</button>
+                <button class="btn btn-ghost" type="button" onclick="openPlannerListAttachmentModal({ itemId: ${item.id} })">Add list</button>
             </div>
             <div class="planner-inline-add">
                 <div class="planner-inline-line" id="planner-inline-line-${item.id}">
@@ -481,12 +536,21 @@ function renderMultiItemTile(item, variant = 'tile') {
         </div>
     `;
     const lineList = tile.querySelector('.planner-line-list');
+    const attachmentBlock = tile.querySelector(`#planner-item-attachments-${item.id}`);
+    const attachmentList = attachmentBlock ? attachmentBlock.querySelector('.planner-attachment-list') : null;
     lines.forEach(line => {
         const row = document.createElement('div');
         row.className = 'planner-line-row';
+        const lineNotes = getPlannerNotesForLine(line.id);
         row.innerHTML = `
             <div class="planner-line-value">${escapeHtml(line.value)}</div>
             <div class="planner-line-actions">
+                <button class="btn-icon" type="button" onclick="openPlannerNewNote({ lineId: ${line.id} })" title="Add note">
+                    <i class="fa-solid fa-note-sticky"></i>
+                </button>
+                <button class="btn-icon" type="button" onclick="openPlannerListAttachmentModal({ lineId: ${line.id} })" title="Add list">
+                    <i class="fa-solid fa-list"></i>
+                </button>
                 ${line.line_type === 'url' ? `
                     <button class="btn-icon" type="button" onclick="openPlannerLine(${line.id})" title="Open">
                         <i class="fa-solid fa-arrow-up-right-from-square"></i>
@@ -501,8 +565,102 @@ function renderMultiItemTile(item, variant = 'tile') {
             </div>
         `;
         lineList.appendChild(row);
+        if (lineNotes.length) {
+            const lineAttachments = document.createElement('div');
+            lineAttachments.className = 'planner-line-attachments';
+            lineNotes.forEach(note => {
+                lineAttachments.appendChild(renderPlannerAttachment(note, 'line'));
+            });
+            lineList.appendChild(lineAttachments);
+        }
     });
+    if (attachmentBlock && attachmentList) {
+        if (!attachments.length) {
+            attachmentBlock.remove();
+        } else {
+            attachments.forEach(note => {
+                attachmentList.appendChild(renderPlannerAttachment(note, 'item'));
+            });
+        }
+    }
     return tile;
+}
+
+function getPlannerReturnUrl() {
+    return window.location.pathname;
+}
+
+function openPlannerNoteAttachment(noteId) {
+    const returnTo = getPlannerReturnUrl();
+    window.location.href = `/notes/${noteId}?return=${encodeURIComponent(returnTo)}`;
+}
+
+function openPlannerNewNote(context = {}) {
+    const returnTo = getPlannerReturnUrl();
+    const params = new URLSearchParams();
+    params.set('return', returnTo);
+    params.set('is_listed', '0');
+    if (context.itemId) {
+        params.set('planner_item_id', context.itemId);
+    }
+    if (context.lineId) {
+        params.set('planner_line_id', context.lineId);
+    }
+    window.location.href = `/notes/new?${params.toString()}`;
+}
+
+function openPlannerListAttachmentModal(context = {}) {
+    plannerState.activeAttachmentContext = context;
+    const modal = document.getElementById('planner-modal');
+    const title = document.getElementById('planner-modal-title');
+    const body = document.getElementById('planner-modal-body');
+    const submitBtn = document.getElementById('planner-modal-submit');
+    if (!modal || !title || !body || !submitBtn) return;
+    title.textContent = 'New List';
+    body.innerHTML = `
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" id="planner-list-title" class="form-control" placeholder="Untitled list">
+        </div>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 0.6rem;">
+                <input type="checkbox" id="planner-list-checkbox-toggle">
+                <span>Enable checkboxes</span>
+            </label>
+        </div>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 0.6rem;">
+                <input type="checkbox" id="planner-list-listed-toggle">
+                <span>Show in notes list</span>
+            </label>
+        </div>
+    `;
+    submitBtn.onclick = submitPlannerListAttachment;
+    modal.classList.add('active');
+}
+
+function renderPlannerAttachment(note, variant = 'item') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const displayTitle = typeof getNoteDisplayTitle === 'function'
+        ? getNoteDisplayTitle(note)
+        : (note.title || 'Untitled');
+    const previewHtml = typeof renderNotePreview === 'function' ? renderNotePreview(note) : '';
+    const iconHtml = typeof renderNoteIcon === 'function' ? renderNoteIcon(note) : '<i class="fa-solid fa-note-sticky"></i>';
+    const updated = typeof formatNoteDate === 'function' ? formatNoteDate(note.updated_at) : '';
+    btn.className = `notes-list-item planner-note-attachment ${variant === 'line' ? 'planner-note-attachment-line' : ''}`;
+    btn.innerHTML = `
+        <div class="note-title-row">
+            <div class="note-title">
+                <span class="note-kind-icon ${note.note_type === 'list' ? 'list' : 'note'}">${iconHtml}</span>
+                <span class="note-title-text">${escapeHtml(displayTitle)}</span>
+            </div>
+        </div>
+        ${previewHtml}
+        <div class="note-updated">${escapeHtml(updated)}</div>
+    `;
+    btn.addEventListener('click', () => openPlannerNoteAttachment(note.id));
+    return btn;
 }
 
 function getSortedMultiItems(folderId) {
@@ -644,6 +802,10 @@ function openPlannerEditSimpleItem(itemId) {
     if (!modal || !title || !body || !submitBtn) return;
 
     title.textContent = 'Edit Simple Item';
+    const useTextarea = !looksLikeUrl(item.value) && (((item.value || '').length > 120) || (item.value || '').includes('\n'));
+    const valueField = useTextarea
+        ? `<textarea id="planner-modal-value" class="form-control" rows="4">${escapeHtml(item.value)}</textarea>`
+        : `<input type="text" id="planner-modal-value" class="form-control" value="${escapeHtml(item.value)}">`;
     body.innerHTML = `
         <div class="form-group">
             <label>Title</label>
@@ -651,7 +813,7 @@ function openPlannerEditSimpleItem(itemId) {
         </div>
         <div class="form-group">
             <label>Value</label>
-            <input type="text" id="planner-modal-value" class="form-control" value="${escapeHtml(item.value)}">
+            ${valueField}
         </div>
         <div class="form-group">
             <label>Description (optional)</label>
@@ -932,6 +1094,40 @@ async function submitPlannerSimpleItem(folderId) {
     }
 }
 
+async function submitPlannerTextItem(folderId) {
+    const titleEl = document.getElementById('planner-modal-title-input');
+    const textEl = document.getElementById('planner-modal-text');
+    const folderSelect = document.getElementById('planner-modal-folder');
+    const targetFolderId = folderId || (folderSelect ? parseInt(folderSelect.value, 10) : null);
+    if (!titleEl || !textEl) return;
+    const title = titleEl.value.trim();
+    const text = textEl.value.trim();
+    if (!targetFolderId) {
+        showToast('Pick a folder', 'error');
+        return;
+    }
+    if (!title || !text) {
+        showToast('Title and text required', 'error');
+        return;
+    }
+    try {
+        const res = await fetch('/api/planner/simple-items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_id: targetFolderId, title, value: text, description: '' })
+        });
+        if (!res.ok) throw new Error('Failed to add item');
+        const item = await res.json();
+        plannerState.simpleItems.unshift(item);
+        closePlannerModal();
+        renderPlanner();
+        showToast('Text item added', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not add item', 'error');
+    }
+}
+
 async function createPlannerSimpleItem(folderId, parsed) {
     try {
         const res = await fetch('/api/planner/simple-items', {
@@ -1042,6 +1238,39 @@ async function submitPlannerGroupItem(folderId) {
     }
 }
 
+async function submitPlannerListAttachment() {
+    const titleEl = document.getElementById('planner-list-title');
+    const checkboxToggle = document.getElementById('planner-list-checkbox-toggle');
+    const listedToggle = document.getElementById('planner-list-listed-toggle');
+    const title = titleEl ? titleEl.value.trim() : '';
+    const checkboxMode = checkboxToggle ? checkboxToggle.checked : false;
+    const isListed = listedToggle ? listedToggle.checked : false;
+    const context = plannerState.activeAttachmentContext || {};
+    const payload = {
+        title,
+        note_type: 'list',
+        checkbox_mode: checkboxMode,
+        is_listed: isListed
+    };
+    if (context.itemId) payload.planner_multi_item_id = context.itemId;
+    if (context.lineId) payload.planner_multi_line_id = context.lineId;
+    try {
+        const res = await fetch('/api/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Failed to create list');
+        const list = await res.json();
+        closePlannerModal();
+        const returnTo = getPlannerReturnUrl();
+        window.location.href = `/notes/${list.id}?return=${encodeURIComponent(returnTo)}`;
+    } catch (err) {
+        console.error(err);
+        showToast('Could not create list', 'error');
+    }
+}
+
 async function deletePlannerLine(lineId) {
     openConfirmModal('Delete this line?', async () => {
         try {
@@ -1066,6 +1295,7 @@ async function loadPlannerData() {
         plannerState.simpleItems = data.simple_items || [];
         plannerState.multiItems = data.multi_items || [];
         plannerState.multiLines = data.multi_lines || [];
+        plannerState.plannerNotes = data.planner_notes || [];
         renderPlanner();
     } catch (err) {
         console.error(err);

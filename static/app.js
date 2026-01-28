@@ -85,9 +85,9 @@ let touchDragId = null;
 let touchDragBlock = [];
 let touchDragIsPhase = false;
 let touchDragPhaseId = null;
-let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true };
+let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true, activePlannerContext: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true };
 let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
@@ -6130,6 +6130,44 @@ function updateNoteVisibilityButton(isListed) {
     }
 }
 
+function setNoteVisibilityButtonEnabled(enabled) {
+    const visibilityBtn = document.getElementById('note-visibility-btn');
+    if (!visibilityBtn) return;
+    visibilityBtn.style.display = enabled ? '' : 'none';
+}
+
+function shouldAllowNoteVisibilityToggle(note) {
+    if (!note) return false;
+    if (typeof note.is_linked_note === 'boolean') return note.is_linked_note;
+    return !!(note.todo_item_id || note.calendar_event_id || note.planner_multi_item_id || note.planner_multi_line_id);
+}
+
+function updateListVisibilityButton(isListed) {
+    const visibilityBtn = document.getElementById('list-visibility-btn');
+    if (!visibilityBtn) return;
+    const icon = visibilityBtn.querySelector('i');
+    const label = visibilityBtn.querySelector('span');
+    if (isListed) {
+        if (icon) icon.className = 'fa-solid fa-eye-slash';
+        if (label) label.textContent = 'Hide from notes list';
+    } else {
+        if (icon) icon.className = 'fa-solid fa-eye';
+        if (label) label.textContent = 'Show in notes list';
+    }
+}
+
+function setListVisibilityButtonEnabled(enabled) {
+    const visibilityBtn = document.getElementById('list-visibility-btn');
+    if (!visibilityBtn) return;
+    visibilityBtn.style.display = enabled ? '' : 'none';
+}
+
+function shouldAllowListVisibilityToggle(list) {
+    if (!list) return false;
+    if (typeof list.is_linked_note === 'boolean') return list.is_linked_note;
+    return !!(list.todo_item_id || list.calendar_event_id || list.planner_multi_item_id || list.planner_multi_line_id);
+}
+
 async function toggleNoteVisibility() {
     const noteId = notesState.activeNoteId;
     if (!noteId) {
@@ -6153,6 +6191,31 @@ async function toggleNoteVisibility() {
         showToast(updated.is_listed ? 'Note is now listed.' : 'Note is now linked-only.', 'success', 2000);
     } catch (err) {
         console.error('Failed to update visibility:', err);
+        showToast('Could not update visibility.', 'error', 2500);
+    }
+}
+
+async function toggleListVisibility() {
+    const listId = listState.listId;
+    if (!listId) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const nextListed = !listState.isListed;
+    try {
+        const res = await fetch(`/api/notes/${listId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_listed: nextListed })
+        });
+        if (!res.ok) throw new Error('Failed to update visibility');
+        const updated = await res.json();
+        listState.isListed = !!updated.is_listed;
+        updateListVisibilityButton(listState.isListed);
+        showToast(listState.isListed ? 'List is now listed.' : 'List is now linked-only.', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to update list visibility:', err);
         showToast('Could not update visibility.', 'error', 2500);
     }
 }
@@ -6600,6 +6663,7 @@ function initListEditorPage() {
     const shareBtn = document.getElementById('list-share-btn');
     const protectBtn = document.getElementById('list-protect-btn');
     const archiveBtn = document.getElementById('list-archive-btn');
+    const visibilityBtn = document.getElementById('list-visibility-btn');
     const backBtn = document.getElementById('list-back-btn');
     const notesBtn = document.getElementById('list-notes-btn');
     const actionsToggle = document.getElementById('list-actions-toggle');
@@ -6625,6 +6689,7 @@ function initListEditorPage() {
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
     if (shareBtn) shareBtn.addEventListener('click', () => shareCurrentList());
     if (protectBtn) protectBtn.addEventListener('click', () => toggleListProtection());
+    if (visibilityBtn) visibilityBtn.addEventListener('click', () => toggleListVisibility());
     if (archiveBtn) archiveBtn.addEventListener('click', () => toggleCurrentListArchive());
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
@@ -6904,6 +6969,7 @@ async function loadListForEditor(listId) {
         listState.items = list.items || [];
         listState.checkboxMode = !!list.checkbox_mode;
         listState.isArchived = !!list.is_archived;
+        listState.isListed = !!list.is_listed;
         listState.activeSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode
@@ -6922,6 +6988,8 @@ async function loadListForEditor(listId) {
         setListDirty(false);
         updateProtectButton(list.is_pin_protected); // Update protect button state
         updateArchiveButton(!!list.is_archived);
+        updateListVisibilityButton(listState.isListed);
+        setListVisibilityButtonEnabled(shouldAllowListVisibilityToggle(list));
         setListEditorReadOnly(!!list.is_archived);
     } catch (err) {
         console.error('Error loading list:', err);
@@ -8082,6 +8150,53 @@ function createListInputRow(options) {
         }
     });
 
+    input.addEventListener('paste', async (e) => {
+        if (mode === 'edit' || isSection) return;
+        const pasteText = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+        if (!pasteText.includes('\n')) return;
+        const validation = validateBulkListLines(pasteText);
+        if (!validation.ok) {
+            e.preventDefault();
+            showToast(validation.error || 'Paste does not fit list criteria.', 'warning', 2500);
+            return;
+        }
+        e.preventDefault();
+        const lines = validation.lines || [];
+        if (!lines.length) return;
+
+        try {
+            if (mode === 'insert' && insertIndex !== null && insertIndex !== undefined) {
+                let idx = insertIndex;
+                for (const line of lines) {
+                    const parsed = parseListItemInput(line);
+                    if (!parsed.text) continue;
+                    await createListItem(parsed, idx);
+                    idx += 1;
+                }
+                listState.insertionIndex = insertIndex + lines.length;
+                listState.editingItemId = null;
+                await loadListItems();
+                return;
+            }
+
+            for (const line of lines) {
+                const parsed = parseListItemInput(line);
+                if (!parsed.text) continue;
+                await createListItem(parsed, null);
+            }
+            if (isPrimary) {
+                listState.insertionIndex = null;
+                listState.editingItemId = null;
+                await loadListItems({ focusPrimary: true });
+            } else {
+                resetListInputState();
+            }
+        } catch (err) {
+            console.error('Bulk paste failed:', err);
+            showToast('Could not add pasted items.', 'error');
+        }
+    });
+
     const handleBlurCommit = () => {
         // Handle section title editing - always save on blur
         if (mode === 'edit' && isSection) {
@@ -8196,6 +8311,56 @@ function parseListItemMainInput(raw) {
     }
     const text = (baseText || linkText || '').trim();
     return { text, note: null, link_text: linkText, link_url: linkUrl };
+}
+
+const NOTE_LIST_CONVERSION_RULES = {
+    minLines: 2,
+    maxLines: 100,
+    maxChars: 80,
+    maxWords: 12,
+    maxWordsWithPunct: 8
+};
+
+function validateBulkListLines(rawText) {
+    const text = String(rawText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rawLines = text.split('\n').map(line => line.trim()).filter(Boolean);
+    if (rawLines.length < NOTE_LIST_CONVERSION_RULES.minLines) {
+        return { ok: false, error: `Need at least ${NOTE_LIST_CONVERSION_RULES.minLines} non-empty lines.` };
+    }
+
+    const cleanedLines = rawLines.map(line => {
+        let next = line;
+        next = next.replace(/^\s*\[[xX ]\]\s+/, '');
+        next = next.replace(/^\s*(?:[-*+]|\d+[.)]|\d+\s*[-:]|[A-Za-z][.)])\s+/, '');
+        next = next.replace(/\s+/g, ' ').trim();
+        return next;
+    }).filter(Boolean);
+
+    if (cleanedLines.length < NOTE_LIST_CONVERSION_RULES.minLines) {
+        return { ok: false, error: `Need at least ${NOTE_LIST_CONVERSION_RULES.minLines} non-empty lines.` };
+    }
+    if (cleanedLines.length > NOTE_LIST_CONVERSION_RULES.maxLines) {
+        return { ok: false, error: `Too many lines to convert (max ${NOTE_LIST_CONVERSION_RULES.maxLines}).` };
+    }
+
+    for (const line of cleanedLines) {
+        if (line.length > NOTE_LIST_CONVERSION_RULES.maxChars) {
+            return { ok: false, error: `Lines must be ${NOTE_LIST_CONVERSION_RULES.maxChars} characters or fewer.` };
+        }
+        const words = line.match(/[A-Za-z0-9']+/g) || [];
+        if (words.length > NOTE_LIST_CONVERSION_RULES.maxWords) {
+            return { ok: false, error: `Lines must be ${NOTE_LIST_CONVERSION_RULES.maxWords} words or fewer.` };
+        }
+        const sentenceMarks = line.match(/[.!?]/g) || [];
+        if (sentenceMarks.length > 1) {
+            return { ok: false, error: 'Lines must be single phrases, not multiple sentences.' };
+        }
+        if (sentenceMarks.length === 1 && words.length > NOTE_LIST_CONVERSION_RULES.maxWordsWithPunct) {
+            return { ok: false, error: `Lines must be short phrases (max ${NOTE_LIST_CONVERSION_RULES.maxWordsWithPunct} words if punctuated).` };
+        }
+    }
+
+    return { ok: true, lines: cleanedLines };
 }
 
 async function loadListItems(options = {}) {
@@ -8489,6 +8654,23 @@ function getNoteEditorFolderId() {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function getNotePlannerContext() {
+    const params = new URLSearchParams(window.location.search);
+    const rawItem = params.get('planner_item_id') || params.get('planner_multi_item_id');
+    const rawLine = params.get('planner_line_id') || params.get('planner_multi_line_id');
+    const parsedItem = rawItem ? parseInt(rawItem, 10) : null;
+    const parsedLine = rawLine ? parseInt(rawLine, 10) : null;
+    const itemId = Number.isFinite(parsedItem) ? parsedItem : null;
+    const lineId = Number.isFinite(parsedLine) ? parsedLine : null;
+    const listedRaw = params.get('is_listed');
+    const isListed = listedRaw === null ? null : ['1', 'true', 'yes', 'on'].includes(String(listedRaw).toLowerCase());
+    return {
+        itemId,
+        lineId,
+        isListed
+    };
+}
+
 function getNoteReturnUrl() {
     const params = new URLSearchParams(window.location.search);
     const raw = params.get('return');
@@ -8503,6 +8685,8 @@ function prepareNewNoteEditor() {
     const titleInput = document.getElementById('note-title');
     const updatedLabel = document.getElementById('note-updated-label');
     const folderId = getNoteEditorFolderId();
+    const plannerContext = getNotePlannerContext();
+    notesState.activePlannerContext = plannerContext;
     if (editor) editor.innerHTML = '';
     if (titleInput) titleInput.value = '';
     if (titleInput) titleInput.placeholder = 'Untitled note';
@@ -8513,12 +8697,17 @@ function prepareNewNoteEditor() {
     notesState.activeFolderId = folderId;
     notesState.checkboxMode = false;
     notesState.activeNoteIsArchived = false;
-    notesState.activeNoteIsListed = true;
+    if (plannerContext && (plannerContext.itemId || plannerContext.lineId)) {
+        notesState.activeNoteIsListed = plannerContext.isListed !== null ? plannerContext.isListed : false;
+    } else {
+        notesState.activeNoteIsListed = plannerContext && plannerContext.isListed !== null ? plannerContext.isListed : true;
+    }
     setNoteDirty(false);
     hideNoteCleanupActions();
     updateNoteToolbarStates();
     updateArchiveButton(false);
-    updateNoteVisibilityButton(true);
+    updateNoteVisibilityButton(notesState.activeNoteIsListed);
+    setNoteVisibilityButtonEnabled(!!(plannerContext && (plannerContext.itemId || plannerContext.lineId)));
     setNoteEditorReadOnly(false);
 }
 
@@ -10000,6 +10189,7 @@ async function setActiveNote(noteId, options = {}) {
     updateProtectButton(note.is_pin_protected); // Update protect button state
     updateArchiveButton(!!note.is_archived);
     updateNoteVisibilityButton(!!note.is_listed);
+    setNoteVisibilityButtonEnabled(shouldAllowNoteVisibilityToggle(note));
     setNoteEditorReadOnly(!!note.is_archived);
 }
 
@@ -10179,6 +10369,16 @@ async function saveCurrentNote(options = {}) {
         content: editor.innerHTML.trim(),
         folder_id: notesState.activeFolderId
     };
+    const plannerContext = notesState.activePlannerContext || getNotePlannerContext();
+    if (!noteId) {
+        if (plannerContext && plannerContext.itemId) {
+            payload.planner_multi_item_id = plannerContext.itemId;
+        }
+        if (plannerContext && plannerContext.lineId) {
+            payload.planner_multi_line_id = plannerContext.lineId;
+        }
+        payload.is_listed = !!notesState.activeNoteIsListed;
+    }
 
     try {
         let res;
@@ -10211,6 +10411,8 @@ async function saveCurrentNote(options = {}) {
         if (updatedLabel) updatedLabel.textContent = `Saved ${formatNoteDate(savedNote.updated_at)}`;
         setNoteDirty(false);
         renderNotesList();
+        setNoteVisibilityButtonEnabled(shouldAllowNoteVisibilityToggle(savedNote));
+        updateNoteVisibilityButton(!!savedNote.is_listed);
 
         if (keepOpen) {
             notesState.activeNoteId = savedNote.id;

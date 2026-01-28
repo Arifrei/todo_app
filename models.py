@@ -242,6 +242,8 @@ class Note(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     calendar_event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=True)
+    planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id'), nullable=True)
     folder_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
     title = db.Column(db.String(150), nullable=False, default='Untitled Note')
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
@@ -266,6 +268,8 @@ class Note(db.Model):
             'content': self.content or '',
             'todo_item_id': self.todo_item_id,
             'calendar_event_id': self.calendar_event_id,
+            'planner_multi_item_id': self.planner_multi_item_id,
+            'planner_multi_line_id': self.planner_multi_line_id,
             'folder_id': self.folder_id,
             'note_type': note_type,
             'checkbox_mode': bool(self.checkbox_mode) if note_type == 'list' else False,
@@ -279,6 +283,7 @@ class Note(db.Model):
             'share_token': self.share_token,
             'is_pin_protected': bool(self.is_pin_protected),
             'is_listed': bool(self.is_listed),
+            'is_linked_note': bool(self.todo_item_id or self.calendar_event_id or self.planner_multi_item_id or self.planner_multi_line_id),
         }
 
 
