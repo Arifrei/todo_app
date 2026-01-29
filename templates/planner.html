@@ -5,15 +5,19 @@
     <header class="header-row">
         <div>
             <h1><a class="planner-title-link" href="/planner">Planner</a></h1>
-            <p style="color: var(--text-muted);">Things to revisit later, organized by strict folders.</p>
+            <p style="color: var(--text-muted);">Everything to revisit later, gathered in one feed with tags to filter.</p>
             {% if folder_id %}
-            <div class="planner-breadcrumb planner-breadcrumb-header">
-                <button class="planner-crumb planner-back-btn" type="button" onclick="plannerGoBack()" title="Back">
-                    <i class="fa-solid fa-arrow-left"></i>
-                    <span class="planner-back-text">Back</span>
-                </button>
-                <span class="planner-crumb-sep">/</span>
-                <span class="planner-crumb current" id="planner-current-name">Folder</span>
+            <div class="planner-folder-breadcrumb">
+                <div class="planner-folder-actions">
+                    <a class="planner-folder-link" href="javascript:void(0)" onclick="plannerGoBack()">
+                        <i class="fa-solid fa-arrow-left"></i>
+                        <span class="btn-text">Back</span>
+                    </a>
+                    <a class="planner-folder-link danger" href="javascript:void(0)" onclick="deleteCurrentPlannerFolder()" title="Delete collection">
+                        <i class="fa-solid fa-trash"></i>
+                    </a>
+                </div>
+                <span class="planner-folder-name" id="planner-current-name">Collection</span>
             </div>
             {% endif %}
         </div>
@@ -32,15 +36,15 @@
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </div>
-        <div class="feed-add-hint">Format: Title; URL; optional short description</div>
+        <div class="feed-add-hint">Format: Title; URL; optional short description. Press Enter to add to the feed.</div>
         <div class="feed-state-row">
-            <div class="feed-state-chips" id="planner-folder-chips"></div>
-            <div class="feed-state-add" id="planner-folder-add">
-                <input type="text" class="feed-state-input" id="planner-folder-input" placeholder="Folder">
-                <button class="feed-state-confirm" type="button" id="planner-folder-confirm" aria-label="Add folder">
+            <div class="feed-state-chips" id="planner-tag-chips"></div>
+            <div class="feed-state-add" id="planner-tag-add">
+                <input type="text" class="feed-state-input" id="planner-tag-input" placeholder="Tag">
+                <button class="feed-state-confirm" type="button" id="planner-tag-confirm" aria-label="Add tag">
                     <i class="fa-solid fa-check"></i>
                 </button>
-                <button class="feed-state-cancel" type="button" id="planner-folder-cancel" aria-label="Cancel">
+                <button class="feed-state-cancel" type="button" id="planner-tag-cancel" aria-label="Cancel">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
@@ -61,6 +65,28 @@
     </div>
 </div>
 
+<div class="modal" id="planner-note-preview-modal">
+    <div class="modal-content planner-note-preview-content">
+        <div class="planner-note-preview-header">
+            <h2 id="planner-note-preview-title">Note</h2>
+            <button class="btn-icon" type="button" onclick="closePlannerNotePreview()" title="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="planner-note-preview-body" id="planner-note-preview-body"></div>
+        <div class="modal-actions">
+            <button class="btn btn-danger" type="button" id="planner-note-preview-delete">
+                <i class="fa-solid fa-trash"></i> Delete
+            </button>
+            <div style="flex: 1;"></div>
+            <button class="btn" type="button" onclick="closePlannerNotePreview()">Close</button>
+            <button class="btn btn-primary" type="button" id="planner-note-preview-edit">
+                <i class="fa-solid fa-pen"></i> Edit
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 const plannerState = {
     folders: [],
@@ -69,11 +95,15 @@ const plannerState = {
     multiLines: [],
     plannerNotes: [],
     currentFolderId: null,
+    feedFolderId: null,
     expandedSimple: new Set(),
     expandedMulti: new Set(),
     activeAddType: null,
     simpleAddOpen: false,
-    addingSimpleFolder: false,
+    addingTag: false,
+    activeTagFilters: new Set(),
+    pendingTags: new Set(),
+    customTags: [],
     activeAttachmentContext: null
 };
 
@@ -96,6 +126,94 @@ function looksLikeUrl(value) {
     return /^(https?:\/\/|www\.)/i.test((value || '').trim());
 }
 
+function formatScheduledDate(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(dateStr + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dateOnly = new Date(date);
+    dateOnly.setHours(0, 0, 0, 0);
+
+    if (dateOnly.getTime() === today.getTime()) return 'Today';
+    if (dateOnly.getTime() === tomorrow.getTime()) return 'Tomorrow';
+
+    const diffDays = Math.round((dateOnly - today) / (1000 * 60 * 60 * 24));
+    if (diffDays > 0 && diffDays <= 7) {
+        return date.toLocaleDateString('en-US', { weekday: 'long' });
+    }
+
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+}
+
+function isDatePast(dateStr) {
+    if (!dateStr) return false;
+    const date = new Date(dateStr + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return date < today;
+}
+
+function isDateToday(dateStr) {
+    if (!dateStr) return false;
+    const date = new Date(dateStr + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return date.getTime() === today.getTime();
+}
+
+// Parse line value for embedded links [text](url) and linked notes [[title]]
+function parsePlannerLineValue(value, lineId) {
+    if (!value) return '';
+
+    let result = '';
+    let lastIndex = 0;
+
+    // Combined regex for both [[note]] and [text](url)
+    const pattern = /\[\[([^\]]+)\]\]|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
+    let match;
+
+    while ((match = pattern.exec(value)) !== null) {
+        // Add escaped text before this match
+        result += escapeHtml(value.slice(lastIndex, match.index));
+
+        if (match[1]) {
+            // [[note title]] syntax
+            const trimmedTitle = match[1].trim();
+            if (trimmedTitle) {
+                const existingNote = plannerState.plannerNotes.find(n =>
+                    n.planner_multi_line_id === lineId &&
+                    (n.title || '').toLowerCase() === trimmedTitle.toLowerCase()
+                );
+                if (existingNote) {
+                    result += `<a href="#" class="planner-line-note-link" data-note-id="${existingNote.id}" title="View note" onclick="handlePlannerLineNoteClick(event, this)">${escapeHtml(trimmedTitle)}</a>`;
+                } else {
+                    result += `<a href="#" class="planner-line-note-link unresolved" data-line-id="${lineId}" data-note-title="${escapeHtml(trimmedTitle)}" title="Create or link note" onclick="handlePlannerLineNoteClick(event, this)">${escapeHtml(trimmedTitle)}</a>`;
+                }
+            } else {
+                result += escapeHtml(match[0]);
+            }
+        } else if (match[2] && match[3]) {
+            // [text](url) syntax
+            const trimmedText = match[2].trim();
+            const trimmedUrl = match[3].trim();
+            if (trimmedText && trimmedUrl) {
+                result += `<a href="${escapeHtml(trimmedUrl)}" class="planner-line-external-link" target="_blank" rel="noopener noreferrer">${escapeHtml(trimmedText)}</a>`;
+            } else {
+                result += escapeHtml(match[0]);
+            }
+        }
+
+        lastIndex = pattern.lastIndex;
+    }
+
+    // Add remaining text
+    result += escapeHtml(value.slice(lastIndex));
+
+    return result;
+}
+
 function getPlannerNotesForItem(itemId) {
     return plannerState.plannerNotes.filter(note => note.planner_multi_item_id === itemId);
 }
@@ -115,24 +233,20 @@ function parsePlannerSimpleInput(raw) {
 
 function getPlannerAddOptions() {
     const folder = getPlannerFolder(plannerState.currentFolderId);
-    if (!folder) {
+    if (!folder || isFeedFolder(folder)) {
         return [
-            { id: 'simple-item', label: 'Simple item' },
-            { id: 'text-item', label: 'Text item' },
-            { id: 'folder-simple', label: 'Simple folder' },
-            { id: 'folder-multi', label: 'Multi folder' }
+            { id: 'simple-item', label: 'Link' },
+            { id: 'text-item', label: 'Note' },
+            { id: 'folder-multi', label: 'Collection' }
         ];
     }
-    if (folder.folder_type === 'simple') {
+    if (folder.folder_type === 'multi') {
         return [
-            { id: 'simple-item', label: 'Simple item' },
-            { id: 'text-item', label: 'Text item' }
+            { id: 'subfolder', label: 'Subfolder' },
+            { id: 'group-item', label: 'Entry' }
         ];
     }
-    return [
-        { id: 'subfolder', label: 'Folder' },
-        { id: 'group-item', label: 'Group item' }
-    ];
+    return [];
 }
 
 function renderPlannerFab() {
@@ -192,51 +306,118 @@ function openPlannerSimpleAddForm() {
 
 function closePlannerSimpleAddForm() {
     plannerState.simpleAddOpen = false;
-    plannerState.addingSimpleFolder = false;
+    plannerState.addingTag = false;
     const form = document.getElementById('planner-simple-add-form');
     if (form) form.classList.remove('open');
 }
 
-function getSimplePlannerFolders() {
-    return plannerState.folders
-        .filter(folder => folder.folder_type === 'simple')
-        .sort((a, b) => {
-            const aOrder = a.order_index ?? 0;
-            const bOrder = b.order_index ?? 0;
-            if (aOrder !== bOrder) return aOrder - bOrder;
-            return (a.created_at || '').localeCompare(b.created_at || '');
+function isFeedFolder(folder) {
+    return !!folder && plannerState.feedFolderId && folder.id === plannerState.feedFolderId;
+}
+
+function normalizeTag(value) {
+    return (value || '').toString().trim().toLowerCase();
+}
+
+function parseTags(raw) {
+    if (!raw) return [];
+    return raw.split(',').map(tag => tag.trim()).filter(Boolean);
+}
+
+function getPlannerTagSummary() {
+    const map = new Map();
+    const items = plannerState.simpleItems || [];
+    items.forEach(item => {
+        (item.tags || []).forEach(tag => {
+            const key = normalizeTag(tag);
+            if (!key) return;
+            if (!map.has(key)) {
+                map.set(key, { key, label: tag, count: 0 });
+            }
+            map.get(key).count += 1;
         });
+    });
+    (plannerState.customTags || []).forEach(tag => {
+        const key = normalizeTag(tag);
+        if (!key) return;
+        if (!map.has(key)) {
+            map.set(key, { key, label: tag, count: 0 });
+        }
+    });
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function getPlannerTagLabelMap() {
+    const map = new Map();
+    getPlannerTagSummary().forEach(tag => map.set(tag.key, tag.label));
+    return map;
+}
+
+function getPlannerTagPalette(tag) {
+    const palette = [
+        { bg: '#c7f9cc', fg: '#14532d' },
+        { bg: '#bae6fd', fg: '#0c4a6e' },
+        { bg: '#fde68a', fg: '#92400e' },
+        { bg: '#fecaca', fg: '#7f1d1d' },
+        { bg: '#e9d5ff', fg: '#5b21b6' },
+        { bg: '#bbf7d0', fg: '#166534' },
+        { bg: '#ddd6fe', fg: '#4c1d95' },
+        { bg: '#fed7aa', fg: '#9a3412' },
+        { bg: '#fbcfe8', fg: '#9d174d' },
+        { bg: '#e2e8f0', fg: '#334155' }
+    ];
+    const key = normalizeTag(tag);
+    if (!key) return palette[0];
+    let hash = 0;
+    for (let i = 0; i < key.length; i += 1) {
+        hash = ((hash << 5) - hash) + key.charCodeAt(i);
+        hash |= 0;
+    }
+    const idx = Math.abs(hash) % palette.length;
+    return palette[idx];
+}
+
+function getPendingTagLabels() {
+    const labelMap = getPlannerTagLabelMap();
+    return Array.from(plannerState.pendingTags || [])
+        .map(key => labelMap.get(key) || key)
+        .filter(Boolean);
 }
 
 function renderPlannerSimpleAddForm() {
     const form = document.getElementById('planner-simple-add-form');
     if (!form) return;
     const folder = getPlannerFolder(plannerState.currentFolderId);
-    const allowSimpleAdd = !folder || folder.folder_type === 'simple';
+    const allowSimpleAdd = !folder || isFeedFolder(folder);
     if (!allowSimpleAdd) {
         form.classList.remove('open');
         return;
     }
     form.classList.toggle('open', plannerState.simpleAddOpen);
     if (plannerState.simpleAddOpen) {
-        renderPlannerFolderChips();
+        renderPlannerTagChips();
     }
 }
 
-function renderPlannerFolderChips() {
-    const chipWrap = document.getElementById('planner-folder-chips');
-    const addWrap = document.getElementById('planner-folder-add');
+function renderPlannerTagChips() {
+    const chipWrap = document.getElementById('planner-tag-chips');
+    const addWrap = document.getElementById('planner-tag-add');
     if (!chipWrap || !addWrap) return;
     chipWrap.innerHTML = '';
-    const folders = getSimplePlannerFolders();
-    folders.forEach(folder => {
+    const tags = getPlannerTagSummary();
+    tags.forEach(tag => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        const isActive = plannerState.currentFolderId === folder.id;
+        const isActive = plannerState.pendingTags.has(tag.key);
         btn.className = `feed-state-chip ${isActive ? 'active' : ''}`;
-        btn.textContent = folder.name;
+        btn.textContent = tag.label;
         btn.addEventListener('click', () => {
-            addPlannerSimpleItemFromInput(folder.id);
+            if (plannerState.pendingTags.has(tag.key)) {
+                plannerState.pendingTags.delete(tag.key);
+            } else {
+                plannerState.pendingTags.add(tag.key);
+            }
+            renderPlannerTagChips();
         });
         chipWrap.appendChild(btn);
     });
@@ -244,31 +425,190 @@ function renderPlannerFolderChips() {
     const addChip = document.createElement('button');
     addChip.type = 'button';
     addChip.className = 'feed-state-chip add';
-    addChip.textContent = '+ Add folder';
+    addChip.textContent = '+ Add tag';
     addChip.addEventListener('click', () => {
-        plannerState.addingSimpleFolder = true;
-        renderPlannerFolderChips();
-        const input = document.getElementById('planner-folder-input');
+        plannerState.addingTag = true;
+        renderPlannerTagChips();
+        const input = document.getElementById('planner-tag-input');
         if (input) input.focus();
     });
 
-    if (!plannerState.addingSimpleFolder) {
+    if (!plannerState.addingTag) {
         chipWrap.appendChild(addChip);
     }
-    addWrap.classList.toggle('active', plannerState.addingSimpleFolder);
+    addWrap.classList.toggle('active', plannerState.addingTag);
+}
+
+function addPlannerTagFromInput() {
+    const input = document.getElementById('planner-tag-input');
+    if (!input) return;
+    const raw = input.value.trim();
+    const tags = parseTags(raw);
+    if (!tags.length) {
+        showToast('Tag name required', 'error');
+        return;
+    }
+    tags.forEach(tag => {
+        const key = normalizeTag(tag);
+        if (!key) return;
+        plannerState.pendingTags.add(key);
+        if (!plannerState.customTags.some(t => normalizeTag(t) === key)) {
+            plannerState.customTags.push(tag);
+        }
+    });
+    input.value = '';
+    plannerState.addingTag = false;
+    renderPlannerTagChips();
+    renderPlannerTagFilters();
+}
+
+function getFilteredSimpleItems() {
+    const feedId = plannerState.feedFolderId;
+    const items = (plannerState.simpleItems || []).filter(item => !feedId || item.folder_id === feedId);
+    if (!plannerState.activeTagFilters || plannerState.activeTagFilters.size === 0) {
+        return items;
+    }
+    const requiredTags = Array.from(plannerState.activeTagFilters);
+    return items.filter(item => {
+        const tags = (item.tags || []).map(normalizeTag);
+        return requiredTags.every(tag => tags.includes(tag));
+    });
+}
+
+function togglePlannerTagFilter(tagLabel) {
+    const key = normalizeTag(tagLabel);
+    if (!key) return;
+    if (plannerState.activeTagFilters.has(key)) {
+        plannerState.activeTagFilters.delete(key);
+    } else {
+        plannerState.activeTagFilters.add(key);
+    }
+    renderPlanner();
+}
+
+function renderPlannerTagFilters() {
+    const wrap = document.getElementById('planner-tag-filters');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = `feed-state-chip ${plannerState.activeTagFilters.size === 0 ? 'active' : ''}`;
+    allBtn.textContent = 'All';
+    allBtn.addEventListener('click', () => {
+        plannerState.activeTagFilters.clear();
+        renderPlanner();
+    });
+    wrap.appendChild(allBtn);
+
+    const tags = getPlannerTagSummary();
+    tags.forEach(tag => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isActive = plannerState.activeTagFilters.has(tag.key);
+        btn.className = `feed-state-chip ${isActive ? 'active' : ''}`;
+        btn.textContent = tag.label;
+        btn.addEventListener('click', () => togglePlannerTagFilter(tag.label));
+        wrap.appendChild(btn);
+    });
+}
+
+function renderPlannerSimpleCard(item) {
+    const expanded = plannerState.expandedSimple.has(item.id);
+    const wrapper = document.createElement('div');
+    wrapper.className = 'planner-feed-cell';
+    const card = document.createElement('div');
+    card.className = `feed-card ${expanded ? 'expanded' : ''}`;
+    card.addEventListener('click', () => togglePlannerSimple(item.id));
+    const isUrl = looksLikeUrl(item.value);
+    const dateStr = item.scheduled_date;
+    const dateClass = dateStr ? (isDatePast(dateStr) ? 'past' : (isDateToday(dateStr) ? 'today' : '')) : '';
+    card.innerHTML = `
+        <div class="feed-card-content">
+            <div class="feed-card-header">
+                <div class="feed-card-title">${escapeHtml(item.title)}</div>
+                ${dateStr ? `<div class="planner-date-badge ${dateClass}"><i class="fa-regular fa-calendar"></i> ${formatScheduledDate(dateStr)}</div>` : ''}
+            </div>
+            ${expanded && !isUrl ? `<div class="feed-card-details">${escapeHtml(item.value)}</div>` : ''}
+            ${expanded && item.description ? `<div class="feed-card-details feed-card-description">${escapeHtml(item.description)}</div>` : ''}
+        </div>
+        <div class="feed-card-actions ${expanded ? 'expanded' : ''}">
+            <div class="feed-card-actions-left">
+                ${isUrl ? `
+                    <button class="feed-action-btn feed-action-primary" type="button" onclick="handlePlannerSimpleAction(event, 'open', ${item.id})" title="Open link">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                        <span>Open</span>
+                    </button>
+                ` : ''}
+                ${expanded ? `
+                    <div class="dropdown planner-simple-dropdown">
+                        <button class="feed-action-btn" type="button" onclick="togglePlannerSimpleMenu(event, ${item.id})" aria-label="More actions" title="More actions">
+                            <i class="fa-solid fa-ellipsis-vertical"></i>
+                            <span>More</span>
+                        </button>
+                        <div class="dropdown-menu planner-simple-menu" id="planner-simple-menu-${item.id}">
+                            <button class="dropdown-item" type="button" onclick="handlePlannerSimpleAction(event, 'copy', ${item.id})">
+                                <i class="fa-solid fa-copy"></i> Copy
+                            </button>
+                            <button class="dropdown-item" type="button" onclick="handlePlannerSimpleAction(event, 'date', ${item.id})">
+                                <i class="fa-regular fa-calendar"></i> Date
+                            </button>
+                            <button class="dropdown-item" type="button" onclick="handlePlannerSimpleAction(event, 'edit', ${item.id})">
+                                <i class="fa-solid fa-pen"></i> Edit
+                            </button>
+                            <button class="dropdown-item" type="button" onclick="handlePlannerSimpleAction(event, 'recall', ${item.id})">
+                                <i class="fa-solid fa-inbox"></i> Recall
+                            </button>
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+            ${expanded ? `
+                <button class="feed-action-btn feed-action-danger" type="button" onclick="handlePlannerSimpleAction(event, 'remove', ${item.id})" title="Remove">
+                    <i class="fa-solid fa-trash"></i>
+                    <span>Remove</span>
+                </button>
+            ` : ''}
+            <div class="feed-card-actions-right"></div>
+        </div>
+    `;
+    if (item.tags && item.tags.length) {
+        const tagRow = document.createElement('div');
+        tagRow.className = 'planner-tag-row';
+        item.tags.forEach(tag => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'feed-state-chip planner-tag-chip';
+            btn.textContent = tag;
+            const palette = getPlannerTagPalette(tag);
+            btn.style.background = palette.bg;
+            btn.style.color = palette.fg;
+            btn.style.borderColor = palette.bg;
+            btn.addEventListener('click', (event) => {
+                event.stopPropagation();
+                togglePlannerTagFilter(tag);
+            });
+            tagRow.appendChild(btn);
+        });
+        const actionsRight = card.querySelector('.feed-card-actions-right');
+        if (actionsRight) {
+            actionsRight.appendChild(tagRow);
+        }
+    }
+    wrapper.appendChild(card);
+    return wrapper;
 }
 
 function buildPlannerModalForm(type, folder) {
-    if (type === 'folder-simple' || type === 'folder-multi') {
+    if (type === 'folder-multi') {
         return {
-            title: type === 'folder-simple' ? 'New Simple Folder' : 'New Multi Folder',
+            title: 'New Collection',
             body: `
                 <div class="form-group">
                     <label>Name</label>
-                    <input type="text" id="planner-modal-name" class="form-control" placeholder="Folder name">
+                    <input type="text" id="planner-modal-name" class="form-control" placeholder="Collection name">
                 </div>
             `,
-            onSubmit: () => submitPlannerFolder(type === 'folder-simple' ? 'simple' : 'multi')
+            onSubmit: () => submitPlannerFolder('multi')
         };
     }
     if (type === 'subfolder' && folder) {
@@ -283,9 +623,9 @@ function buildPlannerModalForm(type, folder) {
             onSubmit: () => submitPlannerSubfolder(folder.id)
         };
     }
-    if (type === 'simple-item' && folder) {
+    if (type === 'simple-item') {
         return {
-            title: 'New Simple Item',
+            title: 'New Link',
             body: `
                 <div class="form-group">
                     <label>Title</label>
@@ -299,50 +639,41 @@ function buildPlannerModalForm(type, folder) {
                     <label>Description (optional)</label>
                     <input type="text" id="planner-modal-description" class="form-control" placeholder="Optional description">
                 </div>
+                <div class="form-group">
+                    <label>Tags (optional)</label>
+                    <input type="text" id="planner-modal-tags" class="form-control" placeholder="Comma-separated tags">
+                </div>
             `,
-            onSubmit: () => submitPlannerSimpleItem(folder.id)
+            onSubmit: () => submitPlannerSimpleItem()
         };
     }
     if (type === 'text-item') {
-        const simpleFolders = getSimplePlannerFolders();
-        if (!folder && !simpleFolders.length) {
-            return {
-                title: 'New Text Item',
-                body: '<div class="planner-empty">Create a simple folder first.</div>',
-                onSubmit: closePlannerModal
-            };
-        }
-        const folderSelect = !folder ? `
-            <div class="form-group">
-                <label>Folder</label>
-                <select id="planner-modal-folder" class="form-control">
-                    ${simpleFolders.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('')}
-                </select>
-            </div>
-        ` : '';
         return {
-            title: 'New Text Item',
+            title: 'New Note',
             body: `
-                ${folderSelect}
                 <div class="form-group">
                     <label>Title</label>
                     <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Title">
                 </div>
                 <div class="form-group">
                     <label>Text</label>
-                    <textarea id="planner-modal-text" class="form-control" rows="5" placeholder="Long text"></textarea>
+                    <textarea id="planner-modal-text" class="form-control" rows="5" placeholder="Note content"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Tags (optional)</label>
+                    <input type="text" id="planner-modal-tags" class="form-control" placeholder="Comma-separated tags">
                 </div>
             `,
-            onSubmit: () => submitPlannerTextItem(folder ? folder.id : null)
+            onSubmit: () => submitPlannerTextItem()
         };
     }
     if (type === 'group-item' && folder) {
         return {
-            title: 'New Group Item',
+            title: 'New Entry',
             body: `
                 <div class="form-group">
                     <label>Title</label>
-                    <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Group item title">
+                    <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Entry title">
                 </div>
                 <div class="form-group">
                     <label>Lines</label>
@@ -359,30 +690,34 @@ function renderRootFolders() {
     const content = document.getElementById('planner-content');
     if (!content) return;
     const roots = getFolderChildren(null);
-    const simpleFolders = roots.filter(folder => folder.folder_type === 'simple');
     const multiFolders = roots.filter(folder => folder.folder_type === 'multi');
+    const feedFolder = plannerState.feedFolderId
+        ? plannerState.folders.find(folder => folder.id === plannerState.feedFolderId)
+        : null;
     content.innerHTML = `
         <div class="planner-section">
             <div class="planner-section-header">
-                <h3>Simple folders</h3>
+                <h3>Feed</h3>
             </div>
             <div class="planner-tile-grid planner-folder-grid">
-                ${simpleFolders.length ? '' : '<div class="planner-empty">No simple folders yet.</div>'}
+                ${feedFolder ? '' : '<div class="planner-empty">No feed folder yet.</div>'}
             </div>
         </div>
         <div class="planner-section planner-section-subtle">
             <div class="planner-section-header">
-                <h3>Multi folders</h3>
+                <h3>Collections</h3>
             </div>
             <div class="planner-tile-grid planner-folder-grid planner-folder-grid-multi">
-                ${multiFolders.length ? '' : '<div class="planner-empty">No multi folders yet.</div>'}
+                ${multiFolders.length ? '' : '<div class="planner-empty">No collections yet.</div>'}
             </div>
         </div>
     `;
     const grids = content.querySelectorAll('.planner-tile-grid');
-    const simpleGrid = grids[0];
+    const feedGrid = grids[0];
     const multiGrid = grids[1];
-    simpleFolders.forEach(folder => simpleGrid.appendChild(renderFolderTile(folder, 'simple')));
+    if (feedFolder) {
+        feedGrid.appendChild(renderFolderTile(feedFolder, 'simple'));
+    }
     multiFolders.forEach(folder => multiGrid.appendChild(renderFolderTile(folder, 'multi')));
 }
 
@@ -390,60 +725,59 @@ function renderFolderView(folder) {
     const content = document.getElementById('planner-content');
     if (!content) return;
 
-    if (folder.folder_type === 'simple') {
-        renderSimpleFolder(folder, content);
+    if (isFeedFolder(folder)) {
+        renderPlannerFeed(content, false);
     } else {
         renderMultiFolder(folder, content);
     }
 }
 
-function renderSimpleFolder(folder, content) {
-    const items = plannerState.simpleItems.filter(item => item.folder_id === folder.id);
+function renderPlannerFeed(content, showCollections) {
+    const items = getFilteredSimpleItems();
+    const roots = getFolderChildren(null);
+    const multiFolders = roots.filter(folder => folder.folder_type === 'multi');
     content.innerHTML = `
         <div class="planner-section">
             <div class="planner-section-header">
-                <h3>Items</h3>
+                <h3>Feed</h3>
+            </div>
+            <div class="feed-state-row planner-tag-filter">
+                <div class="feed-state-chips" id="planner-tag-filters"></div>
             </div>
             <div class="feed-grid planner-feed-grid">
                 ${items.length ? '' : '<div class="planner-empty">No items yet.</div>'}
             </div>
         </div>
+        ${showCollections ? `
+        <div class="planner-section planner-section-subtle">
+            <div class="planner-section-header">
+                <h3>Collections</h3>
+            </div>
+            <div class="planner-tile-grid planner-folder-grid planner-folder-grid-multi">
+                ${multiFolders.length ? '' : '<div class="planner-empty">No collections yet.</div>'}
+            </div>
+        </div>
+        ` : ''}
     `;
 
+    renderPlannerTagFilters();
+
     const grid = content.querySelector('.planner-feed-grid');
-    items.forEach(item => {
-        const expanded = plannerState.expandedSimple.has(item.id);
-        const card = document.createElement('div');
-        card.className = `feed-card ${expanded ? 'expanded' : ''}`;
-        card.addEventListener('click', () => togglePlannerSimple(item.id));
-        card.innerHTML = `
-            <div class="feed-card-content">
-                <div class="feed-card-header">
-                    <div class="feed-card-title">${escapeHtml(item.title)}</div>
-                </div>
-                ${expanded ? `<div class="feed-card-details">${escapeHtml(item.value)}</div>` : ''}
-                ${expanded && item.description ? `<div class="feed-card-details">${escapeHtml(item.description)}</div>` : ''}
-            </div>
-            <div class="feed-card-actions">
-                ${looksLikeUrl(item.value) ? `
-                    <button class="feed-open-btn" type="button" onclick="handlePlannerSimpleAction(event, 'open', ${item.id})" title="Open link">
-                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                    </button>
-                ` : ''}
-                ${expanded ? `
-                    <button class="feed-open-btn" type="button" onclick="handlePlannerSimpleAction(event, 'copy', ${item.id})" title="Copy">
-                        <i class="fa-solid fa-copy"></i>
-                    </button>
-                    <button class="feed-open-btn" type="button" onclick="handlePlannerSimpleAction(event, 'edit', ${item.id})" title="Edit">
-                        <i class="fa-solid fa-pen"></i>
-                    </button>
-                    <button class="feed-done-btn" type="button" onclick="handlePlannerSimpleAction(event, 'remove', ${item.id})">Remove</button>
-                ` : ''}
-            </div>
-        `;
-        grid.appendChild(card);
-    });
+    if (grid) {
+        items.forEach(item => {
+            grid.appendChild(renderPlannerSimpleCard(item));
+        });
+    }
+
+    if (showCollections) {
+        const multiGrid = content.querySelector('.planner-folder-grid');
+        if (multiGrid) {
+            multiFolders.forEach(folder => multiGrid.appendChild(renderFolderTile(folder, 'multi')));
+        }
+    }
 }
+
+
 
 function renderMultiFolder(folder, content) {
     const subfolders = getFolderChildren(folder.id);
@@ -451,18 +785,18 @@ function renderMultiFolder(folder, content) {
     content.innerHTML = `
         <div class="planner-section">
             <div class="planner-section-header">
-                <h3>Group items</h3>
+                <h3>Entries</h3>
             </div>
             <div class="planner-row-list" id="planner-group-list">
-                ${items.length ? '' : '<div class="planner-empty">No group items yet.</div>'}
+                ${items.length ? '' : '<div class="planner-empty">No entries yet.</div>'}
             </div>
         </div>
         <div class="planner-section planner-section-subtle">
             <div class="planner-section-header">
-                <h3>Folders</h3>
+                <h3>Subfolders</h3>
             </div>
             <div class="planner-tile-grid planner-folder-grid">
-                ${subfolders.length ? '' : '<div class="planner-empty">No folders yet.</div>'}
+                ${subfolders.length ? '' : '<div class="planner-empty">No subfolders yet.</div>'}
             </div>
         </div>
     `;
@@ -480,7 +814,7 @@ function renderFolderTile(folder, variant = 'simple') {
         <div class="planner-folder-tile-icon"><i class="fa-solid fa-folder"></i></div>
         <div>
             <div class="planner-folder-tile-name">${escapeHtml(folder.name)}</div>
-            <div class="planner-folder-tile-meta">${folder.folder_type === 'multi' ? 'Multi-level' : 'Simple'}</div>
+            <div class="planner-folder-tile-meta">${folder.folder_type === 'multi' ? 'Collection' : 'Folder'}</div>
         </div>
     `;
     tile.addEventListener('click', () => {
@@ -504,11 +838,16 @@ function renderMultiItemTile(item, variant = 'tile') {
         tile.addEventListener('drop', handlePlannerDrop);
         tile.addEventListener('dragend', handlePlannerDragEnd);
     }
+    const itemDateStr = item.scheduled_date;
+    const itemDateClass = itemDateStr ? (isDatePast(itemDateStr) ? 'past' : (isDateToday(itemDateStr) ? 'today' : '')) : '';
     tile.innerHTML = `
         <div class="planner-item-header" onclick="togglePlannerMulti(${item.id})">
             <div>
                 <div class="planner-item-title">${escapeHtml(item.title)}</div>
-                <div class="planner-item-meta">${lines.length} line${lines.length === 1 ? '' : 's'}</div>
+                <div class="planner-item-meta">
+                    ${lines.length} line${lines.length === 1 ? '' : 's'}
+                    ${itemDateStr ? `<span class="planner-date-badge inline ${itemDateClass}"><i class="fa-regular fa-calendar"></i> ${formatScheduledDate(itemDateStr)}</span>` : ''}
+                </div>
             </div>
             <div class="planner-item-toggle"><i class="fa-solid fa-chevron-${isExpanded ? 'up' : 'down'}"></i></div>
         </div>
@@ -522,6 +861,7 @@ function renderMultiItemTile(item, variant = 'tile') {
             </div>
             <div class="planner-item-actions">
                 <button class="btn btn-ghost" type="button" onclick="togglePlannerInlineLine(${item.id})">Add line</button>
+                <button class="btn btn-ghost" type="button" onclick="openPlannerDateModal('multi-item', ${item.id})"><i class="fa-regular fa-calendar"></i> Date</button>
                 <button class="btn btn-ghost" type="button" onclick="openPlannerEditGroupItem(event, ${item.id})">Edit</button>
                 <button class="btn btn-danger" type="button" onclick="deletePlannerMultiItem(${item.id})">Delete</button>
                 <button class="btn btn-ghost" type="button" onclick="openPlannerNewNote({ itemId: ${item.id} })">Add note</button>
@@ -542,20 +882,31 @@ function renderMultiItemTile(item, variant = 'tile') {
         const row = document.createElement('div');
         row.className = 'planner-line-row';
         const lineNotes = getPlannerNotesForLine(line.id);
+        const lineNoteButtons = lineNotes.map(note => {
+            const isNote = note.note_type !== 'list';
+            const icon = isNote ? 'fa-note-sticky' : 'fa-list-check';
+            const title = note.title || (isNote ? 'Note' : 'List');
+            return `<button class="btn-icon planner-line-note-btn ${isNote ? 'note' : 'list'}" type="button" onclick="openPlannerNotePreview(${note.id})" title="${escapeHtml(title)}">
+                <i class="fa-solid ${icon}"></i>
+            </button>`;
+        }).join('');
+        const lineDateStr = line.scheduled_date;
+        const lineDateClass = lineDateStr ? (isDatePast(lineDateStr) ? 'past' : (isDateToday(lineDateStr) ? 'today' : '')) : '';
         row.innerHTML = `
-            <div class="planner-line-value">${escapeHtml(line.value)}</div>
+            <div class="planner-line-content">
+                <div class="planner-line-value">${parsePlannerLineValue(line.value, line.id)}</div>
+                ${lineDateStr ? `<span class="planner-date-badge small ${lineDateClass}"><i class="fa-regular fa-calendar"></i> ${formatScheduledDate(lineDateStr)}</span>` : ''}
+            </div>
             <div class="planner-line-actions">
-                <button class="btn-icon" type="button" onclick="openPlannerNewNote({ lineId: ${line.id} })" title="Add note">
-                    <i class="fa-solid fa-note-sticky"></i>
-                </button>
-                <button class="btn-icon" type="button" onclick="openPlannerListAttachmentModal({ lineId: ${line.id} })" title="Add list">
-                    <i class="fa-solid fa-list"></i>
-                </button>
+                ${lineNoteButtons}
                 ${line.line_type === 'url' ? `
                     <button class="btn-icon" type="button" onclick="openPlannerLine(${line.id})" title="Open">
                         <i class="fa-solid fa-arrow-up-right-from-square"></i>
                     </button>
                 ` : ''}
+                <button class="btn-icon" type="button" onclick="openPlannerDateModal('line', ${line.id})" title="Set date">
+                    <i class="fa-regular fa-calendar"></i>
+                </button>
                 <button class="btn-icon" type="button" onclick="copyPlannerLine(${line.id})" title="Copy">
                     <i class="fa-solid fa-copy"></i>
                 </button>
@@ -565,14 +916,6 @@ function renderMultiItemTile(item, variant = 'tile') {
             </div>
         `;
         lineList.appendChild(row);
-        if (lineNotes.length) {
-            const lineAttachments = document.createElement('div');
-            lineAttachments.className = 'planner-line-attachments';
-            lineNotes.forEach(note => {
-                lineAttachments.appendChild(renderPlannerAttachment(note, 'line'));
-            });
-            lineList.appendChild(lineAttachments);
-        }
     });
     if (attachmentBlock && attachmentList) {
         if (!attachments.length) {
@@ -595,6 +938,122 @@ function openPlannerNoteAttachment(noteId) {
     window.location.href = `/notes/${noteId}?return=${encodeURIComponent(returnTo)}`;
 }
 
+function openPlannerNotePreview(noteId) {
+    const note = plannerState.plannerNotes.find(n => n.id === noteId);
+    if (!note) return;
+
+    const modal = document.getElementById('planner-note-preview-modal');
+    const title = document.getElementById('planner-note-preview-title');
+    const body = document.getElementById('planner-note-preview-body');
+    const editBtn = document.getElementById('planner-note-preview-edit');
+    if (!modal || !title || !body) return;
+
+    const displayTitle = note.title || (note.note_type === 'list' ? 'List' : 'Note');
+    title.textContent = displayTitle;
+
+    if (note.note_type === 'list') {
+        const items = note.list_items || [];
+        const hasCheckboxes = note.list_checkboxes;
+        body.innerHTML = `
+            <ul class="planner-note-preview-list ${hasCheckboxes ? 'with-checkboxes' : ''}">
+                ${items.map(item => `
+                    <li class="${hasCheckboxes && item.checked ? 'checked' : ''}">
+                        ${hasCheckboxes ? `<span class="preview-checkbox">${item.checked ? '<i class="fa-solid fa-check"></i>' : ''}</span>` : ''}
+                        <span class="preview-item-text">${escapeHtml(item.text)}</span>
+                    </li>
+                `).join('')}
+                ${items.length === 0 ? '<li class="empty">No items</li>' : ''}
+            </ul>
+        `;
+    } else {
+        const content = note.content || '';
+        body.innerHTML = `<div class="planner-note-preview-text">${content}</div>`;
+    }
+
+    if (editBtn) {
+        editBtn.onclick = () => {
+            closePlannerNotePreview();
+            openPlannerNoteAttachment(noteId);
+        };
+    }
+
+    const deleteBtn = document.getElementById('planner-note-preview-delete');
+    if (deleteBtn) {
+        deleteBtn.onclick = () => deletePlannerNoteFromPreview(noteId);
+    }
+
+    modal.classList.add('active');
+}
+
+function handlePlannerLineNoteClick(event, linkEl) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    if (!linkEl) return;
+    if (linkEl.classList.contains('unresolved')) {
+        const lineId = parseInt(linkEl.dataset.lineId, 10);
+        const title = (linkEl.dataset.noteTitle || linkEl.textContent || '').trim();
+        if (lineId && title) {
+            resolvePlannerNoteLink(lineId, title);
+        }
+        return;
+    }
+    const noteId = parseInt(linkEl.dataset.noteId, 10);
+    if (noteId) {
+        openPlannerNotePreview(noteId);
+    }
+}
+
+async function deletePlannerNoteFromPreview(noteId) {
+    if (!confirm('Delete this note?')) return;
+    try {
+        const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed');
+        closePlannerNotePreview();
+        plannerState.plannerNotes = plannerState.plannerNotes.filter(n => n.id !== noteId);
+        renderPlanner();
+        showToast('Note deleted', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not delete note', 'error');
+    }
+}
+
+function closePlannerNotePreview() {
+    const modal = document.getElementById('planner-note-preview-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function resolvePlannerNoteLink(lineId, title) {
+    try {
+        const newNote = await createPlannerLineNote(title, lineId);
+        if (newNote) {
+            openPlannerNoteAttachment(newNote.id);
+        }
+    } catch (err) {
+        console.error(err);
+        showToast('Could not create note', 'error');
+    }
+}
+
+async function createPlannerLineNote(title, lineId) {
+    const res = await fetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            title: title,
+            content: '',
+            is_listed: false,
+            planner_multi_line_id: lineId
+        })
+    });
+    if (!res.ok) throw new Error('Create failed');
+    const newNote = await res.json();
+    plannerState.plannerNotes.push(newNote);
+    return newNote;
+}
+
 function openPlannerNewNote(context = {}) {
     const returnTo = getPlannerReturnUrl();
     const params = new URLSearchParams();
@@ -607,6 +1066,81 @@ function openPlannerNewNote(context = {}) {
         params.set('planner_line_id', context.lineId);
     }
     window.location.href = `/notes/new?${params.toString()}`;
+}
+
+function openPlannerDateModal(itemType, itemId) {
+    const modal = document.getElementById('planner-modal');
+    const title = document.getElementById('planner-modal-title');
+    const body = document.getElementById('planner-modal-body');
+    const submitBtn = document.getElementById('planner-modal-submit');
+    if (!modal || !title || !body || !submitBtn) return;
+
+    let currentDate = null;
+    if (itemType === 'simple-item') {
+        const item = plannerState.simpleItems.find(i => i.id === itemId);
+        currentDate = item ? item.scheduled_date : null;
+    } else if (itemType === 'multi-item') {
+        const item = plannerState.multiItems.find(i => i.id === itemId);
+        currentDate = item ? item.scheduled_date : null;
+    } else if (itemType === 'line') {
+        const line = plannerState.multiLines.find(l => l.id === itemId);
+        currentDate = line ? line.scheduled_date : null;
+    }
+
+    title.textContent = 'Set Date';
+    body.innerHTML = `
+        <div class="form-group">
+            <label>Scheduled Date</label>
+            <input type="date" id="planner-date-input" class="form-control" value="${currentDate || ''}">
+        </div>
+        <div class="form-group">
+            <button class="btn btn-ghost btn-small" type="button" onclick="clearPlannerDateInput()">Clear date</button>
+        </div>
+    `;
+    submitBtn.onclick = () => submitPlannerDate(itemType, itemId);
+    modal.classList.add('active');
+}
+
+function clearPlannerDateInput() {
+    const input = document.getElementById('planner-date-input');
+    if (input) input.value = '';
+}
+
+async function submitPlannerDate(itemType, itemId) {
+    const input = document.getElementById('planner-date-input');
+    if (!input) return;
+    const dateValue = input.value || null;
+
+    let url = '';
+    let stateArray = null;
+    if (itemType === 'simple-item') {
+        url = `/api/planner/simple-items/${itemId}`;
+        stateArray = plannerState.simpleItems;
+    } else if (itemType === 'multi-item') {
+        url = `/api/planner/multi-items/${itemId}`;
+        stateArray = plannerState.multiItems;
+    } else if (itemType === 'line') {
+        url = `/api/planner/multi-lines/${itemId}`;
+        stateArray = plannerState.multiLines;
+    }
+
+    try {
+        const res = await fetch(url, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scheduled_date: dateValue })
+        });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        const idx = stateArray.findIndex(i => i.id === itemId);
+        if (idx !== -1) stateArray[idx] = updated;
+        closePlannerModal();
+        renderPlanner();
+        showToast(dateValue ? 'Date set' : 'Date cleared', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update date', 'error');
+    }
 }
 
 function openPlannerListAttachmentModal(context = {}) {
@@ -753,6 +1287,7 @@ function togglePlannerSimple(itemId) {
     if (plannerState.expandedSimple.has(itemId)) {
         plannerState.expandedSimple.delete(itemId);
     } else {
+        plannerState.expandedSimple.clear();
         plannerState.expandedSimple.add(itemId);
     }
     renderPlanner();
@@ -769,15 +1304,35 @@ function togglePlannerMulti(itemId) {
 
 function handlePlannerSimpleAction(event, action, itemId) {
     if (event) event.stopPropagation();
+    closePlannerSimpleMenus();
     if (action === 'open') {
         openPlannerSimpleItem(itemId);
     } else if (action === 'copy') {
         copyPlannerSimpleItem(itemId);
     } else if (action === 'edit') {
         openPlannerEditSimpleItem(itemId);
+    } else if (action === 'date') {
+        openPlannerDateModal('simple-item', itemId);
+    } else if (action === 'recall') {
+        convertPlannerSimpleItemToRecall(itemId);
     } else if (action === 'remove') {
         deletePlannerSimpleItem(itemId);
     }
+}
+
+function togglePlannerSimpleMenu(event, itemId) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById(`planner-simple-menu-${itemId}`);
+    if (!menu) return;
+    const isOpen = menu.classList.contains('open');
+    closePlannerSimpleMenus();
+    if (!isOpen) menu.classList.add('open');
+}
+
+function closePlannerSimpleMenus() {
+    document.querySelectorAll('.planner-simple-menu.open').forEach(menu => {
+        menu.classList.remove('open');
+    });
 }
 
 function openPlannerSimpleItem(itemId) {
@@ -801,7 +1356,7 @@ function openPlannerEditSimpleItem(itemId) {
     const submitBtn = document.getElementById('planner-modal-submit');
     if (!modal || !title || !body || !submitBtn) return;
 
-    title.textContent = 'Edit Simple Item';
+    title.textContent = 'Edit Link';
     const useTextarea = !looksLikeUrl(item.value) && (((item.value || '').length > 120) || (item.value || '').includes('\n'));
     const valueField = useTextarea
         ? `<textarea id="planner-modal-value" class="form-control" rows="4">${escapeHtml(item.value)}</textarea>`
@@ -819,19 +1374,53 @@ function openPlannerEditSimpleItem(itemId) {
             <label>Description (optional)</label>
             <input type="text" id="planner-modal-description" class="form-control" value="${escapeHtml(item.description || '')}">
         </div>
+        <div class="form-group">
+            <label>Tags (optional)</label>
+            <input type="text" id="planner-modal-tags" class="form-control" value="${escapeHtml((item.tags || []).join(', '))}">
+        </div>
     `;
     submitBtn.onclick = () => submitPlannerEditSimpleItem(itemId);
     modal.classList.add('active');
+}
+
+async function convertPlannerSimpleItemToRecall(itemId) {
+    const item = plannerState.simpleItems.find(entry => entry.id === itemId);
+    if (!item) return;
+    openConfirmModal(`Convert "${item.title}" to a recall?`, async () => {
+        try {
+            closeConfirmModal();
+            showToast('Converting to recall...', 'info');
+            const res = await fetch(`/api/planner/simple-items/${itemId}/to-recall`, { method: 'POST' });
+            if (!res.ok) {
+                let message = 'Convert failed';
+                try {
+                    const err = await res.json();
+                    if (err && err.error) message = err.error;
+                } catch (e) {
+                    // ignore parse errors
+                }
+                throw new Error(message);
+            }
+            plannerState.simpleItems = plannerState.simpleItems.filter(entry => entry.id !== itemId);
+            renderPlanner();
+            showToast('Converted to recall', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || 'Could not convert to recall', 'error');
+        }
+    });
 }
 
 async function submitPlannerEditSimpleItem(itemId) {
     const titleEl = document.getElementById('planner-modal-title-input');
     const valueEl = document.getElementById('planner-modal-value');
     const descEl = document.getElementById('planner-modal-description');
+    const tagsEl = document.getElementById('planner-modal-tags');
     if (!titleEl || !valueEl) return;
     const title = titleEl.value.trim();
     const value = valueEl.value.trim();
     const description = descEl ? descEl.value.trim() : '';
+    const tags = tagsEl ? parseTags(tagsEl.value) : [];
     if (!title || !value) {
         showToast('Title and value required', 'error');
         return;
@@ -840,7 +1429,7 @@ async function submitPlannerEditSimpleItem(itemId) {
         const res = await fetch(`/api/planner/simple-items/${itemId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, value, description })
+            body: JSON.stringify({ title, value, description, tags })
         });
         if (!res.ok) throw new Error('Update failed');
         const updated = await res.json();
@@ -868,7 +1457,7 @@ function openPlannerEditGroupItem(event, itemId) {
     const submitBtn = document.getElementById('planner-modal-submit');
     if (!modal || !title || !body || !submitBtn) return;
 
-    title.textContent = 'Edit Group Item';
+    title.textContent = 'Edit Entry';
     body.innerHTML = `
         <div class="form-group">
             <label>Title</label>
@@ -1017,7 +1606,7 @@ async function submitPlannerFolder(folderType) {
     if (!input) return;
     const name = input.value.trim();
     if (!name) {
-        showToast('Folder name required', 'error');
+        showToast('Collection name required', 'error');
         return;
     }
     try {
@@ -1026,15 +1615,15 @@ async function submitPlannerFolder(folderType) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, folder_type: folderType })
         });
-        if (!res.ok) throw new Error('Failed to create folder');
+        if (!res.ok) throw new Error('Failed to create collection');
         const folder = await res.json();
         plannerState.folders.push(folder);
         closePlannerModal();
         renderPlanner();
-        showToast('Folder added', 'success');
+        showToast('Collection added', 'success');
     } catch (err) {
         console.error(err);
-        showToast('Could not add folder', 'error');
+        showToast('Could not add collection', 'error');
     }
 }
 
@@ -1064,14 +1653,16 @@ async function submitPlannerSubfolder(parentId) {
     }
 }
 
-async function submitPlannerSimpleItem(folderId) {
+async function submitPlannerSimpleItem() {
     const titleEl = document.getElementById('planner-modal-title-input');
     const valueEl = document.getElementById('planner-modal-value');
     const descEl = document.getElementById('planner-modal-description');
+    const tagsEl = document.getElementById('planner-modal-tags');
     if (!titleEl || !valueEl) return;
     const title = titleEl.value.trim();
     const value = valueEl.value.trim();
     const description = descEl ? descEl.value.trim() : '';
+    const tags = tagsEl ? parseTags(tagsEl.value) : [];
     if (!title || !value) {
         showToast('Title and value required', 'error');
         return;
@@ -1080,7 +1671,7 @@ async function submitPlannerSimpleItem(folderId) {
         const res = await fetch('/api/planner/simple-items', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder_id: folderId, title, value, description })
+            body: JSON.stringify({ title, value, description, tags })
         });
         if (!res.ok) throw new Error('Failed to add item');
         const item = await res.json();
@@ -1094,18 +1685,14 @@ async function submitPlannerSimpleItem(folderId) {
     }
 }
 
-async function submitPlannerTextItem(folderId) {
+async function submitPlannerTextItem() {
     const titleEl = document.getElementById('planner-modal-title-input');
     const textEl = document.getElementById('planner-modal-text');
-    const folderSelect = document.getElementById('planner-modal-folder');
-    const targetFolderId = folderId || (folderSelect ? parseInt(folderSelect.value, 10) : null);
+    const tagsEl = document.getElementById('planner-modal-tags');
     if (!titleEl || !textEl) return;
     const title = titleEl.value.trim();
     const text = textEl.value.trim();
-    if (!targetFolderId) {
-        showToast('Pick a folder', 'error');
-        return;
-    }
+    const tags = tagsEl ? parseTags(tagsEl.value) : [];
     if (!title || !text) {
         showToast('Title and text required', 'error');
         return;
@@ -1114,30 +1701,30 @@ async function submitPlannerTextItem(folderId) {
         const res = await fetch('/api/planner/simple-items', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder_id: targetFolderId, title, value: text, description: '' })
+            body: JSON.stringify({ title, value: text, description: '', tags })
         });
         if (!res.ok) throw new Error('Failed to add item');
         const item = await res.json();
         plannerState.simpleItems.unshift(item);
         closePlannerModal();
         renderPlanner();
-        showToast('Text item added', 'success');
+        showToast('Note added', 'success');
     } catch (err) {
         console.error(err);
         showToast('Could not add item', 'error');
     }
 }
 
-async function createPlannerSimpleItem(folderId, parsed) {
+async function createPlannerSimpleItem(parsed, tags) {
     try {
         const res = await fetch('/api/planner/simple-items', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                folder_id: folderId,
                 title: parsed.title,
                 value: parsed.url,
-                description: parsed.description
+                description: parsed.description,
+                tags: tags || []
             })
         });
         if (!res.ok) throw new Error('Failed to add item');
@@ -1153,7 +1740,7 @@ async function createPlannerSimpleItem(folderId, parsed) {
     }
 }
 
-async function addPlannerSimpleItemFromInput(folderId) {
+async function addPlannerSimpleItemFromInput() {
     const input = document.getElementById('planner-simple-input');
     if (!input) return;
     const parsed = parsePlannerSimpleInput(input.value.trim());
@@ -1162,48 +1749,11 @@ async function addPlannerSimpleItemFromInput(folderId) {
         input.focus();
         return;
     }
-    const created = await createPlannerSimpleItem(folderId, parsed);
+    const tags = getPendingTagLabels();
+    const created = await createPlannerSimpleItem(parsed, tags);
     if (created) {
         input.value = '';
         closePlannerSimpleAddForm();
-    }
-}
-
-async function addPlannerSimpleFolderAndItem() {
-    const nameInput = document.getElementById('planner-folder-input');
-    const itemInput = document.getElementById('planner-simple-input');
-    if (!nameInput || !itemInput) return;
-    const folderName = nameInput.value.trim();
-    if (!folderName) {
-        showToast('Folder name required', 'error');
-        nameInput.focus();
-        return;
-    }
-    const parsed = parsePlannerSimpleInput(itemInput.value.trim());
-    if (!parsed || !parsed.title || !parsed.url) {
-        showToast('Use: Title; URL; optional description', 'error');
-        itemInput.focus();
-        return;
-    }
-    try {
-        const res = await fetch('/api/planner/folders', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: folderName, folder_type: 'simple' })
-        });
-        if (!res.ok) throw new Error('Failed to add folder');
-        const folder = await res.json();
-        plannerState.folders.push(folder);
-        const created = await createPlannerSimpleItem(folder.id, parsed);
-        if (created) {
-            itemInput.value = '';
-            nameInput.value = '';
-            plannerState.addingSimpleFolder = false;
-            closePlannerSimpleAddForm();
-        }
-    } catch (err) {
-        console.error(err);
-        showToast('Could not add folder', 'error');
     }
 }
 
@@ -1214,7 +1764,7 @@ async function submitPlannerGroupItem(folderId) {
     const title = titleEl.value.trim();
     const lines = linesEl.value.split('\n').map(line => line.trim()).filter(Boolean);
     if (!title) {
-        showToast('Group item title required', 'error');
+        showToast('Entry title required', 'error');
         return;
     }
     try {
@@ -1227,14 +1777,14 @@ async function submitPlannerGroupItem(folderId) {
                 lines
             })
         });
-        if (!res.ok) throw new Error('Failed to add group item');
+        if (!res.ok) throw new Error('Failed to add entry');
         await res.json();
         closePlannerModal();
         await loadPlannerData();
-        showToast('Group item added', 'success');
+        showToast('Entry added', 'success');
     } catch (err) {
         console.error(err);
-        showToast('Could not add group item', 'error');
+        showToast('Could not add entry', 'error');
     }
 }
 
@@ -1292,10 +1842,14 @@ async function loadPlannerData() {
         if (!res.ok) throw new Error('Failed to load planner data');
         const data = await res.json();
         plannerState.folders = data.folders || [];
+        plannerState.feedFolderId = data.feed_folder ? data.feed_folder.id : null;
         plannerState.simpleItems = data.simple_items || [];
         plannerState.multiItems = data.multi_items || [];
         plannerState.multiLines = data.multi_lines || [];
         plannerState.plannerNotes = data.planner_notes || [];
+        if (plannerState.currentFolderId && !getPlannerFolder(plannerState.currentFolderId)) {
+            plannerState.currentFolderId = null;
+        }
         renderPlanner();
     } catch (err) {
         console.error(err);
@@ -1307,8 +1861,12 @@ async function loadPlannerData() {
 function renderPlanner() {
     const folder = getPlannerFolder(plannerState.currentFolderId);
     const headerName = document.getElementById('planner-current-name');
+    const breadcrumb = document.querySelector('.planner-folder-breadcrumb');
     if (headerName) {
-        headerName.textContent = folder ? folder.name : 'Planner';
+        headerName.textContent = folder ? (isFeedFolder(folder) ? 'Feed' : folder.name) : 'Planner';
+    }
+    if (breadcrumb) {
+        breadcrumb.style.display = folder && !isFeedFolder(folder) ? '' : 'none';
     }
     if (!folder) {
         renderRootFolders();
@@ -1331,6 +1889,75 @@ function plannerGoHome() {
     window.location.href = '/planner';
 }
 
+function getPlannerDescendantFolderIds(folderId) {
+    const ids = [];
+    const stack = [folderId];
+    const visited = new Set();
+    while (stack.length) {
+        const current = stack.pop();
+        if (!current || visited.has(current)) continue;
+        visited.add(current);
+        ids.push(current);
+        const children = plannerState.folders.filter(folder => folder.parent_id === current);
+        children.forEach(child => stack.push(child.id));
+    }
+    return ids;
+}
+
+function deleteCurrentPlannerFolder() {
+    if (!plannerState.currentFolderId || plannerState.currentFolderId === plannerState.feedFolderId) return;
+    deletePlannerFolder(plannerState.currentFolderId);
+}
+
+function deletePlannerFolder(folderId) {
+    if (plannerState.feedFolderId && folderId === plannerState.feedFolderId) return;
+    const folder = getPlannerFolder(folderId);
+    if (!folder) return;
+    openConfirmModal(`Delete collection "${folder.name}" and everything inside it?`, async () => {
+        try {
+            const res = await fetch(`/api/planner/folders/${folderId}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+
+            const descendantIds = new Set(getPlannerDescendantFolderIds(folderId));
+            const removedLineIds = new Set(
+                plannerState.multiLines
+                    .filter(line => {
+                        const item = plannerState.multiItems.find(m => m.id === line.item_id);
+                        return item && descendantIds.has(item.folder_id);
+                    })
+                    .map(line => line.id)
+            );
+            const removedMultiItemIds = new Set(
+                plannerState.multiItems
+                    .filter(item => descendantIds.has(item.folder_id))
+                    .map(item => item.id)
+            );
+
+            plannerState.folders = plannerState.folders.filter(f => !descendantIds.has(f.id));
+            plannerState.simpleItems = plannerState.simpleItems.filter(item => !descendantIds.has(item.folder_id));
+            plannerState.multiItems = plannerState.multiItems.filter(item => !descendantIds.has(item.folder_id));
+            plannerState.multiLines = plannerState.multiLines.filter(line => !removedMultiItemIds.has(line.item_id));
+            plannerState.plannerNotes = plannerState.plannerNotes.filter(note => {
+                if (note.planner_multi_item_id && removedMultiItemIds.has(note.planner_multi_item_id)) return false;
+                if (note.planner_multi_line_id && removedLineIds.has(note.planner_multi_line_id)) return false;
+                return true;
+            });
+
+            showToast('Collection deleted', 'success');
+
+            if (plannerState.currentFolderId === folderId) {
+                const parentId = folder.parent_id;
+                window.location.href = parentId ? `/planner/folder/${parentId}` : '/planner';
+                return;
+            }
+            renderPlanner();
+        } catch (err) {
+            console.error(err);
+            showToast('Could not delete collection', 'error');
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const wrapper = document.querySelector('.planner-page');
     const rawFolder = wrapper ? wrapper.getAttribute('data-folder-id') : '';
@@ -1347,20 +1974,37 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const folderConfirm = document.getElementById('planner-folder-confirm');
-    const folderCancel = document.getElementById('planner-folder-cancel');
-    const folderInput = document.getElementById('planner-folder-input');
+    const tagConfirm = document.getElementById('planner-tag-confirm');
+    const tagCancel = document.getElementById('planner-tag-cancel');
+    const tagInput = document.getElementById('planner-tag-input');
+    const simpleInput = document.getElementById('planner-simple-input');
     const simpleClose = document.getElementById('planner-simple-close');
-    if (folderConfirm) {
-        folderConfirm.addEventListener('click', () => {
-            addPlannerSimpleFolderAndItem();
+    if (tagConfirm) {
+        tagConfirm.addEventListener('click', () => {
+            addPlannerTagFromInput();
         });
     }
-    if (folderCancel) {
-        folderCancel.addEventListener('click', () => {
-            plannerState.addingSimpleFolder = false;
-            if (folderInput) folderInput.value = '';
-            renderPlannerFolderChips();
+    if (tagInput) {
+        tagInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addPlannerTagFromInput();
+            }
+        });
+    }
+    if (tagCancel) {
+        tagCancel.addEventListener('click', () => {
+            plannerState.addingTag = false;
+            if (tagInput) tagInput.value = '';
+            renderPlannerTagChips();
+        });
+    }
+    if (simpleInput) {
+        simpleInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addPlannerSimpleItemFromInput();
+            }
         });
     }
     if (simpleClose) {
@@ -1370,16 +2014,52 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.addEventListener('click', (e) => {
+        const clickTarget = e.target && e.target.nodeType === Node.TEXT_NODE
+            ? e.target.parentElement
+            : e.target;
         if (fabWrapper && !fabWrapper.contains(e.target)) {
             fabWrapper.classList.remove('expanded');
+        }
+        if (!clickTarget || !clickTarget.closest('.planner-simple-dropdown')) {
+            closePlannerSimpleMenus();
         }
         const modal = document.getElementById('planner-modal');
         if (modal && e.target === modal) {
             closePlannerModal();
         }
+
+        // Handle planner line note links
+        const noteLink = clickTarget ? clickTarget.closest('.planner-line-note-link') : null;
+        if (noteLink) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (noteLink.classList.contains('unresolved')) {
+                const lineId = parseInt(noteLink.dataset.lineId, 10);
+                const title = (noteLink.dataset.noteTitle || noteLink.textContent || '').trim();
+                if (lineId && title) {
+                    resolvePlannerNoteLink(lineId, title);
+                }
+            } else {
+                const noteId = parseInt(noteLink.dataset.noteId, 10);
+                if (noteId) {
+                    openPlannerNotePreview(noteId);
+                }
+            }
+        }
+
+        // Handle external links - stop propagation to prevent row toggle
+        const extLink = clickTarget ? clickTarget.closest('.planner-line-external-link') : null;
+        if (extLink) {
+            e.stopPropagation();
+        }
     });
 
     loadPlannerData();
+    window.addEventListener('resize', () => {
+        if (plannerState.expandedSimple.size) {
+            renderPlanner();
+        }
+    });
 });
 </script>
 {% endblock %}

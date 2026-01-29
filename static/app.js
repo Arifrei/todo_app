@@ -87,7 +87,7 @@ let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true, activePlannerContext: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null };
 let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
@@ -777,6 +777,7 @@ let noteMoveState = { ids: [], destinationFolderId: null, navStack: [], itemType
 let activeListItemMenu = null;
 let activeListItemActionPill = null;
 let listSelectionState = { active: false, ids: new Set() };
+let listSearchState = { query: '' };
 let listSectionModalState = { onSubmit: null };
 let recallState = {
     items: [],
@@ -795,7 +796,7 @@ let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
 let datePickerState = { itemId: null };
 let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
-let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true };
+let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null };
 let linkEditState = { anchor: null };
 let suppressLinkClickUntil = 0;
 let linkLongPressTimer = null;
@@ -1638,6 +1639,54 @@ async function ensureLinkedTaskEvent(ev) {
     ev.allow_overlap = created.allow_overlap ?? ev.allow_overlap ?? false;
     ev.day = created.day || calendarState.selectedDay;
     return ev;
+}
+
+async function ensureLinkedPlannerEvent(ev) {
+    if (!ev || !ev.is_planner_item) return null;
+    if (ev.calendar_event_id) return ev;
+    const payload = { title: ev.title };
+    if (ev.planner_type === 'simple') {
+        payload.planner_simple_item_id = ev.planner_item_id;
+    } else if (ev.planner_type === 'group') {
+        payload.planner_multi_item_id = ev.planner_item_id;
+    } else if (ev.planner_type === 'line') {
+        payload.planner_multi_line_id = ev.planner_line_id;
+    }
+    const created = await createCalendarEvent(payload);
+    if (!created || !created.id) return null;
+    ev.calendar_event_id = created.id;
+    ev.start_time = created.start_time;
+    ev.end_time = created.end_time;
+    ev.reminder_minutes_before = created.reminder_minutes_before;
+    ev.priority = created.priority || ev.priority || 'medium';
+    ev.rollover_enabled = created.rollover_enabled || false;
+    ev.allow_overlap = created.allow_overlap ?? ev.allow_overlap ?? false;
+    ev.day = created.day || calendarState.selectedDay;
+    return ev;
+}
+
+async function unpinPlannerDate(ev) {
+    if (!confirm('Remove this item from this date?')) return;
+    try {
+        let endpoint = '';
+        if (ev.planner_type === 'simple') {
+            endpoint = `/api/planner/simple-items/${ev.planner_item_id}`;
+        } else if (ev.planner_type === 'group') {
+            endpoint = `/api/planner/multi-items/${ev.planner_item_id}`;
+        } else if (ev.planner_type === 'line') {
+            endpoint = `/api/planner/multi-lines/${ev.planner_line_id}`;
+        }
+        if (!endpoint) return;
+        await fetch(endpoint, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scheduled_date: null })
+        });
+        window.location.reload();
+    } catch (e) {
+        console.error('Error unpinning planner item:', e);
+        alert('Could not unpin planner item.');
+    }
 }
 
 async function unpinTaskDate(taskId) {
@@ -5955,6 +6004,7 @@ function initNoteEditorPage() {
     // Check PIN status
     checkPinStatus();
     checkNotesPinStatus();
+    setupNoteLinkModalControls();
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -6374,7 +6424,7 @@ async function handleNoteLinkClick(linkEl) {
         if (!res.ok) throw new Error('Failed to resolve link');
         const data = await res.json();
         if (data.status === 'choose') {
-            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId);
+            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId, { folderId: notesState.activeFolderId });
             return;
         }
         if (data.note) {
@@ -6387,12 +6437,51 @@ async function handleNoteLinkClick(linkEl) {
     }
 }
 
+async function handleListNoteLinkClick(linkEl) {
+    const existingId = parseInt(linkEl.dataset.noteId || '', 10);
+    if (existingId) {
+        openNoteInEditor(existingId);
+        return;
+    }
+    const title = (linkEl.dataset.noteTitle || linkEl.textContent || '').trim();
+    if (!title) return;
+    const sourceNoteId = listState.listId;
+    if (!sourceNoteId) return;
+
+    try {
+        const res = await fetch('/api/notes/resolve-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_note_id: sourceNoteId,
+                title: title,
+                folder_id: listState.folderId
+            })
+        });
+        if (!res.ok) throw new Error('Failed to resolve link');
+        const data = await res.json();
+        if (data.status === 'choose') {
+            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId, { folderId: listState.folderId });
+            return;
+        }
+        if (data.note) {
+            applyResolvedNoteLink(linkEl, data.note);
+            openNoteInEditor(data.note.id);
+        }
+    } catch (err) {
+        console.error('Failed to resolve list note link:', err);
+        showToast('Could not resolve that link.', 'error', 2500);
+    }
+}
+
 function applyResolvedNoteLink(linkEl, note) {
     if (!linkEl || !note) return;
     linkEl.dataset.noteId = note.id;
     linkEl.dataset.noteTitle = note.title || linkEl.textContent || '';
     linkEl.setAttribute('href', `/notes/${note.id}`);
-    setNoteDirty(true);
+    if (document.getElementById('note-editor')) {
+        setNoteDirty(true);
+    }
 }
 
 function openNoteLinkModal(anchor, title, matches, sourceNoteId, options = {}) {
@@ -6407,7 +6496,8 @@ function openNoteLinkModal(anchor, title, matches, sourceNoteId, options = {}) {
         title,
         matches: matches || [],
         sourceNoteId,
-        openOnResolve: options.openOnResolve !== false
+        openOnResolve: options.openOnResolve !== false,
+        folderId: options.folderId ?? null
     };
     if (titleEl) titleEl.textContent = `Link: ${title}`;
     if (subtitleEl) {
@@ -6441,7 +6531,7 @@ function openNoteLinkModal(anchor, title, matches, sourceNoteId, options = {}) {
 function closeNoteLinkModal() {
     const modal = document.getElementById('note-link-modal');
     if (modal) modal.classList.remove('active');
-    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true };
+    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null };
 }
 
 function setupNoteLinkModalControls() {
@@ -6508,7 +6598,7 @@ async function relinkNoteFromEditModal() {
         if (!res.ok) throw new Error('Failed to resolve link');
         const data = await res.json();
         if (data.status === 'choose') {
-            openNoteLinkModal(anchor, title, data.matches || [], sourceNoteId, { openOnResolve: false });
+            openNoteLinkModal(anchor, title, data.matches || [], sourceNoteId, { openOnResolve: false, folderId: notesState.activeFolderId });
             return;
         }
         if (data.note) {
@@ -6626,6 +6716,7 @@ async function selectNoteLinkMatch(targetId) {
 async function createNoteFromLinkModal(isListed) {
     const { anchor, title, sourceNoteId } = noteLinkState;
     if (!anchor || !sourceNoteId || !title) return;
+    const folderId = noteLinkState.folderId !== null ? noteLinkState.folderId : notesState.activeFolderId;
     try {
         const res = await fetch('/api/notes/resolve-link', {
             method: 'POST',
@@ -6634,7 +6725,7 @@ async function createNoteFromLinkModal(isListed) {
                 source_note_id: sourceNoteId,
                 title: title,
                 is_listed: isListed,
-                folder_id: notesState.activeFolderId
+                folder_id: folderId
             })
         });
     if (!res.ok) throw new Error('Failed to create linked note');
@@ -6669,6 +6760,7 @@ function initListEditorPage() {
     const actionsToggle = document.getElementById('list-actions-toggle');
     const actionsMenu = document.getElementById('list-actions-menu');
     const duplicatesBtn = document.getElementById('list-duplicates-btn');
+    const searchToggleBtn = document.getElementById('list-search-toggle');
     const stack = document.getElementById('list-pill-stack');
     const selectToggle = document.getElementById('list-select-toggle');
     const bulkMoveBtn = document.getElementById('list-bulk-move-btn');
@@ -6677,6 +6769,9 @@ function initListEditorPage() {
     const bulkDoneBtn = document.getElementById('list-bulk-done-btn');
     const bulkMoreToggle = document.getElementById('list-bulk-more-toggle');
     const bulkMoreMenu = document.getElementById('list-bulk-more-menu');
+    const searchBar = document.getElementById('list-search');
+    const searchInput = document.getElementById('list-search-input');
+    const searchClearBtn = document.getElementById('list-search-clear');
     const sectionModal = document.getElementById('list-section-modal');
     const sectionTitleInput = document.getElementById('list-section-title');
     const sectionSaveBtn = document.getElementById('list-section-save-btn');
@@ -6694,6 +6789,18 @@ function initListEditorPage() {
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
     if (duplicatesBtn) duplicatesBtn.addEventListener('click', () => openListDuplicatesModal());
+    if (searchToggleBtn) {
+        searchToggleBtn.addEventListener('click', () => {
+            if (!searchBar) return;
+            const nextOpen = searchBar.style.display === 'none' || searchBar.style.display === '';
+            searchBar.style.display = nextOpen ? 'flex' : 'none';
+            if (nextOpen && searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
+            if (actionsMenu) actionsMenu.classList.remove('open');
+        });
+    }
     if (selectToggle) selectToggle.addEventListener('click', () => toggleListSelectionMode());
     if (bulkMoveBtn) {
         bulkMoveBtn.addEventListener('click', (e) => {
@@ -6744,6 +6851,31 @@ function initListEditorPage() {
     if (sectionCancelBtn) sectionCancelBtn.addEventListener('click', () => closeListSectionModal());
     if (duplicatesCloseBtn) duplicatesCloseBtn.addEventListener('click', () => closeListDuplicatesModal());
     if (duplicatesDeleteSelectedBtn) duplicatesDeleteSelectedBtn.addEventListener('click', () => deleteSelectedDuplicateItems());
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            listSearchState.query = (searchInput.value || '').trim();
+            renderListItems();
+        });
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                searchInput.value = '';
+                listSearchState.query = '';
+                renderListItems();
+                const searchBar = document.getElementById('list-search');
+                if (searchBar) searchBar.style.display = 'none';
+            }
+        });
+    }
+    if (searchClearBtn && searchInput) {
+        searchClearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            listSearchState.query = '';
+            renderListItems();
+            searchInput.focus();
+            if (searchBar) searchBar.style.display = 'none';
+        });
+    }
     if (sectionTitleInput) {
         sectionTitleInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
@@ -6970,6 +7102,7 @@ async function loadListForEditor(listId) {
         listState.checkboxMode = !!list.checkbox_mode;
         listState.isArchived = !!list.is_archived;
         listState.isListed = !!list.is_listed;
+        listState.folderId = list.folder_id || null;
         listState.activeSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode
@@ -7715,12 +7848,48 @@ function renderListItems() {
     closeListItemMenu();
     clearListItemActions();
     const items = getSortedListItems();
+    const searchQuery = (listSearchState.query || '').trim();
+    const searchLower = searchQuery.toLowerCase();
     stack.innerHTML = '';
     const hasSections = items.some(isListSectionItem);
     let activeSectionBody = null;
+    let renderedCount = 0;
+
+    const doesListItemMatch = (item) => {
+        if (!searchLower) return true;
+        if (isListSectionItem(item)) {
+            const sectionTitle = getListSectionTitle(item) || '';
+            return sectionTitle.toLowerCase().includes(searchLower);
+        }
+        const textValue = (item.text || '').toLowerCase();
+        const linkLabel = (item.link_text || '').toLowerCase();
+        const noteValue = (item.note || '').toLowerCase();
+        return textValue.includes(searchLower) || linkLabel.includes(searchLower) || noteValue.includes(searchLower);
+    };
+
+    let sectionMatches = null;
+    if (searchLower && hasSections) {
+        sectionMatches = new Map();
+        let currentSectionId = null;
+        let currentSectionMatch = false;
+        for (const item of items) {
+            if (isListSectionItem(item)) {
+                if (currentSectionId !== null) {
+                    sectionMatches.set(currentSectionId, currentSectionMatch);
+                }
+                currentSectionId = item.id;
+                currentSectionMatch = doesListItemMatch(item);
+            } else if (currentSectionId !== null && doesListItemMatch(item)) {
+                currentSectionMatch = true;
+            }
+        }
+        if (currentSectionId !== null) {
+            sectionMatches.set(currentSectionId, currentSectionMatch);
+        }
+    }
 
     const appendInsertionRow = (insertIndex, target) => {
-        if (listState.isArchived) return;
+        if (listState.isArchived || searchLower) return;
         if (listState.insertionIndex !== insertIndex) return;
         const row = createListInputRow({
             mode: 'insert',
@@ -7733,6 +7902,10 @@ function renderListItems() {
     items.forEach((item, index) => {
         const isSection = isListSectionItem(item);
         if (isSection) {
+            if (searchLower && sectionMatches && !sectionMatches.get(item.id) && !doesListItemMatch(item)) {
+                activeSectionBody = null;
+                return;
+            }
             const section = document.createElement('div');
             section.className = 'list-section';
             const title = getListSectionTitle(item);
@@ -7757,7 +7930,7 @@ function renderListItems() {
                 const header = document.createElement('div');
                 header.className = 'list-section-header';
                 if (title) {
-                    header.textContent = title;
+                    appendHighlightedText(header, title, listSearchState.query);
                 } else {
                     header.classList.add('empty');
                 }
@@ -7812,6 +7985,9 @@ function renderListItems() {
         }
 
         const target = activeSectionBody || stack;
+        if (searchLower && !doesListItemMatch(item)) {
+            return;
+        }
         if (listState.editingItemId === item.id) {
             const row = createListInputRow({
                 mode: 'edit',
@@ -7825,14 +8001,15 @@ function renderListItems() {
         } else {
         target.appendChild(createListPill(item));
         }
+        renderedCount += 1;
         const gapIndex = index + 1;
-        if (!listState.isArchived) {
+        if (!listState.isArchived && !searchLower) {
             target.appendChild(createListGap(gapIndex));
             appendInsertionRow(gapIndex, target);
         }
     });
 
-    if (!listState.isArchived) {
+    if (!listState.isArchived && !searchLower) {
         const primaryTarget = activeSectionBody || stack;
         primaryTarget.appendChild(createListInputRow({
             mode: 'new',
@@ -7840,6 +8017,13 @@ function renderListItems() {
             placeholder: 'Add item... (use /section to split)',
             isPrimary: true
         }));
+    }
+
+    if (searchLower && renderedCount === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'notes-empty-state';
+        empty.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i><p>No results</p>';
+        stack.appendChild(empty);
     }
 }
 
@@ -7862,6 +8046,91 @@ function createListGap(insertIndex) {
     return gap;
 }
 
+const LIST_NOTE_LINK_PATTERN = /\[\[([^\]\n]+)\]\]|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
+
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function appendHighlightedText(target, text, query) {
+    const raw = String(text || '');
+    const trimmedQuery = (query || '').trim();
+    if (!trimmedQuery) {
+        target.appendChild(document.createTextNode(raw));
+        return;
+    }
+    const pattern = new RegExp(escapeRegExp(trimmedQuery), 'gi');
+    let lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(raw)) !== null) {
+        const start = match.index;
+        const end = start + match[0].length;
+        if (start > lastIndex) {
+            target.appendChild(document.createTextNode(raw.slice(lastIndex, start)));
+        }
+        const hit = document.createElement('span');
+        hit.className = 'list-search-hit';
+        hit.textContent = raw.slice(start, end);
+        target.appendChild(hit);
+        lastIndex = end;
+    }
+    if (lastIndex < raw.length) {
+        target.appendChild(document.createTextNode(raw.slice(lastIndex)));
+    }
+}
+
+function appendListNoteTextWithLinks(target, text) {
+    const lines = String(text || '').split('\n');
+    lines.forEach((line, lineIndex) => {
+        if (lineIndex > 0) target.appendChild(document.createElement('br'));
+        appendListNoteLineWithLinks(target, line);
+    });
+}
+
+function appendListNoteLineWithLinks(target, line) {
+    LIST_NOTE_LINK_PATTERN.lastIndex = 0;
+    let lastIndex = 0;
+    for (const match of line.matchAll(LIST_NOTE_LINK_PATTERN)) {
+        const matchIndex = match.index ?? 0;
+        if (matchIndex > lastIndex) {
+            appendHighlightedText(target, line.slice(lastIndex, matchIndex), listSearchState.query);
+        }
+        if (match[1]) {
+            const title = match[1].trim();
+            if (title) {
+                const link = document.createElement('a');
+                link.className = 'note-link';
+                link.dataset.noteTitle = title;
+                link.setAttribute('href', '#');
+                appendHighlightedText(link, title, listSearchState.query);
+                target.appendChild(link);
+            } else {
+                appendHighlightedText(target, match[0], listSearchState.query);
+            }
+        } else if (match[2] && match[3]) {
+            const label = match[2].trim();
+            const url = match[3].trim();
+            if (label && url) {
+                const link = document.createElement('a');
+                link.className = 'external-link';
+                link.setAttribute('href', url);
+                link.setAttribute('target', '_blank');
+                link.setAttribute('rel', 'noopener noreferrer');
+                appendHighlightedText(link, label, listSearchState.query);
+                target.appendChild(link);
+            } else {
+                appendHighlightedText(target, match[0], listSearchState.query);
+            }
+        } else {
+            appendHighlightedText(target, match[0], listSearchState.query);
+        }
+        lastIndex = matchIndex + match[0].length;
+    }
+    if (lastIndex < line.length) {
+        appendHighlightedText(target, line.slice(lastIndex), listSearchState.query);
+    }
+}
+
 function createListPill(item) {
     const pill = document.createElement('div');
     const hasNote = !!(item.note && item.note.trim());
@@ -7875,6 +8144,9 @@ function createListPill(item) {
     const linkLabel = (item.link_text || '').trim();
     const linkUrl = (item.link_url || '').trim();
     const linkSameAsText = linkLabel && textValue && linkLabel === textValue;
+    const searchQuery = (listSearchState.query || '').trim();
+    const searchLower = searchQuery.toLowerCase();
+    const noteHasMatch = !!(searchLower && item.note && item.note.toLowerCase().includes(searchLower));
 
     if (listState.checkboxMode) {
         const checkbox = document.createElement('input');
@@ -7896,7 +8168,7 @@ function createListPill(item) {
 
     if (!linkSameAsText && textValue) {
         const textSpan = document.createElement('span');
-        textSpan.textContent = textValue;
+        appendHighlightedText(textSpan, textValue, searchQuery);
         content.appendChild(textSpan);
     }
 
@@ -7905,7 +8177,7 @@ function createListPill(item) {
         link.href = linkUrl;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = linkLabel;
+        appendHighlightedText(link, linkLabel, searchQuery);
         link.addEventListener('click', (e) => e.stopPropagation());
         content.appendChild(link);
     }
@@ -7921,8 +8193,22 @@ function createListPill(item) {
     if (hasNote) {
         const note = document.createElement('div');
         note.className = 'list-pill-note';
-        note.textContent = item.note;
-        note.style.display = isExpanded ? 'block' : 'none';
+        appendListNoteTextWithLinks(note, item.note);
+        note.style.display = isExpanded || noteHasMatch ? 'block' : 'none';
+        note.addEventListener('click', (e) => {
+            if (isListSelectionActive()) return;
+            const noteLink = e.target.closest('a.note-link');
+            const externalLink = e.target.closest('a.external-link');
+            if (!noteLink && !externalLink) return;
+            e.stopPropagation();
+            e.preventDefault();
+            if (externalLink) {
+                const href = externalLink.getAttribute('href') || '';
+                if (href) window.open(href, '_blank', 'noopener,noreferrer');
+                return;
+            }
+            handleListNoteLinkClick(noteLink);
+        });
         pill.appendChild(note);
     }
 
@@ -12201,6 +12487,211 @@ function renderCalendarEvents() {
         row.append(left, titleWrap, actions);
         attachCalendarRowSelection(row, ev);
         return row;
+        }
+
+        if (ev.is_planner_item) {
+            row.classList.add('planner-link-row');
+            const left = document.createElement('div');
+            left.className = 'row-left';
+            left.innerHTML = '<i class="fa-regular fa-square"></i>';
+
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'calendar-title';
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.value = ev.title;
+            titleInput.readOnly = true;
+            titleInput.setAttribute('aria-label', 'Open in planner');
+            titleWrap.appendChild(titleInput);
+
+            const plannerUrl = ev.planner_folder_id ? `/planner/folder/${ev.planner_folder_id}` : '/planner';
+            titleWrap.addEventListener('click', () => {
+                window.location.href = plannerUrl;
+            });
+            titleInput.addEventListener('click', (e) => {
+                e.preventDefault();
+                window.location.href = plannerUrl;
+            });
+
+            const timeBtn = document.createElement('button');
+            timeBtn.type = 'button';
+            timeBtn.className = 'calendar-time-inline';
+            const timeLabel = formatTimeRange(ev);
+            timeBtn.innerHTML = timeLabel
+                ? `<i class="fa-regular fa-clock"></i><span>${timeLabel}</span>`
+                : `<i class="fa-regular fa-clock"></i>`;
+            if (!timeLabel) {
+                timeBtn.classList.add('no-time');
+                timeBtn.setAttribute('data-label', 'Add time');
+            }
+            timeBtn.title = timeLabel || 'Add time';
+            timeBtn.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedPlannerEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+            };
+            titleWrap.appendChild(timeBtn);
+
+            const meta = document.createElement('div');
+            meta.className = 'calendar-meta-lite';
+            const sourceChip = document.createElement('a');
+            sourceChip.className = 'meta-chip planner-link';
+            sourceChip.href = plannerUrl;
+            // For lines: show parent item title. For groups/simple items: show folder name
+            if (ev.planner_type === 'line' && ev.planner_item_title) {
+                sourceChip.textContent = ev.planner_item_title;
+                sourceChip.title = `Line from "${ev.planner_item_title}"`;
+            } else {
+                sourceChip.textContent = ev.planner_folder_name || 'Planner';
+                sourceChip.title = `From ${ev.planner_folder_name || 'Planner'}`;
+            }
+            meta.append(sourceChip);
+            titleWrap.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'calendar-actions-row';
+            const noteChips = document.createElement('div');
+            noteChips.className = 'calendar-note-chips';
+            appendCalendarItemNoteChip(noteChips, ev);
+            const priorityDot = document.createElement('button');
+            priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
+            priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
+            priorityDot.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedPlannerEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openPriorityMenu(priorityDot, linked.priority || 'medium', async (val) => {
+                    try {
+                        await updateCalendarEvent(linked.calendar_event_id, { priority: val });
+                        linked.priority = val;
+                        ev.priority = val;
+                        renderCalendarEvents();
+                    } catch (err) {
+                        console.error('Failed to update priority', err);
+                    }
+                });
+            };
+
+            const overflowMenuContainer = document.createElement('div');
+            overflowMenuContainer.className = 'calendar-overflow-menu';
+            const overflowBtn = document.createElement('button');
+            overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+            overflowBtn.title = 'More options';
+            overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+            overflowBtn.style.display = 'inline-flex';
+            overflowBtn.style.width = '28px';
+            overflowBtn.style.height = '28px';
+
+            const overflowDropdown = document.createElement('div');
+            overflowDropdown.className = 'calendar-item-dropdown';
+
+            const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
+            const reminderMenuItem = document.createElement('button');
+            reminderMenuItem.className = 'calendar-item-menu-option';
+            reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${formatReminderMinutes(ev.reminder_minutes_before)})` : 'Set Reminder'}`;
+            reminderMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedPlannerEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openReminderEditor({ ...linked, id: linked.calendar_event_id });
+            };
+
+            const rolloverMenuItem = document.createElement('button');
+            rolloverMenuItem.className = 'calendar-item-menu-option';
+            rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+            rolloverMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedPlannerEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                const next = !linked.rollover_enabled;
+                try {
+                    await updateCalendarEvent(linked.calendar_event_id, { rollover_enabled: next });
+                    linked.rollover_enabled = next;
+                    ev.rollover_enabled = next;
+                } catch (err) {
+                    console.error('Failed to toggle rollover', err);
+                }
+            };
+
+            const allowOverlapMenuItem = document.createElement('button');
+            allowOverlapMenuItem.className = 'calendar-item-menu-option';
+            const overlapLabel = ev.allow_overlap ? 'Allow' : 'Disallow';
+            allowOverlapMenuItem.innerHTML = `<i class="fa-solid fa-layer-group ${ev.allow_overlap ? 'active-icon' : ''}"></i> ${overlapLabel} Overlap`;
+            allowOverlapMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedPlannerEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                const next = !linked.allow_overlap;
+                try {
+                    await updateCalendarEvent(linked.calendar_event_id, { allow_overlap: next });
+                    linked.allow_overlap = next;
+                    ev.allow_overlap = next;
+                } catch (err) {
+                    console.error('Failed to toggle allow_overlap', err);
+                }
+            };
+
+            const openPlannerBtn = document.createElement('a');
+            openPlannerBtn.className = 'calendar-item-menu-option';
+            openPlannerBtn.href = plannerUrl;
+            openPlannerBtn.innerHTML = '<i class="fa-solid fa-up-right-from-square"></i> Open in planner';
+
+            const unpinBtn = document.createElement('button');
+            unpinBtn.className = 'calendar-item-menu-option';
+            unpinBtn.innerHTML = '<i class="fa-solid fa-thumbtack"></i> Unpin from day';
+            unpinBtn.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                unpinPlannerDate(ev);
+            };
+
+            overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, openPlannerBtn, unpinBtn);
+            overflowMenuContainer.append(overflowBtn);
+            document.body.appendChild(overflowDropdown);
+
+            const positionDropdown = () => {
+                const rect = overflowBtn.getBoundingClientRect();
+                const dropdownWidth = overflowDropdown.offsetWidth || 200;
+                const dropdownHeight = overflowDropdown.offsetHeight || 120;
+                const screenWidth = window.innerWidth;
+                const screenHeight = window.innerHeight;
+                const padding = 8;
+                overflowDropdown.style.position = 'fixed';
+                let topPos = rect.bottom + 8;
+                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
+                    topPos = rect.top - dropdownHeight - 8;
+                }
+                const maxTop = screenHeight - dropdownHeight - padding;
+                const minTop = padding;
+                topPos = Math.max(minTop, Math.min(topPos, maxTop));
+                let leftPos = rect.right - dropdownWidth;
+                if (leftPos < padding) leftPos = padding;
+                if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
+                overflowDropdown.style.top = `${topPos}px`;
+                overflowDropdown.style.left = `${leftPos}px`;
+            };
+
+            overflowBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
+                overflowDropdown.classList.toggle('active');
+                positionDropdown();
+            });
+
+            window.addEventListener('scroll', () => {
+                if (overflowDropdown.classList.contains('active')) positionDropdown();
+            }, { passive: true });
+
+            if (noteChips.childNodes.length) actions.append(noteChips);
+            actions.append(priorityDot, overflowMenuContainer);
+
+            row.append(left, titleWrap, actions);
+            attachCalendarRowSelection(row, ev);
+            return row;
         }
 
         if (ev.is_phase) {

@@ -420,6 +420,9 @@ class CalendarEvent(db.Model):
     rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=True)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
+    planner_simple_item_id = db.Column(db.Integer, db.ForeignKey('planner_simple_item.id'), nullable=True)
+    planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=True)
+    planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id'), nullable=True)
     recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
     item_note = db.Column(db.Text, nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
@@ -452,6 +455,9 @@ class CalendarEvent(db.Model):
             'rolled_from_id': self.rolled_from_id,
             'recurrence_id': self.recurrence_id,
             'todo_item_id': self.todo_item_id,
+            'planner_simple_item_id': self.planner_simple_item_id,
+            'planner_multi_item_id': self.planner_multi_item_id,
+            'planner_multi_line_id': self.planner_multi_line_id,
             'item_note': self.item_note,
             'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
         }
@@ -667,9 +673,14 @@ class PlannerSimpleItem(db.Model):
     title = db.Column(db.String(200), nullable=False)
     value = db.Column(db.String(600), nullable=False)
     description = db.Column(db.Text, nullable=True)
+    tags = db.Column(db.Text, nullable=True)  # comma-separated tags
+    scheduled_date = db.Column(db.Date, nullable=True)
     order_index = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def tag_list(self):
+        return _split_tags(self.tags)
 
     def to_dict(self):
         return {
@@ -679,6 +690,8 @@ class PlannerSimpleItem(db.Model):
             'title': self.title,
             'value': self.value,
             'description': self.description,
+            'tags': self.tag_list(),
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
             'order_index': self.order_index or 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -726,6 +739,7 @@ class PlannerMultiItem(db.Model):
     folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
     group_id = db.Column(db.Integer, db.ForeignKey('planner_group.id'), nullable=True)
     title = db.Column(db.String(200), nullable=False)
+    scheduled_date = db.Column(db.Date, nullable=True)
     order_index = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -745,6 +759,7 @@ class PlannerMultiItem(db.Model):
             'folder_id': self.folder_id,
             'group_id': self.group_id,
             'title': self.title,
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
             'order_index': self.order_index or 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -760,6 +775,7 @@ class PlannerMultiLine(db.Model):
     item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=False)
     line_type = db.Column(db.String(20), nullable=False, default='text')  # text | url
     value = db.Column(db.String(600), nullable=False)
+    scheduled_date = db.Column(db.Date, nullable=True)
     order_index = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -771,6 +787,7 @@ class PlannerMultiLine(db.Model):
             'item_id': self.item_id,
             'line_type': self.line_type,
             'value': self.value,
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
             'order_index': self.order_index or 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,

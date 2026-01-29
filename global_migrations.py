@@ -574,6 +574,7 @@ def ensure_planner_simple_item(cur):
                 title VARCHAR(200) NOT NULL,
                 value VARCHAR(600) NOT NULL,
                 description TEXT,
+                tags TEXT,
                 order_index INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -587,6 +588,7 @@ def ensure_planner_simple_item(cur):
     add_column(cur, "planner_simple_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
     add_column(cur, "planner_simple_item", "value", "VARCHAR(600) NOT NULL DEFAULT ''")
     add_column(cur, "planner_simple_item", "description", "TEXT")
+    add_column(cur, "planner_simple_item", "tags", "TEXT")
     add_column(cur, "planner_simple_item", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "planner_simple_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "planner_simple_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")

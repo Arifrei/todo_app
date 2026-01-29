@@ -229,13 +229,56 @@ def scrape_url_content(url):
         if is_video_url(url):
             return scrape_video_content(url)
 
+        def _looks_like_cloudflare_block(html_text: str) -> bool:
+            if not html_text:
+                return False
+            lowered = html_text.lower()
+            if 'just a moment' in lowered and 'cloudflare' in lowered:
+                return True
+            if 'attention required' in lowered and 'cloudflare' in lowered:
+                return True
+            if 'cf-error-code' in lowered or 'cf-browser-verification' in lowered:
+                return True
+            if 'challenge-form' in lowered:
+                return True
+            return False
+
+        def _normalize_jina_url(target_url: str) -> str:
+            raw = (target_url or '').strip()
+            if raw.startswith('http://') or raw.startswith('https://'):
+                return f"https://r.jina.ai/{raw}"
+            return f"https://r.jina.ai/http://{raw}"
+
+        def _fetch_via_jina(target_url: str) -> str:
+            # Jina AI reader proxy - returns readable content for many sites.
+            jina_url = _normalize_jina_url(target_url)
+            try:
+                resp = requests.get(jina_url, timeout=20, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                })
+                if resp.ok:
+                    text = (resp.text or '').strip()
+                    if _looks_like_cloudflare_block(text):
+                        return ''
+                    return text
+            except Exception:
+                return ''
+            return ''
+
         # Regular webpage scraping
         response = requests.get(url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
         })
-        response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+        html_text = response.text or ''
+        if _looks_like_cloudflare_block(html_text):
+            proxy_text = _fetch_via_jina(url)
+            if proxy_text:
+                return proxy_text[:5000]
+
+        soup = BeautifulSoup(html_text, 'html.parser')
 
         # Remove non-content elements
         for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript', 'iframe']):
@@ -251,7 +294,33 @@ def scrape_url_content(url):
         text = re.sub(r'\s+', ' ', text)
 
         # Limit to ~5000 chars for AI processing
-        return text[:5000] if text else "[No content extracted]"
+        if text:
+            return text[:5000]
+
+        # Fallback to metadata when body text is empty
+        meta_desc = (
+            soup.find('meta', attrs={'name': 'description'}) or
+            soup.find('meta', attrs={'property': 'og:description'})
+        )
+        og_title = soup.find('meta', attrs={'property': 'og:title'})
+        title = (og_title.get('content') if og_title and og_title.get('content') else soup.title.string) if soup.title else None
+        desc = meta_desc.get('content') if meta_desc and meta_desc.get('content') else None
+        if title and title.strip().lower() == 'just a moment...':
+            title = None
+        if title or desc:
+            parts = []
+            if title:
+                parts.append(f"Title: {title}")
+            if desc:
+                parts.append(f"Description: {desc}")
+            return ' '.join(parts)[:5000]
+
+        if not response.ok:
+            proxy_text = _fetch_via_jina(url)
+            if proxy_text:
+                return proxy_text[:5000]
+            return f"[Failed to scrape: status {response.status_code}]"
+        return "[No content extracted]"
 
     except requests.Timeout:
         return "[Failed to scrape: request timeout]"
@@ -508,6 +577,13 @@ def process_recall(recall_id):
                 content = scrape_url_content(recall.payload)
             else:
                 content = recall.payload
+
+            content_str = (content or '').strip()
+            if content_str.startswith('[') and content_str.endswith(']'):
+                fallback_bits = [f"Title: {recall.title}", f"URL: {recall.payload}"]
+                if (recall.why or '').strip():
+                    fallback_bits.append(f"Notes: {recall.why}")
+                content = ' '.join(fallback_bits)
 
             if existing_why and existing_summary:
                 recall.ai_status = 'done'

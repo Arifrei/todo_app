@@ -7,6 +7,13 @@
             <h1>List</h1>
         </div>
         <div class="notes-header-actions">
+            <div class="list-search" id="list-search" style="display:none;">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input id="list-search-input" type="text" placeholder="Search list..." autocomplete="off">
+                <button class="btn btn-icon-only" id="list-search-clear" aria-label="Clear search" title="Clear search">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
             <button class="btn btn-icon-only" id="list-back-btn" aria-label="Back" title="Back">
                 <i class="fa-solid fa-arrow-left"></i>
             </button>
@@ -26,6 +33,9 @@
                     </button>
                     <button class="dropdown-item" id="list-duplicates-btn">
                         <i class="fa-solid fa-clone"></i> Find duplicates
+                    </button>
+                    <button class="dropdown-item" id="list-search-toggle">
+                        <i class="fa-solid fa-magnifying-glass"></i> Search list
                     </button>
                     <button class="dropdown-item" id="list-share-btn">
                         <i class="fa-solid fa-share-nodes"></i> Share
@@ -113,6 +123,26 @@
             <div class="modal-actions">
                 <button class="btn btn-danger" id="list-duplicates-delete-selected-btn">Delete selected</button>
                 <button class="btn" id="list-duplicates-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Linked Note Modal -->
+    <div class="modal" id="note-link-modal">
+        <div class="modal-content" style="max-width: 520px;">
+            <h2 id="note-link-modal-title">Link note</h2>
+            <p class="note-link-subtitle" id="note-link-modal-subtitle">Choose an existing note or create a new one.</p>
+            <div id="note-link-match-list" class="note-link-list"></div>
+            <div class="note-link-create">
+                <button class="btn btn-secondary" id="note-link-create-listed-btn">
+                    <i class="fa-solid fa-eye"></i> Show in notes list
+                </button>
+                <button class="btn btn-secondary" id="note-link-create-hidden-btn">
+                    <i class="fa-solid fa-eye-slash"></i> Linked-only (hidden)
+                </button>
+            </div>
+            <div class="note-link-footer">
+                <button class="btn" id="note-link-cancel-btn">Cancel</button>
             </div>
         </div>
     </div>

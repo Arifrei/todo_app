@@ -314,6 +314,9 @@ def ensure_calendar_event_table(cur):
                 rollover_enabled BOOLEAN DEFAULT 1,
                 rolled_from_id INTEGER,
                 todo_item_id INTEGER,
+                planner_simple_item_id INTEGER,
+                planner_multi_item_id INTEGER,
+                planner_multi_line_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -338,6 +341,9 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "rolled_from_id", "INTEGER")
     add_column(cur, "calendar_event", "recurrence_id", "INTEGER")
     add_column(cur, "calendar_event", "todo_item_id", "INTEGER")
+    add_column(cur, "calendar_event", "planner_simple_item_id", "INTEGER")
+    add_column(cur, "calendar_event", "planner_multi_item_id", "INTEGER")
+    add_column(cur, "calendar_event", "planner_multi_line_id", "INTEGER")
     add_column(cur, "calendar_event", "item_note", "TEXT")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
@@ -551,6 +557,8 @@ def ensure_planner_simple_item_table(cur):
                 title VARCHAR(200) NOT NULL,
                 value VARCHAR(600) NOT NULL,
                 description TEXT,
+                tags TEXT,
+                scheduled_date DATE,
                 order_index INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -564,6 +572,8 @@ def ensure_planner_simple_item_table(cur):
     add_column(cur, "planner_simple_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
     add_column(cur, "planner_simple_item", "value", "VARCHAR(600) NOT NULL DEFAULT ''")
     add_column(cur, "planner_simple_item", "description", "TEXT")
+    add_column(cur, "planner_simple_item", "tags", "TEXT")
+    add_column(cur, "planner_simple_item", "scheduled_date", "DATE")
     add_column(cur, "planner_simple_item", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "planner_simple_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "planner_simple_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
@@ -604,6 +614,7 @@ def ensure_planner_multi_item_table(cur):
                 folder_id INTEGER NOT NULL,
                 group_id INTEGER,
                 title VARCHAR(200) NOT NULL,
+                scheduled_date DATE,
                 order_index INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -616,6 +627,7 @@ def ensure_planner_multi_item_table(cur):
     add_column(cur, "planner_multi_item", "folder_id", "INTEGER")
     add_column(cur, "planner_multi_item", "group_id", "INTEGER")
     add_column(cur, "planner_multi_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_multi_item", "scheduled_date", "DATE")
     add_column(cur, "planner_multi_item", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "planner_multi_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "planner_multi_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
@@ -631,6 +643,7 @@ def ensure_planner_multi_line_table(cur):
                 item_id INTEGER NOT NULL,
                 line_type VARCHAR(20) NOT NULL DEFAULT 'text',
                 value VARCHAR(600) NOT NULL,
+                scheduled_date DATE,
                 order_index INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -643,6 +656,7 @@ def ensure_planner_multi_line_table(cur):
     add_column(cur, "planner_multi_line", "item_id", "INTEGER")
     add_column(cur, "planner_multi_line", "line_type", "VARCHAR(20) NOT NULL DEFAULT 'text'")
     add_column(cur, "planner_multi_line", "value", "VARCHAR(600) NOT NULL DEFAULT ''")
+    add_column(cur, "planner_multi_line", "scheduled_date", "DATE")
     add_column(cur, "planner_multi_line", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "planner_multi_line", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "planner_multi_line", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
