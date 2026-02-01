@@ -204,32 +204,26 @@ function renderVaultBreadcrumb() {
     const breadcrumb = document.getElementById('vault-breadcrumb');
     if (!breadcrumb) return;
     breadcrumb.innerHTML = '';
-    const root = document.createElement('span');
-    root.textContent = 'Vault';
+
+    const root = document.createElement('button');
+    root.className = 'vault-nav-item' + (!vaultState.activeFolderId ? ' active' : '');
+    root.innerHTML = '<i class="fa-solid fa-house"></i>';
     root.addEventListener('click', () => vaultSetActiveFolder(null));
     breadcrumb.appendChild(root);
 
     const path = vaultBuildFolderPath(vaultState.activeFolderId);
-    path.forEach(folder => {
+    path.forEach((folder, idx) => {
         const sep = document.createElement('span');
-        sep.textContent = ' / ';
+        sep.className = 'vault-nav-sep';
+        sep.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
         breadcrumb.appendChild(sep);
 
-        const crumb = document.createElement('span');
+        const crumb = document.createElement('button');
+        crumb.className = 'vault-nav-item' + (idx === path.length - 1 ? ' active' : '');
         crumb.textContent = folder.name;
         crumb.addEventListener('click', () => vaultSetActiveFolder(folder.id));
         breadcrumb.appendChild(crumb);
     });
-}
-
-function renderVaultStats() {
-    const statsEl = document.getElementById('vault-stats');
-    if (!statsEl) return;
-    if (!vaultState.stats) {
-        statsEl.textContent = '';
-        return;
-    }
-    statsEl.textContent = `${vaultState.stats.document_count} documents · ${vaultFormatFileSize(vaultState.stats.total_size)} used`;
 }
 
 function vaultGetActiveFolders() {
@@ -250,158 +244,78 @@ function vaultSortDocuments(items) {
 }
 
 function renderVaultItems() {
-    const folderSection = document.getElementById('vault-folders-section');
-    const docSection = document.getElementById('vault-documents-section');
-    const folderContainer = document.getElementById('vault-folders');
-    const docContainer = document.getElementById('vault-documents');
+    const grid = document.getElementById('vault-grid');
     const empty = document.getElementById('vault-empty');
-    if (!folderContainer || !docContainer || !empty) return;
+    const content = document.getElementById('vault-content');
+    if (!grid || !empty) return;
+
     const folders = vaultState.search ? [] : vaultGetActiveFolders();
     const docs = vaultSortDocuments(vaultState.documents);
+
     if (!folders.length && !docs.length) {
-        folderContainer.innerHTML = '';
-        docContainer.innerHTML = '';
-        if (folderSection) folderSection.style.display = 'none';
-        if (docSection) docSection.style.display = 'none';
-        empty.style.display = 'block';
+        grid.innerHTML = '';
+        if (content) content.style.display = 'none';
+        empty.style.display = 'flex';
         return;
     }
-    empty.style.display = 'none';
-    if (folderSection) folderSection.style.display = folders.length ? 'block' : 'none';
-    if (docSection) docSection.style.display = docs.length ? 'block' : 'none';
-    folderContainer.className = `vault-items ${vaultState.viewMode}`;
-    docContainer.className = `vault-items ${vaultState.viewMode}`;
-    folderContainer.innerHTML = '';
-    docContainer.innerHTML = '';
 
-    folders.forEach(folder => {
-        if (vaultState.viewMode === 'list') {
-            const row = document.createElement('div');
-            row.className = 'vault-row';
-            row.innerHTML = `
-                <div class="vault-row-main">
-                    <div class="vault-card-title"><i class="fa-solid fa-folder"></i> ${escapeHtml(folder.name)}</div>
-                    <div class="vault-row-meta">Folder</div>
+    empty.style.display = 'none';
+    if (content) content.style.display = 'block';
+    grid.className = 'vault-grid' + (vaultState.viewMode === 'list' ? ' list-view' : '');
+    grid.innerHTML = '';
+
+    // Render folders
+    if (folders.length && !vaultState.search) {
+        folders.forEach(folder => {
+            const item = document.createElement('div');
+            item.className = 'vault-item';
+            item.innerHTML = `
+                <div class="vault-item-icon folder"><i class="fa-solid fa-folder"></i></div>
+                <div class="vault-item-info">
+                    <div class="vault-item-name">${escapeHtml(folder.name)}</div>
+                    <div class="vault-item-meta">Folder</div>
                 </div>
-                <div class="vault-row-actions">
-                    <button class="vault-action-btn" title="Rename" type="button"><i class="fa-solid fa-pen"></i></button>
-                    <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
+                <div class="vault-item-actions">
+                    <button class="vault-item-btn" title="Open" type="button"><i class="fa-solid fa-folder-open"></i></button>
+                    <button class="vault-item-btn" title="Rename" type="button"><i class="fa-solid fa-pen"></i></button>
+                    <button class="vault-item-btn danger" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
                 </div>
             `;
-            row.querySelector('.vault-card-title').addEventListener('click', () => vaultSetActiveFolder(folder.id));
-            const [renameBtn, archiveBtn] = row.querySelectorAll('.vault-action-btn');
-            renameBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                openVaultFolderModal(folder);
-            });
-            archiveBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vaultArchiveFolder(folder);
-            });
-            folderContainer.appendChild(row);
-            return;
-        }
+            const btns = item.querySelectorAll('.vault-item-btn');
+            btns[0].addEventListener('click', (e) => { e.stopPropagation(); vaultSetActiveFolder(folder.id); });
+            btns[1].addEventListener('click', (e) => { e.stopPropagation(); openVaultFolderModal(folder); });
+            btns[2].addEventListener('click', (e) => { e.stopPropagation(); vaultArchiveFolder(folder); });
+            item.addEventListener('click', () => vaultSetActiveFolder(folder.id));
+            grid.appendChild(item);
+        });
+    }
 
-        const card = document.createElement('div');
-        card.className = 'vault-card';
-        card.innerHTML = `
-            <div class="vault-card-icon folder"><i class="fa-solid fa-folder"></i></div>
-            <div class="vault-card-title">${escapeHtml(folder.name)}</div>
-            <div class="vault-card-meta">Folder</div>
-            <div class="vault-card-actions">
-                <button class="vault-action-btn" title="Rename" type="button"><i class="fa-solid fa-pen"></i></button>
-                <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
-                <button class="vault-action-btn" title="Open" type="button"><i class="fa-solid fa-arrow-right"></i></button>
-            </div>
-        `;
-        const actions = card.querySelectorAll('.vault-action-btn');
-        actions[0].addEventListener('click', (e) => {
-            e.stopPropagation();
-            openVaultFolderModal(folder);
-        });
-        actions[1].addEventListener('click', (e) => {
-            e.stopPropagation();
-            vaultArchiveFolder(folder);
-        });
-        actions[2].addEventListener('click', (e) => {
-            e.stopPropagation();
-            vaultSetActiveFolder(folder.id);
-        });
-        card.addEventListener('click', () => vaultSetActiveFolder(folder.id));
-        folderContainer.appendChild(card);
-    });
-
+    // Render documents
     docs.forEach(doc => {
         const iconClass = vaultIconMap[doc.file_category] || vaultIconMap.other;
-        if (vaultState.viewMode === 'list') {
-            const row = document.createElement('div');
-            row.className = 'vault-row';
-            row.innerHTML = `
-                <div class="vault-row-main">
-                    <div class="vault-card-title"><i class="${iconClass}"></i> ${escapeHtml(doc.title)}</div>
-                    <div class="vault-row-meta">${doc.file_size_formatted}</div>
-                </div>
-                <div class="vault-row-actions">
-                    <button class="vault-action-btn" title="Pin" type="button"><i class="fa-solid fa-thumbtack"></i></button>
-                    <button class="vault-action-btn" title="Open" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
-                    <button class="vault-action-btn" title="Download" type="button"><i class="fa-solid fa-download"></i></button>
-                    <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
-                </div>
-            `;
-            row.querySelector('.vault-card-title').addEventListener('click', () => vaultOpenDoc(doc));
-            const [pinBtn, openBtn, downloadBtn, archiveBtn] = row.querySelectorAll('.vault-action-btn');
-            pinBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vaultTogglePin(doc);
-            });
-            openBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vaultOpenDoc(doc);
-            });
-            downloadBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vaultDownloadDoc(doc);
-            });
-            archiveBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                vaultArchiveDoc(doc);
-            });
-            docContainer.appendChild(row);
-            return;
-        }
-
-        const card = document.createElement('div');
-        card.className = 'vault-card';
-        card.innerHTML = `
-            <div class="vault-card-icon"><i class="${iconClass}"></i></div>
-            <div class="vault-card-title">${escapeHtml(doc.title)}</div>
-            <div class="vault-card-meta">${doc.file_size_formatted} · ${new Date(doc.created_at).toLocaleDateString()}</div>
-            <div class="vault-card-actions">
-                <button class="vault-action-btn" title="Pin" type="button"><i class="fa-solid fa-thumbtack"></i></button>
-                <button class="vault-action-btn" title="Open" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
-                <button class="vault-action-btn" title="Download" type="button"><i class="fa-solid fa-download"></i></button>
-                <button class="vault-action-btn" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
+        const category = doc.file_category || 'other';
+        const item = document.createElement('div');
+        item.className = 'vault-item' + (doc.pinned ? ' pinned' : '');
+        item.innerHTML = `
+            <div class="vault-item-icon ${category}"><i class="${iconClass}"></i></div>
+            <div class="vault-item-info">
+                <div class="vault-item-name">${escapeHtml(doc.title)}</div>
+                <div class="vault-item-meta">${doc.file_size_formatted || vaultFormatFileSize(doc.file_size)}</div>
+            </div>
+            <div class="vault-item-actions">
+                <button class="vault-item-btn" title="${doc.pinned ? 'Unpin' : 'Pin'}" type="button"><i class="fa-solid fa-thumbtack"></i></button>
+                <button class="vault-item-btn" title="Open" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+                <button class="vault-item-btn" title="Download" type="button"><i class="fa-solid fa-download"></i></button>
+                <button class="vault-item-btn danger" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
             </div>
         `;
-        const actions = card.querySelectorAll('.vault-action-btn');
-        actions[0].addEventListener('click', (e) => {
-            e.stopPropagation();
-            vaultTogglePin(doc);
-        });
-        actions[1].addEventListener('click', (e) => {
-            e.stopPropagation();
-            vaultOpenDoc(doc);
-        });
-        actions[2].addEventListener('click', (e) => {
-            e.stopPropagation();
-            vaultDownloadDoc(doc);
-        });
-        actions[3].addEventListener('click', (e) => {
-            e.stopPropagation();
-            vaultArchiveDoc(doc);
-        });
-        card.addEventListener('click', () => vaultOpenDoc(doc));
-        docContainer.appendChild(card);
+        const btns = item.querySelectorAll('.vault-item-btn');
+        btns[0].addEventListener('click', (e) => { e.stopPropagation(); vaultTogglePin(doc); });
+        btns[1].addEventListener('click', (e) => { e.stopPropagation(); vaultOpenDoc(doc); });
+        btns[2].addEventListener('click', (e) => { e.stopPropagation(); vaultDownloadDoc(doc); });
+        btns[3].addEventListener('click', (e) => { e.stopPropagation(); vaultArchiveDoc(doc); });
+        item.addEventListener('click', () => vaultOpenDoc(doc));
+        grid.appendChild(item);
     });
 }
 
@@ -413,7 +327,6 @@ async function loadVaultFolders() {
         renderVaultBreadcrumb();
         populateVaultFolderSelect();
         renderVaultItems();
-        updateVaultUpButton();
     } catch (err) {
         console.error(err);
     }
@@ -437,7 +350,6 @@ async function loadVaultStats() {
         const res = await fetch('/api/vault/stats');
         if (!res.ok) throw new Error('Stats load failed');
         vaultState.stats = await res.json();
-        renderVaultStats();
     } catch (err) {
         console.error(err);
     }
@@ -448,7 +360,6 @@ function vaultSetActiveFolder(folderId) {
     renderVaultBreadcrumb();
     loadVaultDocuments();
     renderVaultItems();
-    updateVaultUpButton();
 }
 
 function populateVaultFolderSelect() {
@@ -474,13 +385,17 @@ function vaultApplyViewMode() {
     const toggle = document.getElementById('vault-view-toggle');
     if (toggle) {
         const icon = toggle.querySelector('i');
-        if (vaultState.viewMode === 'grid') {
-            icon.className = 'fa-solid fa-table-cells';
-        } else {
-            icon.className = 'fa-solid fa-list';
-        }
+        icon.className = vaultState.viewMode === 'grid' ? 'fa-solid fa-grip' : 'fa-solid fa-list';
     }
     renderVaultItems();
+}
+
+function vaultUpdateSearchBox() {
+    const box = document.getElementById('vault-search-box');
+    const input = document.getElementById('vault-search-input');
+    if (box && input) {
+        box.classList.toggle('has-value', input.value.trim().length > 0);
+    }
 }
 
 function vaultToggleView() {
@@ -542,10 +457,12 @@ async function saveVaultFolder() {
 function openVaultUploadModal() {
     const modal = document.getElementById('vault-upload-modal');
     if (modal) modal.classList.add('active');
-    const titleInput = document.getElementById('vault-title-input');
     const tagsInput = document.getElementById('vault-tags-input');
-    if (titleInput) titleInput.value = '';
+    const fileInput = document.getElementById('vault-file-input');
+    const filesContainer = document.getElementById('vault-upload-files');
     if (tagsInput) tagsInput.value = '';
+    if (fileInput) fileInput.value = '';
+    if (filesContainer) filesContainer.innerHTML = '';
 }
 
 function closeVaultUploadModal() {
@@ -625,10 +542,8 @@ function vaultHandleUpload() {
     }
     const formData = new FormData();
     [...fileInput.files].forEach(file => formData.append('files', file));
-    const titleInput = document.getElementById('vault-title-input');
     const tagsInput = document.getElementById('vault-tags-input');
     const folderSelect = document.getElementById('vault-folder-select');
-    if (titleInput && titleInput.value.trim()) formData.append('title', titleInput.value.trim());
     if (tagsInput && tagsInput.value.trim()) formData.append('tags', tagsInput.value.trim());
     if (folderSelect) formData.append('folder_id', folderSelect.value || '');
 
@@ -684,44 +599,15 @@ function bindVaultDropZone() {
     dropZone.addEventListener('drop', (e) => {
         if (e.dataTransfer && e.dataTransfer.files.length) {
             fileInput.files = e.dataTransfer.files;
+            renderVaultUploadFiles();
         }
     });
 }
 
-function updateVaultUpButton() {
-    const upBtn = document.getElementById('vault-up-btn');
-    if (!upBtn) return;
-    if (!vaultState.activeFolderId) {
-        upBtn.style.display = 'none';
-        return;
-    }
-    upBtn.style.display = 'inline-flex';
-    const current = vaultGetFolderById(vaultState.activeFolderId);
-    upBtn.onclick = () => vaultSetActiveFolder(current ? current.parent_id : null);
-}
-
-function toggleVaultFilters() {
-    const panel = document.getElementById('vault-filters');
-    if (!panel) return;
-    panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
-}
-
-function toggleVaultSearch() {
-    const panel = document.getElementById('vault-search-panel');
-    if (!panel) return;
-    const shouldShow = panel.style.display === 'none';
-    panel.style.display = shouldShow ? 'flex' : 'none';
-    if (shouldShow) {
-        const input = document.getElementById('vault-search-input');
-        if (input) input.focus();
-    }
-}
-
 function initVaultPage() {
     if (!document.querySelector('.vault-page')) return;
+
     const viewToggle = document.getElementById('vault-view-toggle');
-    const filterToggle = document.getElementById('vault-filter-toggle');
-    const searchToggle = document.getElementById('vault-search-toggle');
     const folderSave = document.getElementById('vault-folder-save');
     const folderCancel = document.getElementById('vault-folder-cancel');
     const uploadCancel = document.getElementById('vault-upload-cancel');
@@ -729,23 +615,36 @@ function initVaultPage() {
     const browseBtn = document.getElementById('vault-browse-btn');
     const fileInput = document.getElementById('vault-file-input');
     const searchInput = document.getElementById('vault-search-input');
+    const searchClear = document.getElementById('vault-search-clear');
     const sortSelect = document.getElementById('vault-sort-select');
+    const emptyUpload = document.getElementById('vault-empty-upload');
 
     if (viewToggle) viewToggle.addEventListener('click', vaultToggleView);
-    if (filterToggle) filterToggle.addEventListener('click', toggleVaultFilters);
-    if (searchToggle) searchToggle.addEventListener('click', toggleVaultSearch);
     if (folderSave) folderSave.addEventListener('click', saveVaultFolder);
     if (folderCancel) folderCancel.addEventListener('click', closeVaultFolderModal);
     if (uploadCancel) uploadCancel.addEventListener('click', closeVaultUploadModal);
     if (uploadSubmit) uploadSubmit.addEventListener('click', vaultHandleUpload);
     if (browseBtn && fileInput) browseBtn.addEventListener('click', () => fileInput.click());
+    if (emptyUpload) emptyUpload.addEventListener('click', openVaultUploadModal);
 
     if (searchInput) {
         let searchTimer;
         searchInput.addEventListener('input', (e) => {
             vaultState.search = e.target.value.trim();
+            vaultUpdateSearchBox();
             clearTimeout(searchTimer);
             searchTimer = setTimeout(loadVaultDocuments, 250);
+        });
+    }
+
+    if (searchClear) {
+        searchClear.addEventListener('click', () => {
+            if (searchInput) {
+                searchInput.value = '';
+                vaultState.search = '';
+                vaultUpdateSearchBox();
+                loadVaultDocuments();
+            }
         });
     }
 
@@ -756,12 +655,47 @@ function initVaultPage() {
         });
     }
 
+    // File input change handler for showing selected files
+    if (fileInput) {
+        fileInput.addEventListener('change', () => {
+            renderVaultUploadFiles();
+        });
+    }
+
     bindVaultDropZone();
     vaultApplyViewMode();
     initVaultFab();
     loadVaultFolders();
     loadVaultDocuments();
     loadVaultStats();
+}
+
+function renderVaultUploadFiles() {
+    const fileInput = document.getElementById('vault-file-input');
+    const container = document.getElementById('vault-upload-files');
+    if (!fileInput || !container) return;
+
+    const files = [...(fileInput.files || [])];
+    if (!files.length) {
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = files.map((file, idx) => `
+        <div class="vault-upload-file" data-idx="${idx}">
+            <i class="fa-solid fa-file"></i>
+            <span>${escapeHtml(file.name)}</span>
+            <button type="button" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.vault-upload-file button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Note: Can't remove individual files from FileList, so just clear all
+            fileInput.value = '';
+            container.innerHTML = '';
+        });
+    });
 }
 
 document.addEventListener('DOMContentLoaded', initVaultPage);
