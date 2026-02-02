@@ -6,14 +6,10 @@ import json
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-import os
+import logging
+from services.ai_gateway import call_chat_text, parse_json_object
 
-# OpenAI client setup
-try:
-    from openai import OpenAI
-    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-except Exception:
-    client = None
+logger = logging.getLogger(__name__)
 
 
 def is_video_url(url):
@@ -45,14 +41,14 @@ def get_youtube_content(url):
         except TypeError:
             transcript = YouTubeTranscriptApi.get_transcript(video_id)
         text = ' '.join([t['text'] for t in transcript])
-        print(f"YouTube transcript source: youtube-transcript-api (video_id={video_id})")
+        logger.info("YouTube transcript source: youtube-transcript-api (video_id=%s)", video_id)
         return text[:5000]
     except Exception:
         pass
 
     transcript = fetch_youtube_transcript(video_id)
     if transcript:
-        print(f"YouTube transcript source: parsed-captions (video_id={video_id})")
+        logger.info("YouTube transcript source: parsed-captions (video_id=%s)", video_id)
         return transcript[:5000]
 
     # Fallback: try to get description from page
@@ -66,7 +62,10 @@ def get_youtube_content(url):
             details = player_response.get('videoDetails', {})
             short_desc = (details.get('shortDescription') or '').strip()
             if short_desc:
-                print(f"YouTube description source: videoDetails.shortDescription (video_id={video_id})")
+                logger.info(
+                    "YouTube description source: videoDetails.shortDescription (video_id=%s)",
+                    video_id,
+                )
                 return f"Video description: {short_desc}"
 
         soup = BeautifulSoup(html, 'html.parser')
@@ -83,14 +82,14 @@ def get_youtube_content(url):
             desc_lower = desc.lower()
             if sum(1 for phrase in generic_phrases if phrase in desc_lower) >= 2:
                 # This is YouTube's generic page, not the actual video
-                print(f"YouTube description source: consent-generic (video_id={video_id})")
+                logger.info("YouTube description source: consent-generic (video_id=%s)", video_id)
                 return "[YouTube video - blocked by consent page, transcript unavailable]"
-            print(f"YouTube description source: meta description (video_id={video_id})")
+            logger.info("YouTube description source: meta description (video_id=%s)", video_id)
             return f"Video description: {desc}"
     except Exception:
         pass
 
-    print(f"YouTube content source: unavailable (video_id={video_id})")
+    logger.warning("YouTube content source: unavailable (video_id=%s)", video_id)
     return "[YouTube video - transcript unavailable]"
 
 
@@ -330,60 +329,6 @@ def scrape_url_content(url):
         return f"[Failed to scrape: {str(e)}]"
 
 
-def try_parse_json(response_text):
-    """Attempt to parse JSON from AI response, handling extra text."""
-    if not response_text:
-        return None
-
-    # Try direct parse
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
-
-    # Try to find JSON object in response
-    match = re.search(r'\{[^{}]*"why"[^{}]*"summary"[^{}]*\}|\{[^{}]*"summary"[^{}]*"why"[^{}]*\}', response_text)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    # More lenient: find any JSON-like object
-    match = re.search(r'\{[^{}]+\}', response_text)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return None
-
-
-def call_openai(system_prompt, user_content, retry=False):
-    """Call OpenAI API with the given prompts."""
-    if not client:
-        return None
-
-    if retry:
-        system_prompt += "\n\nCRITICAL: Return ONLY valid JSON. No other text, no markdown, no explanation."
-
-    try:
-        response = client.chat.completions.create(
-            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            temperature=0.3,
-            max_tokens=500
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        return None
-
-
 def is_content_unreachable(content):
     """Check if scraped content indicates failure."""
     return content.startswith("[") and (
@@ -408,14 +353,14 @@ Be specific to the title, not generic. Examples:
 Return ONLY valid JSON:
 {"why": "your why statement here"}"""
 
-    response = call_openai(system_prompt, f"Title: {title}")
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, f"Title: {title}", logger=logger)
+    result = parse_json_object(response)
     if result and 'why' in result:
         return result['why']
 
     # Retry with strict mode
-    response = call_openai(system_prompt, f"Title: {title}", retry=True)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, f"Title: {title}", retry_json=True, logger=logger)
+    result = parse_json_object(response)
     if result and 'why' in result:
         return result['why']
 
@@ -460,14 +405,14 @@ Content:
 {content[:4000]}"""
 
     # Attempt 1
-    response = call_openai(system_prompt, user_message)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, user_message, logger=logger)
+    result = parse_json_object(response)
     if result and 'why' in result and 'summary' in result:
         return result
 
     # Attempt 2 with strict retry
-    response = call_openai(system_prompt, user_message, retry=True)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, user_message, retry_json=True, logger=logger)
+    result = parse_json_object(response)
     if result and 'why' in result and 'summary' in result:
         return result
 
@@ -503,13 +448,13 @@ Return ONLY valid JSON:
 Content:
 {content[:4000]}"""
 
-    response = call_openai(system_prompt, user_message)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, user_message, logger=logger)
+    result = parse_json_object(response)
     if result and 'summary' in result:
         return result
 
-    response = call_openai(system_prompt, user_message, retry=True)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, user_message, retry_json=True, logger=logger)
+    result = parse_json_object(response)
     if result and 'summary' in result:
         return result
 
@@ -539,13 +484,13 @@ Return ONLY valid JSON:
 Content:
 {content[:4000]}"""
 
-    response = call_openai(system_prompt, user_message)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, user_message, logger=logger)
+    result = parse_json_object(response)
     if result and 'why' in result:
         return result
 
-    response = call_openai(system_prompt, user_message, retry=True)
-    result = try_parse_json(response)
+    response = call_chat_text(system_prompt, user_message, retry_json=True, logger=logger)
+    result = parse_json_object(response)
     if result and 'why' in result:
         return result
 
@@ -592,7 +537,7 @@ def process_recall(recall_id):
                     from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
                     refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
                 except Exception as exc:
-                    print(f"Embedding refresh failed for recall {recall_id}: {exc}")
+                    logger.warning("Embedding refresh failed for recall %s: %s", recall_id, exc)
                 return
 
             if existing_why and not existing_summary:
@@ -613,10 +558,10 @@ def process_recall(recall_id):
                 from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
                 refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
             except Exception as exc:
-                print(f"Embedding refresh failed for recall {recall_id}: {exc}")
+                logger.warning("Embedding refresh failed for recall %s: %s", recall_id, exc)
 
         except Exception as e:
-            print(f"Error processing recall {recall_id}: {e}")
+            logger.exception("Error processing recall %s: %s", recall_id, e)
             if not (recall.why or '').strip():
                 recall.why = "Worth revisiting later."
             if not (recall.summary or '').strip():
@@ -627,4 +572,4 @@ def process_recall(recall_id):
                 from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
                 refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
             except Exception as exc:
-                print(f"Embedding refresh failed for recall {recall_id}: {exc}")
+                logger.warning("Embedding refresh failed for recall %s: %s", recall_id, exc)

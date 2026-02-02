@@ -1,19 +1,15 @@
 import os
 import re
 import json
-import html
 import logging
 import calendar
 import pytz
 import secrets
-import threading
 import mimetypes
 import uuid
 from datetime import datetime, date, time, timedelta
-from difflib import SequenceMatcher
 from dotenv import load_dotenv, find_dotenv
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
-from html.parser import HTMLParser
 from werkzeug.utils import secure_filename
 from ai_service import run_ai_chat
 from ai_embeddings import get_openai_client, embed_text
@@ -31,7 +27,29 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
 from sqlalchemy import or_, func
-from markupsafe import Markup, escape
+from background_jobs import start_app_context_job, start_daemon_thread
+from phase_utils import canonicalize_phase_flags, is_phase_header
+from services.ai_gateway import call_chat_text, parse_json_object
+from services.duplicate_service import build_list_preview_text, detect_note_list_duplicates
+from services.validation_service import (
+    merge_tag_list,
+    normalize_note_type,
+    normalize_tags,
+    parse_bool,
+    parse_day_value,
+    parse_days_of_week,
+    parse_time_str,
+    tags_to_string,
+)
+from text_helpers import (
+    _html_to_plain_text,
+    _sanitize_note_html,
+    _wrap_plain_text_html,
+    extract_note_list_lines,
+    is_note_linked,
+    linkify_text,
+    normalize_calendar_item_note,
+)
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DOTENV_PATH = find_dotenv() or os.path.join(BASE_DIR, '.env')
@@ -76,305 +94,27 @@ VAULT_BLOCKED_EXTENSIONS = {
     'exe', 'bat', 'cmd', 'com', 'msi', 'scr', 'ps1', 'vbs', 'vbe', 'wsf', 'wsh'
 }
 
-LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\s)]+)\)')
-
-
-def linkify_text(text):
-    """Convert [label](url) in task descriptions/notes into safe links."""
-    if not text:
-        return ''
-    parts = []
-    last = 0
-    for match in LINK_PATTERN.finditer(text):
-        parts.append(escape(text[last:match.start()]))
-        label = escape(match.group(1))
-        url = match.group(2)
-        parts.append(Markup(
-            f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{label}</a>'
-        ))
-        last = match.end()
-    parts.append(escape(text[last:]))
-    return Markup(''.join(str(part) for part in parts))
-
-
 app.jinja_env.filters['linkify_text'] = linkify_text
 
 
-def _normalize_note_type(raw):
-    if str(raw or '').lower() == 'list':
-        return 'list'
-    return 'note'
-
-
-def _parse_bool(value, default=False):
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ['1', 'true', 'yes', 'on']
-
-def _html_to_plain_text(raw_html: str) -> str:
-    if not raw_html:
-        return ''
-    text = str(raw_html)
-    text = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', text)
-    text = re.sub(r'(?i)</\s*(p|div|li|h[1-6]|blockquote|pre|tr)\s*>', '\n', text)
-    text = re.sub(r'(?i)</\s*(ul|ol|table)\s*>', '\n', text)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = html.unescape(text)
-    text = text.replace('\r', '\n').replace('\xa0', ' ')
-    raw_lines = [line.rstrip() for line in text.split('\n')]
-    cleaned_lines = []
-    blank_streak = 0
-    for line in raw_lines:
-        if not line.strip():
-            blank_streak += 1
-            if blank_streak > 1:
-                continue
-            cleaned_lines.append('')
-            continue
-        blank_streak = 0
-        cleaned_lines.append(re.sub(r'\s+', ' ', line).strip())
-    return '\n'.join(cleaned_lines).strip()
-
-class _NoteHTMLSanitizer(HTMLParser):
-    _allowed_tags = {
-        'p', 'div', 'br', 'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'u', 's', 'del',
-        'blockquote', 'pre', 'code', 'h1', 'h2', 'h3', 'h4', 'span', 'a', 'input'
-    }
-    _void_tags = {'br', 'input'}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self._parts = []
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-        if tag not in self._allowed_tags:
-            return
-        if tag == 'input':
-            attrs_dict = {name.lower(): (value or '') for name, value in attrs}
-            if attrs_dict.get('type', '').lower() != 'checkbox':
-                return
-            pieces = ['type="checkbox"']
-            if attrs_dict.get('checked') is not None:
-                pieces.append('checked')
-            self._parts.append(f"<input {' '.join(pieces)}>")
-            return
-        clean_attrs = []
-        if tag == 'a':
-            attrs_dict = {name.lower(): (value or '') for name, value in attrs}
-            href = attrs_dict.get('href', '').strip()
-            if href and (href.startswith('http://') or href.startswith('https://') or href.startswith('mailto:') or href.startswith('/notes/')):
-                clean_attrs.append(f'href="{html.escape(href, quote=True)}"')
-            class_name = (attrs_dict.get('class') or '').strip()
-            if class_name == 'note-link':
-                clean_attrs.append('class="note-link"')
-            if class_name == 'external-link':
-                clean_attrs.append('class="external-link"')
-            data_note_id = (attrs_dict.get('data-note-id') or '').strip()
-            if data_note_id.isdigit():
-                clean_attrs.append(f'data-note-id="{data_note_id}"')
-            data_note_title = (attrs_dict.get('data-note-title') or '').strip()
-            if data_note_title:
-                clean_attrs.append(f'data-note-title="{html.escape(data_note_title, quote=True)}"')
-        if tag == 'span':
-            attrs_dict = {name.lower(): (value or '') for name, value in attrs}
-            class_name = (attrs_dict.get('class') or '').strip()
-            if class_name == 'note-inline-checkbox':
-                clean_attrs.append('class="note-inline-checkbox"')
-            style = (attrs_dict.get('style') or '').strip()
-            if style:
-                match = re.search(r'font-size\s*:\s*([\d.]+)(px|%)', style)
-                if match:
-                    clean_attrs.append(f'style="font-size: {match.group(1)}{match.group(2)}"')
-        attr_text = f" {' '.join(clean_attrs)}" if clean_attrs else ''
-        if tag in self._void_tags:
-            self._parts.append(f"<{tag}{attr_text}>")
-        else:
-            self._parts.append(f"<{tag}{attr_text}>")
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        if tag in self._allowed_tags and tag not in self._void_tags:
-            self._parts.append(f"</{tag}>")
-
-    def handle_startendtag(self, tag, attrs):
-        self.handle_starttag(tag, attrs)
-
-    def handle_data(self, data):
-        if data:
-            self._parts.append(html.escape(data, quote=False))
-
-    def get_html(self) -> str:
-        return ''.join(self._parts).strip()
-
-def _sanitize_note_html(raw_html: str) -> str:
-    sanitizer = _NoteHTMLSanitizer()
-    sanitizer.feed(raw_html or '')
-    sanitizer.close()
-    return sanitizer.get_html()
-
-def _wrap_plain_text_html(text: str) -> str:
-    if not text:
-        return ''
-    lines = (text or '').splitlines()
-    escaped_lines = [html.escape(line, quote=False) for line in lines]
-    return '<p>' + '<br>'.join(escaped_lines) + '</p>'
-
 def _extract_note_list_lines(raw_html):
-    if not raw_html:
-        return None, 'Note is empty.'
-    text = str(raw_html)
-    text = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', text)
-    text = re.sub(r'(?i)</\s*(p|div|li|h[1-6]|blockquote|pre|tr)\s*>', '\n', text)
-    text = re.sub(r'(?i)</\s*(ul|ol|table)\s*>', '\n', text)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = html.unescape(text)
-    text = text.replace('\r', '\n').replace('\xa0', ' ')
-    raw_lines = [line.strip() for line in text.split('\n')]
+    return extract_note_list_lines(
+        raw_html,
+        min_lines=NOTE_LIST_CONVERSION_MIN_LINES,
+        max_lines=NOTE_LIST_CONVERSION_MAX_LINES,
+        max_chars=NOTE_LIST_CONVERSION_MAX_CHARS,
+        max_words=NOTE_LIST_CONVERSION_MAX_WORDS,
+        sentence_word_limit=NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT,
+    )
 
-    cleaned_lines = []
-    for line in raw_lines:
-        if not line:
-            continue
-        line = re.sub(r'^\s*\[[xX ]\]\s+', '', line)
-        line = re.sub(r'^\s*(?:[-*+]|\d+[.)]|\d+\s*[-:]|[A-Za-z][.)])\s+', '', line)
-        line = re.sub(r'\s+', ' ', line).strip()
-        if line:
-            cleaned_lines.append(line)
-
-    if len(cleaned_lines) < NOTE_LIST_CONVERSION_MIN_LINES:
-        return None, f'Need at least {NOTE_LIST_CONVERSION_MIN_LINES} non-empty lines.'
-    if len(cleaned_lines) > NOTE_LIST_CONVERSION_MAX_LINES:
-        return None, f'Too many lines to convert (max {NOTE_LIST_CONVERSION_MAX_LINES}).'
-
-    for line in cleaned_lines:
-        if len(line) > NOTE_LIST_CONVERSION_MAX_CHARS:
-            return None, f'Lines must be {NOTE_LIST_CONVERSION_MAX_CHARS} characters or fewer.'
-        words = re.findall(r"[A-Za-z0-9']+", line)
-        if len(words) > NOTE_LIST_CONVERSION_MAX_WORDS:
-            return None, f'Lines must be {NOTE_LIST_CONVERSION_MAX_WORDS} words or fewer.'
-        sentence_marks = re.findall(r'[.!?]', line)
-        if len(sentence_marks) > 1:
-            return None, 'Lines must be single phrases, not multiple sentences.'
-        if len(sentence_marks) == 1 and len(words) > NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT:
-            return None, f'Lines must be short phrases (max {NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT} words if punctuated).'
-    return cleaned_lines, None
 
 def _is_note_linked(note, linked_targets=None, linked_sources=None):
-    """True if note is linked to another entity or involved in a note link (source or target)."""
-    if not note:
-        return False
-    if note.todo_item_id or note.calendar_event_id or note.planner_multi_item_id or note.planner_multi_line_id:
-        return True
-    if linked_targets is not None and note.id in linked_targets:
-        return True
-    if linked_sources is not None and note.id in linked_sources:
-        return True
-    return False
+    return is_note_linked(note, linked_targets=linked_targets, linked_sources=linked_sources)
+
 
 def _normalize_calendar_item_note(raw):
-    if raw is None:
-        return None
-    text = str(raw)
-    if len(text) > CALENDAR_ITEM_NOTE_MAX_CHARS:
-        raise ValueError('Item note exceeds character limit')
-    text = text.strip()
-    return text or None
+    return normalize_calendar_item_note(raw, max_chars=CALENDAR_ITEM_NOTE_MAX_CHARS)
 
-
-def _build_list_preview_text(item):
-    base = (item.text or '').strip()
-    link_label = (item.link_text or '').strip()
-    if base and link_label:
-        if base == link_label:
-            return base
-        return f"{base} {link_label}".strip()
-    return base or link_label
-
-def _normalize_similarity_text(text):
-    cleaned = re.sub(r'[^\w\s]', ' ', str(text or '').lower())
-    cleaned = re.sub(r'\b0+(\d+)\b', r'\1', cleaned)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    return cleaned
-
-def _tokenize_similarity(text):
-    if not text:
-        return []
-    return [token for token in text.split(' ') if token]
-
-def _sequence_similarity(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-
-def _substring_similarity(a, b):
-    if not a or not b:
-        return 0.0
-    short = a if len(a) <= len(b) else b
-    long = b if len(a) <= len(b) else a
-    if len(short) < 3:
-        return 0.0
-    if short in long:
-        return 0.95
-    return 0.0
-
-def _jaccard_similarity(tokens_a, tokens_b):
-    set_a = set(tokens_a)
-    set_b = set(tokens_b)
-    if not set_a or not set_b:
-        return 0.0
-    return len(set_a & set_b) / len(set_a | set_b)
-
-def _containment_similarity(tokens_a, tokens_b):
-    if not tokens_a or not tokens_b:
-        return 0.0
-    set_a = set(tokens_a)
-    set_b = set(tokens_b)
-    intersection = len(set_a & set_b)
-    min_size = min(len(set_a), len(set_b))
-    if min_size == 0:
-        return 0.0
-    return intersection / min_size
-
-def _cosine_similarity(vec_a, vec_b):
-    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-        return 0.0
-    dot = 0.0
-    norm_a = 0.0
-    norm_b = 0.0
-    for a_val, b_val in zip(vec_a, vec_b):
-        dot += a_val * b_val
-        norm_a += a_val * a_val
-        norm_b += b_val * b_val
-    if norm_a <= 0.0 or norm_b <= 0.0:
-        return 0.0
-    return dot / ((norm_a ** 0.5) * (norm_b ** 0.5))
-
-def _group_duplicates(items, similarity_fn, threshold):
-    parent = list(range(len(items)))
-
-    def find(idx):
-        while parent[idx] != idx:
-            parent[idx] = parent[parent[idx]]
-            idx = parent[idx]
-        return idx
-
-    def union(a, b):
-        root_a = find(a)
-        root_b = find(b)
-        if root_a != root_b:
-            parent[root_b] = root_a
-
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            if similarity_fn(i, j) >= threshold:
-                union(i, j)
-
-    groups = {}
-    for idx, item in enumerate(items):
-        root = find(idx)
-        groups.setdefault(root, []).append(item)
-    return [group for group in groups.values() if len(group) > 1]
 
 def get_current_user():
     """Resolve the current user from a shared API key + user id header, else fall back to session."""
@@ -397,39 +137,6 @@ def get_current_user():
     if user_id:
         return db.session.get(User, user_id)
     return None
-
-
-def _normalize_tags(raw):
-    """Turn comma-delimited or list input into a clean list of tags."""
-    if not raw:
-        return []
-    if isinstance(raw, list):
-        return [str(t).strip() for t in raw if str(t).strip()]
-    return [t.strip() for t in str(raw).split(',') if t.strip()]
-
-
-def _tags_to_string(tags):
-    return ','.join(_normalize_tags(tags))
-
-
-def _normalize_tag_key(tag):
-    return re.sub(r'\s+', ' ', str(tag or '')).strip().lower()
-
-
-def _merge_tag_list(existing, extra):
-    merged = []
-    seen = set()
-    for tag in _normalize_tags(existing):
-        key = _normalize_tag_key(tag)
-        if key and key not in seen:
-            seen.add(key)
-            merged.append(tag)
-    for tag in _normalize_tags(extra):
-        key = _normalize_tag_key(tag)
-        if key and key not in seen:
-            seen.add(key)
-            merged.append(tag)
-    return merged
 
 
 def _ensure_planner_feed_folder(user):
@@ -457,8 +164,8 @@ def _ensure_planner_feed_folder(user):
         items = PlannerSimpleItem.query.filter_by(user_id=user.id, folder_id=folder.id).all()
         if items:
             for item in items:
-                merged_tags = _merge_tag_list(item.tags, folder.name)
-                item.tags = _tags_to_string(merged_tags) if merged_tags else None
+                merged_tags = merge_tag_list(item.tags, folder.name)
+                item.tags = tags_to_string(merged_tags) if merged_tags else None
                 item.folder_id = feed.id
             touched = True
         db.session.delete(folder)
@@ -520,15 +227,6 @@ def _vault_archive_folder_recursive(user_id, folder_id, archived_at):
         _vault_archive_folder_recursive(user_id, child_id, archived_at)
 
 
-def _parse_reminder(dt_str):
-    if not dt_str:
-        return None
-    try:
-        return datetime.fromisoformat(dt_str)
-    except Exception:
-        return None
-
-
 def _now_local():
     tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'America/New_York'))
     return datetime.now(tz).replace(tzinfo=None)
@@ -563,7 +261,7 @@ def _load_sidebar_order(user):
             data = json.loads(raw)
             if isinstance(data, list):
                 return _sanitize_sidebar_order(data)
-    except Exception as exc:
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
         app.logger.warning(f"Failed to load sidebar order for user {user.id}: {exc}")
     return list(DEFAULT_SIDEBAR_ORDER)
 
@@ -603,7 +301,7 @@ def _load_homepage_order(user):
             data = json.loads(raw)
             if isinstance(data, list):
                 return _sanitize_homepage_order(data)
-    except Exception as exc:
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
         app.logger.warning(f"Failed to load homepage order for user {user.id}: {exc}")
     return list(DEFAULT_HOMEPAGE_ORDER)
 
@@ -615,66 +313,27 @@ def _save_homepage_order(user, order):
     user.homepage_order = json.dumps(_sanitize_homepage_order(order))
 
 
-def _call_openai(system_prompt, payload):
-    if not app.config.get('OPENAI_API_KEY'):
-        return ''
-    try:
-        client = get_openai_client()
-        model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": payload}
-            ],
-            max_tokens=120,
-            temperature=0.4
-        )
-        return (resp.choices[0].message.content or '').strip()
-    except Exception as exc:
-        app.logger.warning(f"Recall metadata generation failed: {exc}")
-        return ''
-
-
-def try_parse_json(response):
-    try:
-        return json.loads(response)
-    except Exception:
-        pass
-
-    match = re.search(r'\{[^{}]*\}', response or '')
-    if match:
-        try:
-            return json.loads(match.group())
-        except Exception:
-            pass
-    return None
-
-
 def start_recall_processing(recall_id):
     """Start background processing for a recall item."""
     from recall_processor import process_recall
-    thread = threading.Thread(target=process_recall, args=(recall_id,), daemon=True)
-    thread.start()
+    start_daemon_thread(process_recall, args=(recall_id,))
 
 
 def start_embedding_job(user_id, entity_type, entity_id):
     """Start background embedding refresh for a single entity."""
-    def _run():
-        with app.app_context():
-            try:
-                refresh_embedding_for_entity(user_id, entity_type, entity_id)
-            except Exception as exc:
-                app.logger.warning(
-                    "Embedding refresh failed for %s:%s user=%s (%s)",
-                    entity_type,
-                    entity_id,
-                    user_id,
-                    exc,
-                )
+    def _refresh_single_embedding():
+        refresh_embedding_for_entity(user_id, entity_type, entity_id)
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
+    def _on_error(exc):
+        app.logger.warning(
+            "Embedding refresh failed for %s:%s user=%s (%s)",
+            entity_type,
+            entity_id,
+            user_id,
+            exc,
+        )
+
+    start_app_context_job(app, _refresh_single_embedding, on_error=_on_error)
 
 
 def delete_embedding(user_id, entity_type, entity_id):
@@ -695,16 +354,14 @@ def delete_embedding(user_id, entity_type, entity_id):
 
 def start_list_children_embedding_job(user_id, list_id):
     """Refresh embeddings for items inside a list after a list rename."""
-    def _run():
-        with app.app_context():
-            todo_list = TodoList.query.filter_by(id=list_id, user_id=user_id).first()
-            if not todo_list:
-                return
-            for item in todo_list.items:
-                refresh_embedding_for_entity(user_id, ENTITY_TODO_ITEM, item.id)
+    def _refresh_list_children():
+        todo_list = TodoList.query.filter_by(id=list_id, user_id=user_id).first()
+        if not todo_list:
+            return
+        for item in todo_list.items:
+            refresh_embedding_for_entity(user_id, ENTITY_TODO_ITEM, item.id)
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
+    start_app_context_job(app, _refresh_list_children)
 
 def parse_outline(outline_text, list_type='list'):
     """Parse a pasted outline into item dicts with content/status/description/notes."""
@@ -911,23 +568,6 @@ def _slugify_filename(value):
     return value or 'list'
 
 
-def is_phase_header(item):
-    """Canonical check for phase headers (supports legacy 'phase' status)."""
-    return getattr(item, 'is_phase', False) or getattr(item, 'status', None) == 'phase'
-
-
-def canonicalize_phase_flags(todo_list):
-    """Normalize legacy phase markers on a list; commits only when changes occur."""
-    changed = False
-    for item in todo_list.items:
-        if item.status == 'phase' and not item.is_phase:
-            item.is_phase = True
-            item.status = 'not_started'
-            changed = True
-    if changed:
-        db.session.commit()
-
-
 def insert_item_in_order(todo_list, new_item, phase_id=None):
     """Place a new item in the ordering, optionally directly under a phase."""
     ordered = sorted(list(todo_list.items), key=lambda i: i.order_index or 0)
@@ -988,37 +628,6 @@ def reindex_list(todo_list):
         item.order_index = idx
 
 # --- Calendar Helpers ---
-
-def _parse_time_str(val):
-    """Parse 24h or am/pm strings into a time object; return None on failure."""
-    if not val:
-        return None
-    if isinstance(val, time):
-        return val
-    s = str(val).strip().lower().replace(" ", "")
-    # Match hh, hh:mm, or hh:mm:ss with optional am/pm; allow 1-2 digit minutes/seconds
-    m = re.match(r"^(?P<hour>\d{1,2})(:(?P<minute>\d{1,2}))?(:(?P<second>\d{1,2}))?(?P<ampm>a|p|am|pm)?$", s)
-    if not m:
-        return None
-    try:
-        hour = int(m.group("hour"))
-        minute = int(m.group("minute") or 0)
-        ampm = m.group("ampm")
-        # Ignore seconds but validate if present
-        if m.group("second") is not None:
-            sec_val = int(m.group("second"))
-            if not (0 <= sec_val <= 59):
-                return None
-        if ampm:
-            if ampm in ("p", "pm") and hour != 12:
-                hour += 12
-            if ampm in ("a", "am") and hour == 12:
-                hour = 0
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            return None
-        return time(hour=hour, minute=minute)
-    except Exception:
-        return None
 
 
 def _time_to_minutes(t):
@@ -1160,24 +769,6 @@ def _next_calendar_order(day_value, user_id):
     return (current_max or 0) + 1
 
 
-def _parse_days_of_week(raw):
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        values = raw
-    else:
-        values = str(raw).split(',')
-    days = []
-    for val in values:
-        try:
-            day = int(val)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= day <= 6:
-            days.append(day)
-    return sorted(set(days))
-
-
 def _weekday_occurrence_in_month(day_value):
     weekday = day_value.weekday()
     month_cal = calendar.monthcalendar(day_value.year, day_value.month)
@@ -1213,7 +804,7 @@ def _recurrence_occurs_on(rule, day_value):
     freq = (rule.frequency or '').lower()
     interval = max(int(rule.interval or 1), 1)
     unit = (rule.interval_unit or '').lower()
-    days_of_week = _parse_days_of_week(rule.days_of_week)
+    days_of_week = parse_days_of_week(rule.days_of_week)
 
     if freq == 'monthly_weekday':
         start_day = rule.start_day
@@ -2598,7 +2189,7 @@ def list_view(list_id):
     if not user:
         return redirect(url_for('select_user'))
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
-    canonicalize_phase_flags(todo_list)
+    canonicalize_phase_flags(todo_list, commit_callback=db.session.commit)
 
     # Find parent if exists (if this list is linked by an item)
     parent_item = TodoItem.query.filter_by(linked_list_id=list_id).first()
@@ -2713,9 +2304,9 @@ def handle_notes():
         return jsonify({'error': 'No user selected'}), 401
     folder_id = request.args.get('folder_id')
     folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
-    include_all = _parse_bool(request.args.get('all'))
-    include_hidden = _parse_bool(request.args.get('include_hidden'))
-    archived_only = _parse_bool(request.args.get('archived'))
+    include_all = parse_bool(request.args.get('all'))
+    include_hidden = parse_bool(request.args.get('include_hidden'))
+    archived_only = parse_bool(request.args.get('archived'))
     planner_multi_item_id = request.args.get('planner_multi_item_id')
     planner_multi_line_id = request.args.get('planner_multi_line_id')
     planner_multi_item_id = int(planner_multi_item_id) if planner_multi_item_id and str(planner_multi_item_id).isdigit() else None
@@ -2728,9 +2319,9 @@ def handle_notes():
         data = request.json or {}
         raw_title = (data.get('title') or '').strip()
         content = data.get('content') or ''
-        note_type = _normalize_note_type(data.get('note_type') or data.get('type'))
+        note_type = normalize_note_type(data.get('note_type') or data.get('type'))
         title = raw_title or ('Untitled List' if note_type == 'list' else 'Untitled Note')
-        checkbox_mode = _parse_bool(data.get('checkbox_mode'))
+        checkbox_mode = parse_bool(data.get('checkbox_mode'))
         has_is_listed = 'is_listed' in data
         planner_item_id = data.get('planner_multi_item_id')
         planner_line_id = data.get('planner_multi_line_id')
@@ -2738,7 +2329,7 @@ def handle_notes():
         planner_line_id = int(planner_line_id) if planner_line_id and str(planner_line_id).isdigit() else None
         if planner_item_id and planner_line_id:
             return jsonify({'error': 'Provide either planner_multi_item_id or planner_multi_line_id, not both'}), 400
-        is_listed = _parse_bool(data.get('is_listed'), True)
+        is_listed = parse_bool(data.get('is_listed'), True)
         if not has_is_listed and (planner_item_id or planner_line_id):
             is_listed = False
         todo_item_id = data.get('todo_item_id')
@@ -2831,7 +2422,7 @@ def handle_notes():
     note_payload = []
     for n in notes:
         note_dict = n.to_dict()
-        note_dict['is_linked_note'] = _is_note_linked(n, linked_targets, linked_sources)
+        note_dict['is_linked_note'] = is_note_linked(n, linked_targets, linked_sources)
         # Hide content from protected notes (always locked in list view)
         if n.is_pin_protected:
             note_dict['content'] = ''
@@ -2849,7 +2440,7 @@ def handle_notes():
             previews = preview_map.get(item.note_id)
             if previews is None or len(previews) >= 3:
                 continue
-            label = _build_list_preview_text(item)
+            label = build_list_preview_text(item)
             if label:
                 previews.append(label)
         for payload in note_payload:
@@ -2872,7 +2463,7 @@ def resolve_note_link():
     source_note_id = data.get('source_note_id')
     title = (data.get('title') or '').strip()
     target_note_id = data.get('target_note_id')
-    is_listed = _parse_bool(data.get('is_listed'), True)
+    is_listed = parse_bool(data.get('is_listed'), True)
     folder_id_value = data.get('folder_id')
     folder_id_value = int(folder_id_value) if folder_id_value and str(folder_id_value).isdigit() else None
 
@@ -2976,24 +2567,17 @@ def cleanup_note_content():
         "text": plain_text,
     })
 
-    try:
-        client = get_openai_client()
-        model_name = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": payload},
-            ],
-            max_tokens=1200,
-            temperature=0.2
-        )
-        raw = (resp.choices[0].message.content or '').strip()
-    except Exception as exc:
-        app.logger.warning(f"Note cleanup failed: {exc}")
+    raw = call_chat_text(
+        system_prompt,
+        payload,
+        max_tokens=1200,
+        temperature=0.2,
+        logger=app.logger,
+    )
+    if raw is None:
         return jsonify({'error': 'AI cleanup failed'}), 500
 
-    parsed = try_parse_json(raw)
+    parsed = parse_json_object(raw)
     cleaned_html = ''
     if isinstance(parsed, dict):
         cleaned_html = parsed.get('html') or ''
@@ -3401,7 +2985,7 @@ def vault_documents():
         title = (request.form.get('title') or '').strip()
         if not title or len(files) > 1:
             title = os.path.splitext(original_filename)[0] or 'Untitled'
-        tags = _tags_to_string(request.form.get('tags'))
+        tags = tags_to_string(request.form.get('tags'))
         extension = _vault_sanitize_extension(original_filename)
         prepared.append({
             'file': file,
@@ -3487,7 +3071,7 @@ def vault_document_detail(doc_id):
             return jsonify({'error': 'Title is required'}), 400
         doc.title = title_val
     if 'tags' in data:
-        doc.tags = _tags_to_string(data.get('tags'))
+        doc.tags = tags_to_string(data.get('tags'))
     if 'folder_id' in data:
         folder_id = data.get('folder_id')
         if folder_id in (None, ''):
@@ -3500,7 +3084,7 @@ def vault_document_detail(doc_id):
             DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
             doc.folder_id = folder_id_int
     if 'pinned' in data:
-        pinned = _parse_bool(data.get('pinned'))
+        pinned = parse_bool(data.get('pinned'))
         if pinned and not doc.pinned:
             max_pin = db.session.query(db.func.coalesce(db.func.max(Document.pin_order), 0)).filter(
                 Document.user_id == user.id,
@@ -3759,9 +3343,9 @@ def handle_note(note_id):
         if 'content' in data and note.note_type == 'note':
             note.content = data.get('content', note.content)
         if 'checkbox_mode' in data and note.note_type == 'list':
-            note.checkbox_mode = _parse_bool(data.get('checkbox_mode'))
+            note.checkbox_mode = parse_bool(data.get('checkbox_mode'))
         if 'is_listed' in data:
-            note.is_listed = _parse_bool(data.get('is_listed'), True)
+            note.is_listed = parse_bool(data.get('is_listed'), True)
         note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
         if 'pinned' in data:
             is_pin = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
@@ -3853,7 +3437,7 @@ def handle_note(note_id):
     link_exists = NoteLink.query.filter(
         or_(NoteLink.target_note_id == note.id, NoteLink.source_note_id == note.id)
     ).first() is not None
-    payload['is_linked_note'] = _is_note_linked(note) or link_exists
+    payload['is_linked_note'] = is_note_linked(note) or link_exists
     if note.note_type == 'list':
         payload['items'] = [item.to_dict() for item in note.list_items]
     return jsonify(payload)
@@ -4075,94 +3659,12 @@ def note_list_item_duplicates(note_id):
         NoteListItem.id.asc()
     ).all()
 
-    section_by_id = {}
-    current_section = None
-    for item in items:
-        text_value = (item.text or '').strip()
-        if text_value.startswith(LIST_SECTION_PREFIX):
-            title = text_value[len(LIST_SECTION_PREFIX):].strip()
-            current_section = title or 'Untitled section'
-            section_by_id[item.id] = current_section
-            continue
-        section_by_id[item.id] = current_section
-
-    candidates = []
-    for item in items:
-        if (item.text or '').strip().startswith(LIST_SECTION_PREFIX):
-            continue
-        preview = _build_list_preview_text(item).strip()
-        if not preview:
-            continue
-        candidates.append({
-            'id': item.id,
-            'text': item.text or '',
-            'note': item.note,
-            'link_text': item.link_text,
-            'link_url': item.link_url,
-            'order_index': item.order_index or 0,
-            'preview': preview,
-            'section': section_by_id.get(item.id)
-        })
-
-    if len(candidates) < 2:
-        return jsonify({'groups': [], 'method': 'none', 'threshold': None})
-
-    normalized = [_normalize_similarity_text(item['preview']) for item in candidates]
-    tokens = [_tokenize_similarity(text) for text in normalized]
-
-    embeddings = []
-    for text in normalized:
-        embedding = embed_text(text)
-        if embedding is None:
-            embeddings = None
-            break
-        embeddings.append(embedding)
-
-    if embeddings:
-        threshold = 0.8
-
-        def similarity_fn(i, j):
-            cosine = _cosine_similarity(embeddings[i], embeddings[j])
-            containment = _containment_similarity(tokens[i], tokens[j])
-            substring = _substring_similarity(normalized[i], normalized[j])
-            return max(cosine, containment, substring)
-
-        grouped = _group_duplicates(candidates, similarity_fn, threshold)
-        method = 'embeddings'
-    else:
-        threshold = 0.6
-
-        def similarity_fn(i, j):
-            seq_score = _sequence_similarity(normalized[i], normalized[j])
-            token_score = _jaccard_similarity(tokens[i], tokens[j])
-            containment = _containment_similarity(tokens[i], tokens[j])
-            substring = _substring_similarity(normalized[i], normalized[j])
-            return max(seq_score, token_score, containment, substring)
-
-        grouped = _group_duplicates(candidates, similarity_fn, threshold)
-        method = 'fuzzy'
-
-    groups = []
-    for group in grouped:
-        sorted_group = sorted(group, key=lambda entry: entry['order_index'])
-        groups.append({
-            'representative': sorted_group[0]['preview'],
-            'items': [
-                {
-                    'id': entry['id'],
-                    'text': entry['text'],
-                    'note': entry['note'],
-                    'link_text': entry['link_text'],
-                    'link_url': entry['link_url'],
-                    'order_index': entry['order_index'],
-                    'section': entry.get('section')
-                }
-                for entry in sorted_group
-            ]
-        })
-
-    groups.sort(key=lambda entry: len(entry['items']), reverse=True)
-    return jsonify({'groups': groups, 'method': method, 'threshold': threshold})
+    payload = detect_note_list_duplicates(
+        items=items,
+        section_prefix=LIST_SECTION_PREFIX,
+        embed_text_fn=embed_text,
+    )
+    return jsonify(payload)
 
 
 @app.route('/api/notes/<int:note_id>/list-items/<int:item_id>', methods=['PUT', 'DELETE'])
@@ -4762,7 +4264,7 @@ def get_planner_data():
             previews = preview_map.get(item.note_id)
             if previews is None or len(previews) >= 3:
                 continue
-            label = _build_list_preview_text(item)
+            label = build_list_preview_text(item)
             if label:
                 previews.append(label)
         for payload in planner_note_payload:
@@ -4851,8 +4353,8 @@ def create_planner_simple_item():
     title = (payload.get('title') or '').strip()
     value = (payload.get('value') or '').strip()
     description = (payload.get('description') or '').strip()
-    scheduled_date = _parse_day_value(payload.get('scheduled_date'))
-    tags = _tags_to_string(payload.get('tags'))
+    scheduled_date = parse_day_value(payload.get('scheduled_date'))
+    tags = tags_to_string(payload.get('tags'))
     if not title or not value:
         return jsonify({'error': 'Title and value required'}), 400
 
@@ -4892,9 +4394,9 @@ def update_planner_simple_item(item_id):
     if 'description' in payload:
         item.description = (payload.get('description') or '').strip() or None
     if 'tags' in payload:
-        item.tags = _tags_to_string(payload.get('tags')) or None
+        item.tags = tags_to_string(payload.get('tags')) or None
     if 'scheduled_date' in payload:
-        item.scheduled_date = _parse_day_value(payload.get('scheduled_date'))
+        item.scheduled_date = parse_day_value(payload.get('scheduled_date'))
     if 'folder_id' in payload:
         feed_folder = _ensure_planner_feed_folder(user)
         item.folder_id = feed_folder.id
@@ -5010,7 +4512,7 @@ def create_planner_multi_item():
     folder_id = payload.get('folder_id')
     group_id = payload.get('group_id')
     lines = payload.get('lines') or []
-    scheduled_date = _parse_day_value(payload.get('scheduled_date'))
+    scheduled_date = parse_day_value(payload.get('scheduled_date'))
     if not title or (not folder_id and not group_id):
         return jsonify({'error': 'Title and destination required'}), 400
 
@@ -5070,7 +4572,7 @@ def update_planner_multi_item(item_id):
     if 'title' in payload:
         item.title = (payload.get('title') or '').strip() or item.title
     if 'scheduled_date' in payload:
-        item.scheduled_date = _parse_day_value(payload.get('scheduled_date'))
+        item.scheduled_date = parse_day_value(payload.get('scheduled_date'))
 
     if 'group_id' in payload:
         group_id = payload.get('group_id')
@@ -5140,7 +4642,7 @@ def create_planner_multi_line():
     payload = request.get_json() or {}
     item_id = payload.get('item_id')
     value = (payload.get('value') or '').strip()
-    scheduled_date = _parse_day_value(payload.get('scheduled_date'))
+    scheduled_date = parse_day_value(payload.get('scheduled_date'))
     if not item_id or not value:
         return jsonify({'error': 'Item and value required'}), 400
 
@@ -5185,7 +4687,7 @@ def update_planner_multi_line(line_id):
             line.value = value
             line.line_type = _planner_line_type(value)
     if 'scheduled_date' in payload:
-        line.scheduled_date = _parse_day_value(payload.get('scheduled_date'))
+        line.scheduled_date = parse_day_value(payload.get('scheduled_date'))
     db.session.commit()
     return jsonify(line.to_dict())
 
@@ -5309,14 +4811,6 @@ def feed_to_recall(item_id):
 ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
 ALLOWED_STATUSES = {'not_started', 'in_progress', 'done', 'canceled'}
 
-def _parse_day_value(raw):
-    if isinstance(raw, date):
-        return raw
-    try:
-        return datetime.strptime(str(raw), '%Y-%m-%d').date()
-    except Exception:
-        return None
-
 
 @app.route('/api/calendar/search', methods=['GET'])
 def calendar_search():
@@ -5412,11 +4906,11 @@ def calendar_events():
     if request.method == 'GET' and (request.args.get('start') or request.args.get('end')):
         start_raw = request.args.get('start')
         end_raw = request.args.get('end')
-        start_day = _parse_day_value(start_raw) if start_raw else date.today().replace(day=1)
+        start_day = parse_day_value(start_raw) if start_raw else date.today().replace(day=1)
         if not start_day:
             return jsonify({'error': 'Invalid start date'}), 400
         if end_raw:
-            end_day = _parse_day_value(end_raw)
+            end_day = parse_day_value(end_raw)
             if not end_day:
                 return jsonify({'error': 'Invalid end date'}), 400
         else:
@@ -5602,7 +5096,7 @@ def calendar_events():
 
     if request.method == 'GET':
         day_str = request.args.get('day') or date.today().isoformat()
-        day_obj = _parse_day_value(day_str)
+        day_obj = parse_day_value(day_str)
         if not day_obj:
             return jsonify({'error': 'Invalid day'}), 400
         _ensure_recurring_instances(user.id, day_obj, day_obj)
@@ -5820,7 +5314,7 @@ def calendar_events():
     if not title:
         return jsonify({'error': 'Title is required'}), 400
 
-    day_obj = _parse_day_value(data.get('day') or date.today().isoformat())
+    day_obj = parse_day_value(data.get('day') or date.today().isoformat())
     if not day_obj:
         return jsonify({'error': 'Invalid day'}), 400
 
@@ -5877,8 +5371,8 @@ def calendar_events():
             return jsonify({'error': 'Group not found for that day'}), 404
         resolved_group_id = group_id_int
 
-    start_time = _parse_time_str(data.get('start_time'))
-    end_time = _parse_time_str(data.get('end_time'))
+    start_time = parse_time_str(data.get('start_time'))
+    end_time = parse_time_str(data.get('end_time'))
 
     if linked_item:
         existing = CalendarEvent.query.filter_by(
@@ -6001,7 +5495,7 @@ def create_recurring_calendar_event():
     if not title:
         return jsonify({'error': 'Title is required'}), 400
 
-    start_day = _parse_day_value(data.get('day') or data.get('start_day') or date.today().isoformat())
+    start_day = parse_day_value(data.get('day') or data.get('start_day') or date.today().isoformat())
     if not start_day:
         return jsonify({'error': 'Invalid start day'}), 400
 
@@ -6012,7 +5506,7 @@ def create_recurring_calendar_event():
 
     interval = 1
     interval_unit = None
-    days_of_week = _parse_days_of_week(data.get('days_of_week'))
+    days_of_week = parse_days_of_week(data.get('days_of_week'))
     day_of_month = data.get('day_of_month')
     month_of_year = data.get('month_of_year')
     week_of_month = data.get('week_of_month')
@@ -6090,8 +5584,8 @@ def create_recurring_calendar_event():
     if weekday_of_month is not None and not (0 <= weekday_of_month <= 6):
         return jsonify({'error': 'Invalid weekday of month'}), 400
 
-    start_time = _parse_time_str(data.get('start_time'))
-    end_time = _parse_time_str(data.get('end_time'))
+    start_time = parse_time_str(data.get('start_time'))
+    end_time = parse_time_str(data.get('end_time'))
     reminder_minutes = data.get('reminder_minutes_before')
     try:
         reminder_minutes = int(reminder_minutes) if reminder_minutes is not None else None
@@ -6113,7 +5607,7 @@ def create_recurring_calendar_event():
         title=title,
         description=(data.get('description') or '').strip() or None,
         start_day=start_day,
-        end_day=_parse_day_value(data.get('end_day')) if data.get('end_day') else None,
+        end_day=parse_day_value(data.get('end_day')) if data.get('end_day') else None,
         start_time=start_time,
         end_time=end_time,
         status=status,
@@ -6206,9 +5700,9 @@ def recurring_event_detail(rule_id):
     if 'rollover_enabled' in data:
         rule.rollover_enabled = bool(data.get('rollover_enabled'))
     if 'start_time' in data:
-        rule.start_time = _parse_time_str(data.get('start_time'))
+        rule.start_time = parse_time_str(data.get('start_time'))
     if 'end_time' in data:
-        rule.end_time = _parse_time_str(data.get('end_time'))
+        rule.end_time = parse_time_str(data.get('end_time'))
     if 'reminder_minutes_before' in data:
         try:
             rule.reminder_minutes_before = int(data['reminder_minutes_before']) if data['reminder_minutes_before'] else None
@@ -6218,7 +5712,7 @@ def recurring_event_detail(rule_id):
         start_raw = data.get('day') if 'day' in data else data.get('start_day')
         if not start_raw:
             return jsonify({'error': 'Invalid start day'}), 400
-        start_day = _parse_day_value(start_raw)
+        start_day = parse_day_value(start_raw)
         if not start_day:
             return jsonify({'error': 'Invalid start day'}), 400
         rule.start_day = start_day
@@ -6227,7 +5721,7 @@ def recurring_event_detail(rule_id):
         if not end_raw:
             rule.end_day = None
         else:
-            end_day = _parse_day_value(end_raw)
+            end_day = parse_day_value(end_raw)
             if not end_day:
                 return jsonify({'error': 'Invalid end day'}), 400
             rule.end_day = end_day
@@ -6245,7 +5739,7 @@ def recurring_event_detail(rule_id):
         if unit in {'days', 'weeks', 'months', 'years'}:
             rule.interval_unit = unit
     if 'days_of_week' in data:
-        rule.days_of_week = ','.join(str(d) for d in _parse_days_of_week(data.get('days_of_week'))) or None
+        rule.days_of_week = ','.join(str(d) for d in parse_days_of_week(data.get('days_of_week'))) or None
     if 'day_of_month' in data:
         try:
             dom = int(data['day_of_month']) if data['day_of_month'] else None
@@ -6342,11 +5836,11 @@ def calendar_event_detail(event_id):
     time_changed = False
     if 'start_time' in data:
         old_start = event.start_time
-        event.start_time = _parse_time_str(data.get('start_time'))
+        event.start_time = parse_time_str(data.get('start_time'))
         if old_start != event.start_time:
             time_changed = True
     if 'end_time' in data:
-        event.end_time = _parse_time_str(data.get('end_time'))
+        event.end_time = parse_time_str(data.get('end_time'))
     reminder_changed = False
     if 'reminder_minutes_before' in data:
         old_reminder = event.reminder_minutes_before
@@ -6358,7 +5852,7 @@ def calendar_event_detail(event_id):
             reminder_changed = True
     day_changed = False
     if 'day' in data:
-        new_day = _parse_day_value(data.get('day'))
+        new_day = parse_day_value(data.get('day'))
         if not new_day:
             return jsonify({'error': 'Invalid day'}), 400
         if new_day != event.day:
@@ -6499,7 +5993,7 @@ def reorder_calendar_events():
         return jsonify({'error': 'No user selected'}), 401
     data = request.json or {}
     ids = data.get('ids') or []
-    day_obj = _parse_day_value(data.get('day') or date.today().isoformat())
+    day_obj = parse_day_value(data.get('day') or date.today().isoformat())
     if not ids or not isinstance(ids, list):
         return jsonify({'error': 'ids array required'}), 400
     if not day_obj:
@@ -6540,7 +6034,7 @@ def send_digest_now():
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    day_obj = _parse_day_value(request.json.get('day') if request.json else None) or date.today()
+    day_obj = parse_day_value(request.json.get('day') if request.json else None) or date.today()
     stats = _send_daily_email_digest(target_day=day_obj) or {}
     payload = {'status': 'sent', 'day': day_obj.isoformat()}
     payload.update(stats)
@@ -6900,7 +6394,7 @@ def handle_list(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
-    canonicalize_phase_flags(todo_list)
+    canonicalize_phase_flags(todo_list, commit_callback=db.session.commit)
     
     if request.method == 'DELETE':
         # Delete any child lists linked from this list (for hubs)
@@ -6932,7 +6426,7 @@ def list_items_in_list(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
-    canonicalize_phase_flags(todo_list)
+    canonicalize_phase_flags(todo_list, commit_callback=db.session.commit)
 
     status_filter = request.args.get('status')
     phase_id = request.args.get('phase_id')
@@ -6976,7 +6470,7 @@ def create_item(list_id):
     status = data.get('status', 'not_started')
     is_phase_item = bool(data.get('is_phase')) or status == 'phase'
     due_date_raw = data.get('due_date')
-    due_date = _parse_day_value(due_date_raw) if due_date_raw else None
+    due_date = parse_day_value(due_date_raw) if due_date_raw else None
     allowed_statuses = {'not_started', 'in_progress', 'done'}
     if status not in allowed_statuses:
         status = 'not_started'
@@ -6988,7 +6482,7 @@ def create_item(list_id):
         phase_id = None
         tags_raw = None
     next_order = db.session.query(db.func.coalesce(db.func.max(TodoItem.order_index), 0)).filter_by(list_id=list_id).scalar() + 1
-    tags = _tags_to_string(tags_raw) if todo_list.type != 'light' else None
+    tags = tags_to_string(tags_raw) if todo_list.type != 'light' else None
     new_item = TodoItem(
         list_id=list_id,
         content=content,
@@ -7123,11 +6617,11 @@ def handle_item(item_id):
             if item.list and item.list.type == 'light':
                 item.tags = None
             else:
-                tags_value = _tags_to_string(data.get('tags'))
+                tags_value = tags_to_string(data.get('tags'))
                 item.tags = tags_value if tags_value else None
         if 'due_date' in data:
             due_date_raw = data.get('due_date')
-            item.due_date = _parse_day_value(due_date_raw) if due_date_raw else None
+            item.due_date = parse_day_value(due_date_raw) if due_date_raw else None
             if old_due_date != item.due_date:
                 linked_event = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).first()
                 if linked_event:
@@ -7409,7 +6903,7 @@ def move_destinations(list_id):
     ).all()
     payload = []
     for l in project_lists:
-        canonicalize_phase_flags(l)
+        canonicalize_phase_flags(l, commit_callback=db.session.commit)
         payload.append({
             'id': l.id,
             'title': l.title,
@@ -7425,7 +6919,7 @@ def list_phases(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id, type='list').first_or_404()
-    canonicalize_phase_flags(todo_list)
+    canonicalize_phase_flags(todo_list, commit_callback=db.session.commit)
     phases = [{'id': i.id, 'content': i.content} for i in todo_list.items if is_phase_header(i)]
     return jsonify({'id': todo_list.id, 'title': todo_list.title, 'phases': phases})
 
@@ -7450,7 +6944,7 @@ def hub_children(hub_id):
         if not item.linked_list:
             continue
         child_list = item.linked_list
-        canonicalize_phase_flags(child_list)
+        canonicalize_phase_flags(child_list, commit_callback=db.session.commit)
         entry = {
             'id': child_list.id,
             'title': child_list.title,
@@ -7469,7 +6963,7 @@ def export_list(list_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
-    canonicalize_phase_flags(todo_list)
+    canonicalize_phase_flags(todo_list, commit_callback=db.session.commit)
 
     lines = export_list_outline(todo_list)
     content = '\n'.join(lines)
@@ -7657,7 +7151,7 @@ def bulk_items():
 
     if action == 'add_tag':
         tag_value = data.get('tag') or data.get('tags')
-        tags_to_add = _normalize_tags(tag_value)
+        tags_to_add = normalize_tags(tag_value)
         if not tags_to_add:
             return jsonify({'error': 'tag is required'}), 400
 
@@ -7667,14 +7161,14 @@ def bulk_items():
                 continue
             if item.list and item.list.type == 'light':
                 continue
-            current_tags = _normalize_tags(item.tags)
+            current_tags = normalize_tags(item.tags)
             changed = False
             for tag in tags_to_add:
                 if tag not in current_tags:
                     current_tags.append(tag)
                     changed = True
             if changed:
-                item.tags = _tags_to_string(current_tags)
+                item.tags = tags_to_string(current_tags)
                 updated += 1
 
         db.session.commit()

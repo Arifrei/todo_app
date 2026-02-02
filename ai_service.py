@@ -1,11 +1,11 @@
 import json
 import os
-import threading
 from datetime import datetime, date, time
 from typing import Any, Dict, List, Optional, Sequence
 
 from flask import current_app
 from ai_embeddings import embed_text, get_openai_client
+from background_jobs import start_app_context_job
 from embedding_service import (
     ENTITY_BOOKMARK,
     ENTITY_CALENDAR,
@@ -19,6 +19,8 @@ from embedding_service import (
 )
 from models import db, TodoList, TodoItem, CalendarEvent, RecallItem, BookmarkItem
 from ai_context import get_all_ai_context
+from phase_utils import canonicalize_phase_flags, is_phase_header
+from services.ai_gateway import call_chat_json
 
 
 ALLOWED_STATUSES = {"not_started", "in_progress", "done"}
@@ -44,34 +46,19 @@ def _start_embedding_job(user_id: int, entity_type: str, entity_id: int) -> None
     except Exception:
         return
 
-    def _run():
-        with app.app_context():
-            try:
-                refresh_embedding_for_entity(user_id, entity_type, entity_id)
-            except Exception as exc:
-                app.logger.warning(
-                    "Embedding refresh failed for %s:%s user=%s (%s)",
-                    entity_type,
-                    entity_id,
-                    user_id,
-                    exc,
-                )
+    def _refresh_single_embedding():
+        refresh_embedding_for_entity(user_id, entity_type, entity_id)
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
+    def _on_error(exc):
+        app.logger.warning(
+            "Embedding refresh failed for %s:%s user=%s (%s)",
+            entity_type,
+            entity_id,
+            user_id,
+            exc,
+        )
 
-
-def is_phase_header(item: TodoItem) -> bool:
-    return getattr(item, "is_phase", False) or getattr(item, "status", None) == "phase"
-
-
-def canonicalize_phase_flags(items: List[TodoItem]) -> None:
-    """Normalize legacy phase markers in-place (no commit)."""
-    for item in items:
-        if item.status == "phase" and not item.is_phase:
-            item.is_phase = True
-            item.status = "not_started"
-
+    start_app_context_job(app, _refresh_single_embedding, on_error=_on_error)
 
 def _list_lists(user_id: int, list_type: Optional[str] = None, search: Optional[str] = None) -> List[Dict[str, Any]]:
     query = TodoList.query.filter_by(user_id=user_id)
@@ -127,10 +114,6 @@ def _calendar_event_dict(item: CalendarEvent, similarity: Optional[float] = None
 def _rerank_with_ai(query: str, candidates: Sequence[Dict[str, Any]], limit: int) -> Optional[List[int]]:
     if not query or not candidates:
         return None
-    try:
-        client = get_openai_client()
-    except Exception:
-        return None
 
     system_prompt = (
         "You rank search candidates to best answer a user query. "
@@ -142,23 +125,14 @@ def _rerank_with_ai(query: str, candidates: Sequence[Dict[str, Any]], limit: int
         "limit": limit,
         "candidates": candidates,
     }
-    try:
-        response = client.chat.completions.create(
-            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload)},
-            ],
-            temperature=0.1,
-            max_tokens=300,
-        )
-    except Exception:
-        return None
-
-    raw = response.choices[0].message.content or ""
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
+    data = call_chat_json(
+        system_prompt,
+        json.dumps(payload),
+        temperature=0.1,
+        max_tokens=300,
+        retries=1,
+    )
+    if not isinstance(data, dict):
         return None
     ids = data.get("ids")
     if not isinstance(ids, list):
