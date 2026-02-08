@@ -2,7 +2,7 @@ import json
 import os
 import re
 
-from ai_embeddings import get_openai_client
+from backend.ai_embeddings import get_openai_client
 
 
 def parse_json_object(response_text):
@@ -14,13 +14,39 @@ def parse_json_object(response_text):
     except json.JSONDecodeError:
         pass
 
-    match = re.search(r"\{[^{}]*\}", response_text)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
-        return None
+    # Robust fallback: find the first balanced JSON object, respecting
+    # string literals and escapes so braces inside strings don't break parsing.
+    starts = [m.start() for m in re.finditer(r"\{", response_text)]
+    for start in starts:
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start, len(response_text)):
+            ch = response_text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+                continue
+            if ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = response_text[start:idx + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+    return None
 
 
 def call_chat_text(

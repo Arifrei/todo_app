@@ -4,9 +4,9 @@ from datetime import datetime, date, time
 from typing import Any, Dict, List, Optional, Sequence
 
 from flask import current_app
-from ai_embeddings import embed_text, get_openai_client
-from background_jobs import start_app_context_job
-from embedding_service import (
+from .ai_embeddings import embed_text, get_openai_client
+from .background_jobs import start_app_context_job
+from .embedding_service import (
     ENTITY_BOOKMARK,
     ENTITY_CALENDAR,
     ENTITY_RECALL,
@@ -18,8 +18,8 @@ from embedding_service import (
     score_embeddings,
 )
 from models import db, TodoList, TodoItem, CalendarEvent, RecallItem, BookmarkItem
-from ai_context import get_all_ai_context
-from phase_utils import canonicalize_phase_flags, is_phase_header
+from .ai_context import get_all_ai_context
+from .phase_utils import canonicalize_phase_flags, is_phase_header
 from services.ai_gateway import call_chat_json
 
 

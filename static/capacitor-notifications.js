@@ -4,6 +4,10 @@
  */
 
 // Check if running in Capacitor native app
+const notifyDebugLog = (...args) => {
+    if (window.DEBUG_NOTIFICATIONS === true) console.log(...args);
+};
+
 function isNativeApp() {
     return window.Capacitor && window.Capacitor.isNativePlatform();
 }
@@ -16,7 +20,7 @@ const NotificationService = {
      */
     async initialize() {
         if (isNativeApp()) {
-            console.log('Running in native app - using Capacitor Local Notifications');
+            notifyDebugLog('Running in native app - using Capacitor Local Notifications');
             try {
                 const { LocalNotifications } = window.Capacitor.Plugins;
 
@@ -51,13 +55,13 @@ const NotificationService = {
 
                 // Listen for notification actions (when user taps notification or action buttons)
                 await LocalNotifications.addListener('localNotificationActionPerformed', async (actionData) => {
-                    console.log('Notification action performed:', JSON.stringify(actionData));
+                    notifyDebugLog('Notification action performed:', JSON.stringify(actionData));
 
                     const action = actionData.actionId;
                     // Check both camelCase and snake_case for compatibility
                     const eventId = actionData.notification.extra?.event_id || actionData.notification.extra?.eventId;
 
-                    console.log('Action:', action, 'EventId:', eventId);
+                    notifyDebugLog('Action:', action, 'EventId:', eventId);
 
                     if (action === 'snooze' && eventId) {
                         // Call snooze API
@@ -65,27 +69,27 @@ const NotificationService = {
                             // For native apps, fetch uses the configured server URL automatically
                             const apiUrl = `/api/calendar/events/${eventId}/snooze`;
 
-                            console.log('Calling snooze API:', apiUrl);
+                            notifyDebugLog('Calling snooze API:', apiUrl);
                             const response = await fetch(apiUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({})
                             });
 
-                            console.log('Snooze response:', response.status, response.ok);
+                            notifyDebugLog('Snooze response:', response.status, response.ok);
 
                             if (response.ok) {
                                 const data = await response.json();
-                                console.log('Snooze API response data:', JSON.stringify(data));
+                                notifyDebugLog('Snooze API response data:', JSON.stringify(data));
                                 const minutes = data.snooze_minutes || 10;
                                 const snoozeUntil = new Date(data.snooze_until);
-                                console.log('Snoozed for', minutes, 'minutes until', snoozeUntil);
+                                notifyDebugLog('Snoozed for', minutes, 'minutes until', snoozeUntil);
 
                                 const { LocalNotifications } = window.Capacitor.Plugins;
 
                                 try {
                                     // Schedule the snoozed reminder
-                                    console.log('Scheduling snoozed reminder with:', {
+                                    notifyDebugLog('Scheduling snoozed reminder with:', {
                                         id: eventId,
                                         title: actionData.notification.title,
                                         at: snoozeUntil
@@ -103,10 +107,10 @@ const NotificationService = {
                                             actionTypeId: 'REMINDER_ACTIONS'
                                         }]
                                     });
-                                    console.log('Snoozed reminder scheduled successfully');
+                                    notifyDebugLog('Snoozed reminder scheduled successfully');
 
                                     // Show confirmation
-                                    console.log('Scheduling confirmation notification');
+                                    notifyDebugLog('Scheduling confirmation notification');
                                     await LocalNotifications.schedule({
                                         notifications: [{
                                             id: Date.now(),
@@ -116,9 +120,9 @@ const NotificationService = {
                                             channelId: 'taskflow_general'
                                         }]
                                     });
-                                    console.log('Confirmation notification scheduled');
+                                    notifyDebugLog('Confirmation notification scheduled');
 
-                                    console.log('All notifications scheduled for snooze');
+                                    notifyDebugLog('All notifications scheduled for snooze');
                                 } catch (notifError) {
                                     console.error('Error scheduling notifications:', notifError);
                                 }
@@ -133,12 +137,12 @@ const NotificationService = {
                         try {
                             const apiUrl = `/api/calendar/events/${eventId}/dismiss`;
 
-                            console.log('Calling dismiss API:', apiUrl);
+                            notifyDebugLog('Calling dismiss API:', apiUrl);
                             const response = await fetch(apiUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' }
                             });
-                            console.log('Dismiss response:', response.status, response.ok);
+                            notifyDebugLog('Dismiss response:', response.status, response.ok);
                         } catch (error) {
                             console.error('Failed to dismiss reminder:', error);
                         }
@@ -150,14 +154,14 @@ const NotificationService = {
                     }
                 });
 
-                console.log('Native notifications initialized successfully');
+                notifyDebugLog('Native notifications initialized successfully');
                 return true;
             } catch (error) {
                 console.error('Failed to initialize native notifications:', error);
                 return false;
             }
         } else {
-            console.log('Running in web browser - using Web Notifications API');
+            notifyDebugLog('Running in web browser - using Web Notifications API');
             // Use existing web notification system
             if ('Notification' in window) {
                 const permission = await Notification.requestPermission();
@@ -194,7 +198,7 @@ const NotificationService = {
                     }]
                 });
 
-                console.log('Native notification scheduled:', options.title, 'at', options.at);
+                notifyDebugLog('Native notification scheduled:', options.title, 'at', options.at);
                 return true;
             } catch (error) {
                 console.error('Failed to schedule native notification:', error);
@@ -272,7 +276,7 @@ const NotificationService = {
             try {
                 const { LocalNotifications } = window.Capacitor.Plugins;
                 await LocalNotifications.cancel({ notifications: [{ id }] });
-                console.log('Cancelled notification:', id);
+                notifyDebugLog('Cancelled notification:', id);
                 return true;
             } catch (error) {
                 console.error('Failed to cancel notification:', error);
@@ -299,7 +303,7 @@ const NotificationService = {
                     await LocalNotifications.cancel({
                         notifications: pending.notifications
                     });
-                    console.log('Cancelled all notifications:', pending.notifications.length);
+                    notifyDebugLog('Cancelled all notifications:', pending.notifications.length);
                 }
                 return true;
             } catch (error) {
@@ -354,7 +358,7 @@ const NotificationService = {
                     vibration: true
                 });
 
-                console.log('Notification channels created');
+                notifyDebugLog('Notification channels created');
                 return true;
             } catch (error) {
                 console.error('Failed to create notification channels:', error);
@@ -395,7 +399,7 @@ async function syncPendingReminders() {
         const data = await response.json();
         const reminders = data.reminders || [];
 
-        console.log(`Found ${reminders.length} pending reminders to schedule`);
+        notifyDebugLog(`Found ${reminders.length} pending reminders to schedule`);
 
         for (const reminder of reminders) {
             try {
@@ -416,7 +420,7 @@ async function syncPendingReminders() {
                         }
                     });
 
-                    console.log(`Scheduled reminder for ${reminder.title} at ${remindAt}`);
+                    notifyDebugLog(`Scheduled reminder for ${reminder.title} at ${remindAt}`);
                 }
             } catch (error) {
                 console.error('Failed to schedule reminder:', reminder, error);
@@ -439,7 +443,7 @@ if (isNativeApp()) {
     if (window.Capacitor?.Plugins?.App) {
         window.Capacitor.Plugins.App.addListener('appStateChange', (state) => {
             if (state.isActive) {
-                console.log('App became active, syncing reminders');
+                notifyDebugLog('App became active, syncing reminders');
                 syncPendingReminders();
             }
         });

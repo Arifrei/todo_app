@@ -101,7 +101,7 @@
                         <button class="calendar-sort-option" data-sort="manual">Manual</button>
                     </div>
                 </div>
-                <button class="btn btn-secondary btn-icon-text" id="calendar-back-month">
+                <button class="btn btn-secondary btn-icon-text" id="calendar-back-month" type="button" aria-label="Back to month view">
                     <i class="fa-solid fa-calendar-days"></i><span class="btn-text">Back</span>
                 </button>
                 <div class="calendar-actions-menu">
@@ -140,7 +140,7 @@
                     <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
                     <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
                 </div>
-                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help">
+                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help" aria-label="Show syntax help">
                     <i class="fa-solid fa-circle-question"></i>
                 </button>
                 <button class="btn-icon calendar-quick-toggle" id="calendar-quick-toggle" aria-label="Minimize quick add" title="Minimize quick add">
@@ -153,17 +153,15 @@
         </section>
 
         <section class="calendar-board card">
-            <div id="calendar-bulk-bar" class="calendar-bulk-bar is-hidden">
-                <div class="calendar-bulk-meta">
-                    <label style="display:flex; align-items:center; gap:0.35rem; cursor:pointer;">
-                        <input type="checkbox" id="calendar-select-all" style="width:18px; height:18px;">
-                        <span style="font-weight:600;">Select all</span>
-                    </label>
-                    <span id="calendar-bulk-count">0 selected</span>
-                    <button class="calendar-bulk-clear" id="calendar-bulk-clear" type="button">Clear</button>
+            <div id="calendar-bulk-bar" class="bulk-actions u-hidden">
+                <div class="bulk-left">
+                    <input type="checkbox" id="calendar-select-all">
+                    <label for="calendar-select-all" class="u-cursor-pointer">Select all</label>
+                    <span id="calendar-bulk-count" class="u-text-muted u-ml-05">0 selected</span>
+                    <button class="btn btn-secondary btn-small u-ml-05" id="calendar-bulk-clear" type="button">Clear</button>
                 </div>
-                <div class="calendar-bulk-actions-row">
-                    <button class="btn-icon" id="calendar-bulk-rollover" type="button" title="Toggle rollover" aria-label="Toggle rollover">
+                <div class="bulk-buttons">
+                    <button class="btn btn-secondary" id="calendar-bulk-rollover" type="button" title="Toggle rollover">
                         <i class="fa-solid fa-rotate"></i>
                     </button>
                     <div class="bulk-menu calendar-bulk-menu">
@@ -188,8 +186,8 @@
                             </button>
                         </div>
                     </div>
-                    <button class="btn btn-danger btn-small" id="calendar-bulk-delete" type="button">
-                        <i class="fa-solid fa-trash"></i><span class="btn-text">Delete</span>
+                    <button class="btn-icon delete" id="calendar-bulk-delete" type="button" title="Delete selected" aria-label="Delete selected calendar items">
+                        <i class="fa-solid fa-trash"></i>
                     </button>
                 </div>
             </div>
@@ -214,7 +212,7 @@
     <div class="modal" id="calendar-time-modal">
         <div class="modal-content">
             <h2>Edit Time</h2>
-            <p id="calendar-time-title" style="color: var(--text-muted); margin-top: -0.25rem;"></p>
+            <p id="calendar-time-title" class="u-text-muted u-mt-neg-025"></p>
             <div class="form-group">
                 <label>Start time</label>
                 <input type="text" id="calendar-time-start" class="form-control" placeholder="e.g., 3:30pm or 15:30">
@@ -256,7 +254,7 @@
             <!-- Form View (Add/Edit) -->
             <div id="recurring-form-view" class="is-hidden">
                 <div class="recurring-header">
-                    <button class="btn-icon" id="recurring-back-btn" title="Back to list">
+                    <button class="btn-icon" id="recurring-back-btn" title="Back to list" aria-label="Back to recurring list">
                         <i class="fa-solid fa-arrow-left"></i>
                     </button>
                     <h2 id="recurring-form-title">Add Recurring Item</h2>
@@ -391,7 +389,7 @@
     <div class="modal" id="link-note-modal">
         <div class="modal-content">
             <h2>Link Note</h2>
-            <p id="link-note-task-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+            <p id="link-note-task-label" class="u-text-muted u-mt-neg-025"></p>
             <div class="form-group">
                 <label>Choose an existing note</label>
                 <div id="link-note-list" class="note-chooser"></div>
@@ -401,15 +399,15 @@
                 <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
             </div>
             <div class="modal-actions">
-                <button class="btn" onclick="closeLinkNoteModal()">
+                <button class="btn" data-onclick="closeLinkNoteModal()">
                     <i class="fa-solid fa-xmark note-action-icon"></i>
                     <span class="note-action-text">Cancel</span>
                 </button>
-                <button class="btn btn-secondary" onclick="createAndLinkNote()">
+                <button class="btn btn-secondary" data-onclick="createAndLinkNote()">
                     <i class="fa-solid fa-plus note-action-icon"></i>
                     <span class="note-action-text">Create & Link</span>
                 </button>
-                <button class="btn btn-primary" onclick="saveLinkedNote()">
+                <button class="btn btn-primary" data-onclick="saveLinkedNote()">
                     <i class="fa-solid fa-link note-action-icon"></i>
                     <span class="note-action-text">Attach Selected</span>
                 </button>
@@ -422,7 +420,7 @@
     <div class="modal" id="calendar-item-note-modal">
         <div class="modal-content">
             <h2 id="calendar-item-note-title">Item Note</h2>
-            <p id="calendar-item-note-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+            <p id="calendar-item-note-label" class="u-text-muted u-mt-neg-025"></p>
             <div id="calendar-item-note-view" class="calendar-item-note-view"></div>
             <div id="calendar-item-note-editor" class="form-group is-hidden">
                 <label for="calendar-item-note-input">Note</label>
@@ -448,3 +446,14 @@
     window.CALENDAR_ITEM_NOTE_MAX_CHARS = {{ item_note_max_chars or 0 }};
 </script>
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='calendar.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='app/calendar.js', v='compat-20260209') }}" defer></script>
+{% endblock %}
+
+
+
+

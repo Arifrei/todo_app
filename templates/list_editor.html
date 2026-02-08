@@ -7,7 +7,7 @@
             <h1>List</h1>
         </div>
         <div class="notes-header-actions">
-            <div class="list-search" id="list-search" style="display:none;">
+            <div class="list-search u-hidden" id="list-search">
                 <i class="fa-solid fa-magnifying-glass"></i>
                 <input id="list-search-input" type="text" placeholder="Search list..." autocomplete="off">
                 <button class="btn btn-icon-only" id="list-search-clear" aria-label="Clear search" title="Clear search">
@@ -20,7 +20,7 @@
             <button class="btn btn-icon-only" id="list-notes-btn" aria-label="Notes" title="Notes">
                 <i class="fa-solid fa-note-sticky"></i>
             </button>
-            <button class="btn btn-primary btn-secondary" id="list-save-btn">
+            <button class="btn btn-primary" id="list-save-btn">
                 <i class="fa-solid fa-floppy-disk"></i> Save
             </button>
             <div class="dropdown notes-actions-dropdown">
@@ -74,13 +74,17 @@
         </div>
     </section>
 
-    <div class="list-bulk-bar" id="list-bulk-bar">
-        <div class="list-bulk-left">
-            <span class="list-bulk-count" id="list-bulk-count">0 selected</span>
+    <!-- Bulk Action Bar -->
+    <div class="bulk-actions list-bulk-bar u-hidden" id="list-bulk-bar">
+        <div class="bulk-left">
+            <input type="checkbox" id="list-select-all">
+            <label for="list-select-all" class="u-cursor-pointer">Select all</label>
+            <span id="list-bulk-count" class="u-text-muted u-ml-05">0 selected</span>
+            <button class="btn btn-secondary btn-small u-ml-05" type="button" id="list-bulk-clear">Clear</button>
         </div>
-        <div class="list-bulk-actions">
+        <div class="bulk-buttons">
             <div class="list-bulk-dropdown">
-                <button class="btn btn-secondary btn-icon" id="list-bulk-more-toggle" title="Bulk actions">
+                <button class="btn btn-secondary btn-icon" id="list-bulk-more-toggle" title="More actions" aria-label="More bulk actions" type="button">
                     <i class="fa-solid fa-ellipsis"></i>
                 </button>
                 <div class="list-bulk-menu" id="list-bulk-more-menu">
@@ -92,11 +96,11 @@
                     </button>
                 </div>
             </div>
-            <button class="btn btn-danger btn-icon" id="list-bulk-delete-btn" title="Delete selected" aria-label="Delete selected">
+            <button class="btn-icon delete" type="button" id="list-bulk-delete-btn" title="Delete selected" aria-label="Delete selected list items">
                 <i class="fa-solid fa-trash"></i>
             </button>
-            <button class="btn btn-ghost btn-icon" id="list-bulk-done-btn" title="Done" aria-label="Done">
-                <i class="fa-solid fa-check"></i>
+            <button class="btn btn-secondary btn-small" type="button" id="list-bulk-done-btn" title="Done">
+                Done
             </button>
         </div>
     </div>
@@ -118,7 +122,7 @@
     <div class="modal" id="list-duplicates-modal">
         <div class="modal-content list-duplicates-content">
             <h2>Possible duplicates</h2>
-            <p id="list-duplicates-subtitle" style="color: var(--text-muted); margin: 0.5rem 0 1rem 0;">Scanning your list...</p>
+            <p id="list-duplicates-subtitle" class="u-muted-modal-msg">Scanning your list...</p>
             <div class="list-duplicates-list" id="list-duplicates-list"></div>
             <div class="modal-actions">
                 <button class="btn btn-danger" id="list-duplicates-delete-selected-btn">Delete selected</button>
@@ -129,7 +133,7 @@
 
     <!-- Linked Note Modal -->
     <div class="modal" id="note-link-modal">
-        <div class="modal-content" style="max-width: 520px;">
+        <div class="modal-content u-max-w-520">
             <h2 id="note-link-modal-title">Link note</h2>
             <p class="note-link-subtitle" id="note-link-modal-subtitle">Choose an existing note or create a new one.</p>
             <div id="note-link-match-list" class="note-link-list"></div>
@@ -148,3 +152,14 @@
     </div>
 </div>
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/detail.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/editor.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/list-editor.js', v='compat-20260210') }}" defer></script>
+{% endblock %}
+
+
+
+

@@ -1,7 +1,6 @@
 blinker==1.9.0
 click==8.3.1
 colorama==0.4.6
-dotenv==0.9.9
 Flask==3.0.0
 Flask-SQLAlchemy==3.1.1
 Flask-Login==0.6.3
@@ -22,3 +21,4 @@ pytz==2024.1
 APScheduler==3.10.4
 requests==2.32.3
 youtube-transcript-api>=0.6.0
+pytest>=8.0.0

@@ -1,4 +1,4 @@
-from text_helpers import (
+from backend.text_helpers import (
     _containment_similarity,
     _cosine_similarity,
     _group_duplicates,

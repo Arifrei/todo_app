@@ -4,13 +4,13 @@
 <div class="page-header">
     <div>
         <h1>Settings</h1>
-        <p style="color: var(--text-muted); margin: 0;">Notification preferences (UI scaffold).</p>
+        <p class="u-text-muted u-m-0">Notification preferences (UI scaffold).</p>
     </div>
 </div>
 
-<div class="card" style="max-width: 800px;">
+<div class="card u-max-w-800">
     <h3>Notification Preferences</h3>
-    <p style="color: var(--text-muted); margin-top: 0;">Choose where and what to notify.</p>
+    <p class="u-text-muted u-mt-0">Choose where and what to notify.</p>
     <div class="settings-grid">
         <label class="setting-row">
             <div>
@@ -52,17 +52,17 @@
                 <div class="setting-title">Digest hour</div>
                 <div class="setting-sub">Local hour to send the daily digest.</div>
             </div>
-            <input type="number" id="pref-digest-hour" min="0" max="23" style="width:80px;">
+            <input type="number" id="pref-digest-hour" min="0" max="23" class="u-w-80">
         </label>
         <label class="setting-row">
             <div>
                 <div class="setting-title">Snooze duration</div>
                 <div class="setting-sub">Default minutes to snooze reminders.</div>
             </div>
-            <input type="number" id="pref-snooze-minutes" min="1" max="120" style="width:80px;">
+            <input type="number" id="pref-snooze-minutes" min="1" max="120" class="u-w-80">
         </label>
     </div>
-    <div style="margin-top: 1rem; display: flex; gap: 0.75rem;">
+    <div class="u-mt-1 u-flex-row-gap-075">
         <button class="btn btn-secondary btn-small" id="pref-save-btn">
             <i class="fa-solid fa-floppy-disk"></i> Save
         </button>
@@ -72,45 +72,52 @@
     </div>
 </div>
 
-<div class="card" style="max-width: 800px; margin-top: 1.5rem;">
+<div class="card u-max-w-800 u-mt-15">
     <h3>Account</h3>
-    <p style="color: var(--text-muted); margin-top: 0;">Update your username or PIN.</p>
+    <p class="u-text-muted u-mt-0">Update your username or PIN.</p>
     <div class="settings-grid">
         <label class="setting-row">
             <div>
                 <div class="setting-title">Username</div>
                 <div class="setting-sub">Visible on the sidebar.</div>
             </div>
-            <input type="text" id="account-username" class="form-control" style="max-width: 240px;">
+            <input type="text" id="account-username" class="form-control u-max-w-240">
         </label>
         <label class="setting-row">
             <div>
                 <div class="setting-title">Current PIN</div>
                 <div class="setting-sub">Required to save changes.</div>
             </div>
-            <input type="password" id="account-current-pin" class="form-control" maxlength="4" inputmode="numeric" pattern="[0-9]*" style="max-width: 140px;">
+            <input type="password" id="account-current-pin" class="form-control u-max-w-140" maxlength="4" inputmode="numeric" pattern="[0-9]*">
         </label>
         <label class="setting-row">
             <div>
                 <div class="setting-title">New PIN</div>
                 <div class="setting-sub">Leave blank to keep your existing PIN.</div>
             </div>
-            <input type="password" id="account-new-pin" class="form-control" maxlength="4" inputmode="numeric" pattern="[0-9]*" style="max-width: 140px;">
+            <input type="password" id="account-new-pin" class="form-control u-max-w-140" maxlength="4" inputmode="numeric" pattern="[0-9]*">
         </label>
         <label class="setting-row">
             <div>
                 <div class="setting-title">Confirm PIN</div>
                 <div class="setting-sub">Repeat the new PIN.</div>
             </div>
-            <input type="password" id="account-confirm-pin" class="form-control" maxlength="4" inputmode="numeric" pattern="[0-9]*" style="max-width: 140px;">
+            <input type="password" id="account-confirm-pin" class="form-control u-max-w-140" maxlength="4" inputmode="numeric" pattern="[0-9]*">
         </label>
     </div>
-    <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center;">
+    <div class="u-mt-1 u-flex-row-gap-075 u-align-center">
         <button class="btn btn-secondary btn-small" id="account-save-btn">
             <i class="fa-solid fa-floppy-disk"></i> Save
         </button>
-        <span id="account-save-status" style="color: var(--text-muted);"></span>
+        <span id="account-save-status" class="u-text-muted"></span>
     </div>
 </div>
-<script src="{{ url_for('static', filename='settings.js') }}"></script>
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='settings.js') }}" defer></script>
+{% endblock %}
+
+
+
+

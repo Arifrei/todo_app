@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('[push] settings script loaded');
     const prefsInputs = {
         in_app_enabled: document.getElementById('pref-in-app'),
         email_enabled: document.getElementById('pref-email'),
@@ -41,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function savePrefs() {
+    async function savePrefs(showSuccess = false) {
         const payload = {
             in_app_enabled: prefsInputs.in_app_enabled?.checked,
             email_enabled: prefsInputs.email_enabled?.checked,
@@ -52,13 +51,21 @@ document.addEventListener('DOMContentLoaded', () => {
             default_snooze_minutes: prefsInputs.default_snooze_minutes?.value ? parseInt(prefsInputs.default_snooze_minutes.value, 10) : undefined,
         };
         try {
-            await fetch('/api/notifications/settings', {
+            const res = await fetch('/api/notifications/settings', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || 'Failed to save notification preferences');
+            }
+            if (showSuccess) {
+                showToast('Notification preferences saved', 'success', 1800);
+            }
         } catch (e) {
             console.error('Error saving preferences', e);
+            showToast('Could not save notification preferences', 'error', 2200);
         }
     }
 
@@ -149,17 +156,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function subscribePush() {
-        console.log('[push] subscribePush start');
         const vapidKey = window.VAPID_PUBLIC_KEY || '';
         if (!vapidKey) throw new Error('VAPID public key missing');
         const reg = await ensureServiceWorkerRegistered();
         if (!reg) throw new Error('Service worker not available');
         const existing = await reg.pushManager.getSubscription();
         if (existing) {
-            console.log('[push] existing subscription found');
             return existing;
         }
-        console.log('[push] subscribing with VAPID key', vapidKey.slice(0, 8) + '...');
         let sub = null;
         try {
             sub = await reg.pushManager.subscribe({
@@ -170,7 +174,6 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('[push] subscribe error', err);
             throw err;
         }
-        console.log('[push] new subscription created', sub);
         return sub;
     }
 
@@ -192,7 +195,6 @@ document.addEventListener('DOMContentLoaded', () => {
     async function saveSubscription(sub) {
         if (!sub) return;
         const payload = { subscription: sub.toJSON ? sub.toJSON() : sub };
-        console.log('[push] saving subscription to server', payload);
         const res = await fetch('/api/push/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -202,12 +204,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const txt = await res.text();
             throw new Error(`Subscribe failed: ${res.status} ${txt}`);
         }
-        console.log('[push] subscription stored on server', res.status);
     }
 
     async function sendTest() {
         try {
-            await fetch('/api/notifications', {
+            const res = await fetch('/api/notifications', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -217,27 +218,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     channel: 'push'
                 })
             });
+            if (!res.ok) {
+                throw new Error('Failed to send test notification');
+            }
             await loadPrefs();
             window.dispatchEvent(new Event('notifications:refresh'));
+            showToast('Test notification sent', 'success', 1800);
         } catch (e) {
             console.error('Error sending test', e);
+            showToast('Could not send test notification', 'error', 2200);
         }
     }
 
     async function ensurePushSubscribed() {
         try {
-            console.log('[push] ensurePushSubscribed start');
             const sub = await subscribePush();
             await saveSubscription(sub);
-            const serverSubs = await fetch('/api/push/subscriptions').then(r => r.json());
-            console.log('[push] server subscriptions after save', serverSubs);
+            await fetch('/api/push/subscriptions');
         } catch (e) {
             console.error('Push subscription failed', e);
+            showToast('Push permission or subscription failed', 'error', 2500);
         }
     }
 
     const saveBtn = document.getElementById('pref-save-btn');
-    if (saveBtn) saveBtn.addEventListener('click', savePrefs);
+    if (saveBtn) saveBtn.addEventListener('click', () => savePrefs(true));
     const testBtn = document.getElementById('pref-test-btn');
     if (testBtn) testBtn.addEventListener('click', sendTest);
     if (accountInputs.saveBtn) accountInputs.saveBtn.addEventListener('click', saveAccount);
@@ -246,19 +251,16 @@ document.addEventListener('DOMContentLoaded', () => {
     Object.entries(prefsInputs).forEach(([key, input]) => {
         if (!input) return;
         input.addEventListener('change', async () => {
-            console.log('[push] change detected', key, input.checked);
             if (key === 'push_enabled') {
                 if (input.checked) {
                     try {
                         await ensurePushSubscribed();
-                        console.log('[push] push toggle save starting');
                     } catch (e) {
                         console.error('Push subscription failed', e);
                         input.checked = false;
                     }
                 } else {
                     await unsubscribePush();
-                    console.log('[push] push toggle save starting (off)');
                 }
             }
             scheduleSave();

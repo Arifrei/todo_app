@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from ai_embeddings import embed_text
+from .ai_embeddings import embed_text
 from models import (
     db,
     BookmarkItem,

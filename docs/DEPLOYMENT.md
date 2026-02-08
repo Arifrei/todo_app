@@ -15,10 +15,10 @@ The app is now configured to connect to your VPS at `http://51.81.32.252:8003`
 **Build the APK:**
 ```bash
 # Windows
-build-apk.bat
+tools/build-apk.bat
 
 # Linux/Mac
-./build-apk.sh
+./tools/build-apk.sh
 ```
 
 This creates `downloads/taskflow.apk`
@@ -95,7 +95,7 @@ When you change:
 **Deploy:**
 ```bash
 # 1. Build new APK
-build-apk.bat  # or ./build-apk.sh
+tools/build-apk.bat  # or ./tools/build-apk.sh
 
 # 2. Upload to VPS
 scp downloads/taskflow.apk user@51.81.32.252:/path/to/todo_app/downloads/

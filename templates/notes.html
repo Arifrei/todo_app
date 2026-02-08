@@ -41,10 +41,31 @@
         </div>
     </header>
 
+    <!-- Bulk Action Bar -->
+    <div class="bulk-actions u-hidden" id="notes-bulk-actions">
+        <div class="bulk-left">
+            <input type="checkbox" id="notes-select-all">
+            <label for="notes-select-all" class="u-cursor-pointer">Select all</label>
+            <span id="notes-bulk-count" class="u-text-muted u-ml-05"></span>
+            <button class="btn btn-secondary btn-small u-ml-05" type="button" id="notes-bulk-clear">Clear</button>
+        </div>
+        <div class="bulk-buttons">
+            <button class="btn btn-secondary" type="button" id="notes-bulk-pin">
+                <i class="fa-solid fa-thumbtack"></i> Pin
+            </button>
+            <button class="btn btn-secondary" type="button" id="notes-bulk-move">
+                <i class="fa-solid fa-folder"></i> Move
+            </button>
+            <button class="btn-icon delete" type="button" id="notes-bulk-delete" title="Delete selected" aria-label="Delete selected notes">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+    </div>
+
     <div class="notes-unified-list" id="notes-unified-list">
         <!-- Rendered dynamically by JS -->
     </div>
-    <div class="notes-empty-state" id="notes-empty-state" style="display: none;">
+    <div class="notes-empty-state u-hidden" id="notes-empty-state">
         <i class="fa-solid fa-note-sticky"></i>
         <p>No notes yet</p>
         <span>Tap + to create one</span>
@@ -55,13 +76,12 @@
 <div class="modal" id="note-list-modal">
     <div class="modal-content">
         <h2>New List</h2>
-        <br>
         <div class="form-group">
             <label>Title</label>
             <input type="text" id="note-list-title" class="form-control" placeholder="List title">
         </div>
         <div class="form-group">
-            <label style="display: flex; align-items: center; gap: 0.6rem;">
+            <label class="u-flex-align-gap-06">
                 <input type="checkbox" id="note-list-checkbox-toggle">
                 <span>Enable checkboxes</span>
             </label>
@@ -73,8 +93,8 @@
             </select>
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeListCreateModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="createListFromModal()">Create</button>
+            <button class="btn" data-onclick="closeListCreateModal()">Cancel</button>
+            <button class="btn btn-primary" data-onclick="createListFromModal()">Create</button>
         </div>
     </div>
 </div>
@@ -83,15 +103,14 @@
 <div class="modal" id="note-folder-modal">
     <div class="modal-content">
         <h2 id="note-folder-modal-title">New Folder</h2>
-        <br>
         <div class="form-group">
             <label>Folder name</label>
             <input type="text" id="note-folder-name" class="form-control" placeholder="Folder name">
         </div>
         <input type="hidden" id="note-folder-id">
         <div class="modal-actions">
-            <button class="btn" onclick="closeNoteFolderModal()">Cancel</button>
-            <button class="btn btn-primary" id="note-folder-save-btn" onclick="saveNoteFolder()">Save</button>
+            <button class="btn" data-onclick="closeNoteFolderModal()">Cancel</button>
+            <button class="btn btn-primary" id="note-folder-save-btn" data-onclick="saveNoteFolder()">Save</button>
         </div>
     </div>
 </div>
@@ -100,15 +119,25 @@
 <div class="modal" id="note-move-modal">
     <div class="modal-content">
         <h2 id="note-move-title">Move Note</h2>
-        <br>
         <div class="move-nav-header">
-            <button class="btn btn-secondary" id="note-move-back-button" style="display:none;" onclick="noteMoveNavBack()">Back</button>
+            <button class="btn btn-secondary u-hidden" id="note-move-back-button" data-onclick="noteMoveNavBack()">Back</button>
         </div>
         <div id="note-move-step-container" class="move-step-container"></div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeNoteMoveModal()">Cancel</button>
+            <button class="btn" data-onclick="closeNoteMoveModal()">Cancel</button>
         </div>
     </div>
 </div>
 
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='app/core.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/bootstrap.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/detail.js', v='compat-20260210') }}" defer></script>
+{% endblock %}
+
+
+
+

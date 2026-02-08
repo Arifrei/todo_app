@@ -1,8 +1,27 @@
-const CACHE_NAME = 'taskflow-cache-v2';
+const CACHE_NAME = 'taskflow-cache-v6';
 const CORE_ASSETS = [
   '/',
   '/static/style.css',
-  '/static/app.js',
+  '/static/mobile-enhancements.css',
+  '/static/shared-ui.js',
+  '/static/app/homepage.js',
+  '/static/app/core.js',
+  '/static/app/tasks.js',
+  '/static/app/calendar.js',
+  '/static/ai-assistant.js',
+  '/static/pin-protection.js',
+  '/static/capacitor-notifications.js',
+  '/static/notes/bootstrap.js',
+  '/static/notes/detail.js',
+  '/static/notes/editor.js',
+  '/static/pages/planner-page.js',
+  '/static/pages/quick-access-page.js',
+  '/static/pages/feed-page.js',
+  '/static/pages/bookmarks-page.js',
+  '/static/settings.js',
+  '/static/vault.js',
+  '/static/recalls.js',
+  '/static/calendar.js',
   '/static/favicon.png',
   '/static/manifest.json',
 ];
@@ -67,7 +86,7 @@ self.addEventListener('message', (event) => {
   if (!event.data) return;
   if (event.data.type === 'notify' && event.data.payload) {
     const { title, options } = event.data.payload;
-    self.registration.showNotification(title || 'TaskFlow', options || {});
+    self.registration.showNotification(title || 'Simply Tasks', options || {});
   }
 });
 

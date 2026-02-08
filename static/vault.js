@@ -9,6 +9,33 @@ const vaultState = {
     stats: null
 };
 
+// Vault selection manager
+let vaultSelection = null;
+let vaultBulkActions = null;
+
+function initVaultSelection() {
+    vaultSelection = new SelectionManager({
+        moduleName: 'vault',
+        bulkBarId: 'vault-bulk-bar',
+        countSpanId: 'vault-bulk-count',
+        selectAllId: 'vault-select-all',
+        itemSelector: '.vault-item',
+        itemIdAttr: 'data-doc-id',
+        selectedClass: 'selected',
+        bodyActiveClass: 'vault-selection-mode-active',
+        getTotalCount: () => vaultState.documents.length
+    });
+
+    vaultBulkActions = new BulkActions({
+        apiEndpoint: '/api/vault/documents/bulk',
+        selectionManager: vaultSelection,
+        moduleName: 'document',
+        onComplete: () => {
+            loadVaultDocuments();
+        }
+    });
+}
+
 const vaultIconMap = {
     image: 'fa-solid fa-file-image',
     pdf: 'fa-solid fa-file-pdf',
@@ -189,9 +216,12 @@ function renderVaultItems() {
     docs.forEach(doc => {
         const iconClass = vaultIconMap[doc.file_category] || vaultIconMap.other;
         const category = doc.file_category || 'other';
+        const isSelected = vaultSelection && vaultSelection.isSelected(doc.id);
         const item = document.createElement('div');
-        item.className = 'vault-item' + (doc.pinned ? ' pinned' : '');
+        item.className = 'vault-item' + (doc.pinned ? ' pinned' : '') + (isSelected ? ' selected' : '');
+        item.setAttribute('data-doc-id', doc.id);
         item.innerHTML = `
+            <input type="checkbox" class="item-select-checkbox vault-item-checkbox" ${isSelected ? 'checked' : ''}>
             <div class="vault-item-icon ${category}"><i class="${iconClass}"></i></div>
             <div class="vault-item-info">
                 <div class="vault-item-name">${escapeHtml(doc.title)}</div>
@@ -204,14 +234,42 @@ function renderVaultItems() {
                 <button class="vault-item-btn danger" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
             </div>
         `;
+        const checkbox = item.querySelector('.vault-item-checkbox');
+        checkbox.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (vaultSelection) vaultSelection.toggle(doc.id);
+        });
+        checkbox.addEventListener('change', (e) => {
+            if (vaultSelection) {
+                if (e.target.checked) {
+                    vaultSelection.select(doc.id);
+                } else {
+                    vaultSelection.deselect(doc.id);
+                }
+            }
+        });
         const btns = item.querySelectorAll('.vault-item-btn');
         btns[0].addEventListener('click', (e) => { e.stopPropagation(); vaultTogglePin(doc); });
         btns[1].addEventListener('click', (e) => { e.stopPropagation(); vaultOpenDoc(doc); });
         btns[2].addEventListener('click', (e) => { e.stopPropagation(); vaultDownloadDoc(doc); });
         btns[3].addEventListener('click', (e) => { e.stopPropagation(); vaultArchiveDoc(doc); });
-        item.addEventListener('click', () => vaultOpenDoc(doc));
+        item.addEventListener('click', (e) => {
+            // If in selection mode, toggle selection instead of opening
+            if (vaultSelection && vaultSelection.getCount() > 0 && !e.target.closest('.vault-item-actions')) {
+                vaultSelection.toggle(doc.id);
+                checkbox.checked = vaultSelection.isSelected(doc.id);
+                item.classList.toggle('selected', checkbox.checked);
+            } else {
+                vaultOpenDoc(doc);
+            }
+        });
         grid.appendChild(item);
     });
+
+    // Update select-all checkbox state
+    if (vaultSelection) {
+        vaultSelection.updateUI();
+    }
 }
 
 async function loadVaultFolders() {
@@ -429,6 +487,77 @@ function vaultArchiveFolder(folder) {
     });
 }
 
+function openVaultBulkMoveModal() {
+    // Reuse the folder modal to select destination
+    const modal = document.getElementById('vault-folder-modal');
+    const title = document.getElementById('vault-folder-modal-title');
+    const nameInput = document.getElementById('vault-folder-name');
+    const idInput = document.getElementById('vault-folder-id');
+    const saveBtn = document.getElementById('vault-folder-save');
+
+    if (!modal || !title) return;
+
+    // Create or reuse a folder select dropdown
+    let selectHtml = '<select id="vault-bulk-move-select" class="form-control"><option value="">Root folder</option>';
+    const buildOptions = (parentId, prefix) => {
+        vaultState.folders
+            .filter(folder => (folder.parent_id || null) === parentId && folder.id !== vaultState.activeFolderId)
+            .forEach(folder => {
+                selectHtml += `<option value="${folder.id}">${prefix}${escapeHtml(folder.name)}</option>`;
+                buildOptions(folder.id, `${prefix}- `);
+            });
+    };
+    buildOptions(null, '');
+    selectHtml += '</select>';
+
+    title.textContent = `Move ${vaultSelection.getCount()} document(s)`;
+    if (nameInput) nameInput.style.display = 'none';
+    if (idInput) idInput.value = '';
+
+    // Add select to modal body
+    const formGroup = nameInput ? nameInput.parentElement : null;
+    if (formGroup) {
+        const label = formGroup.querySelector('label');
+        if (label) label.textContent = 'Destination folder';
+        formGroup.innerHTML = '<label>Destination folder</label>' + selectHtml;
+    }
+
+    // Override save button behavior
+    const newSaveBtn = saveBtn.cloneNode(true);
+    saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+    newSaveBtn.textContent = 'Move';
+    newSaveBtn.addEventListener('click', async () => {
+        const select = document.getElementById('vault-bulk-move-select');
+        const folderId = select ? (select.value || null) : null;
+        if (vaultBulkActions) {
+            await vaultBulkActions.move(folderId, 'folder');
+        }
+        closeVaultFolderModal();
+        // Reset modal for folder creation
+        resetVaultFolderModal();
+    });
+
+    modal.classList.add('active');
+}
+
+function resetVaultFolderModal() {
+    const title = document.getElementById('vault-folder-modal-title');
+    const formGroup = document.querySelector('#vault-folder-modal .form-group');
+    const saveBtn = document.getElementById('vault-folder-save');
+
+    if (title) title.textContent = 'New Folder';
+    if (formGroup) {
+        formGroup.innerHTML = '<label>Folder name</label><input type="text" id="vault-folder-name" class="form-control" placeholder="Enter folder name...">';
+    }
+    if (saveBtn) {
+        const newSaveBtn = saveBtn.cloneNode(true);
+        saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+        newSaveBtn.id = 'vault-folder-save';
+        newSaveBtn.textContent = 'Save';
+        newSaveBtn.addEventListener('click', saveVaultFolder);
+    }
+}
+
 function vaultHandleUpload() {
     const fileInput = document.getElementById('vault-file-input');
     if (!fileInput || !fileInput.files.length) {
@@ -502,6 +631,9 @@ function bindVaultDropZone() {
 function initVaultPage() {
     if (!document.querySelector('.vault-page')) return;
 
+    // Initialize selection manager
+    initVaultSelection();
+
     const viewToggle = document.getElementById('vault-view-toggle');
     const folderSave = document.getElementById('vault-folder-save');
     const folderCancel = document.getElementById('vault-folder-cancel');
@@ -513,6 +645,63 @@ function initVaultPage() {
     const searchClear = document.getElementById('vault-search-clear');
     const sortSelect = document.getElementById('vault-sort-select');
     const emptyUpload = document.getElementById('vault-empty-upload');
+
+    // Bulk action buttons
+    const selectAll = document.getElementById('vault-select-all');
+    const bulkClear = document.getElementById('vault-bulk-clear');
+    const bulkPin = document.getElementById('vault-bulk-pin');
+    const bulkMove = document.getElementById('vault-bulk-move');
+    const bulkDelete = document.getElementById('vault-bulk-delete');
+
+    if (selectAll) {
+        selectAll.addEventListener('change', (e) => {
+            if (vaultSelection) {
+                if (e.target.checked) {
+                    const allIds = vaultState.documents.map(doc => doc.id);
+                    vaultSelection.selectAll(allIds);
+                } else {
+                    vaultSelection.deselectAll();
+                }
+                renderVaultItems();
+            }
+        });
+    }
+
+    if (bulkClear) {
+        bulkClear.addEventListener('click', () => {
+            if (vaultSelection) {
+                vaultSelection.deselectAll();
+                renderVaultItems();
+            }
+        });
+    }
+
+    if (bulkPin) {
+        bulkPin.addEventListener('click', async () => {
+            if (vaultBulkActions) {
+                // Check if any selected docs are unpinned - if so, pin all. Otherwise unpin all.
+                const selectedIds = vaultSelection.getIds();
+                const anyUnpinned = vaultState.documents.some(doc => selectedIds.includes(doc.id) && !doc.pinned);
+                await vaultBulkActions.execute(anyUnpinned ? 'pin' : 'unpin');
+            }
+        });
+    }
+
+    if (bulkMove) {
+        bulkMove.addEventListener('click', () => {
+            if (vaultSelection && vaultSelection.getCount() > 0) {
+                openVaultBulkMoveModal();
+            }
+        });
+    }
+
+    if (bulkDelete) {
+        bulkDelete.addEventListener('click', () => {
+            if (vaultBulkActions) {
+                vaultBulkActions.delete('Delete selected documents?');
+            }
+        });
+    }
 
     if (viewToggle) viewToggle.addEventListener('click', vaultToggleView);
     if (folderSave) folderSave.addEventListener('click', saveVaultFolder);

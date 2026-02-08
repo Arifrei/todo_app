@@ -7,7 +7,7 @@
         <p class="sub">Manage tasks, calendar, recalls & bookmarks</p>
     </div>
     <div class="header-actions">
-        <button class="btn-icon" type="button" onclick="clearAIConversation()" aria-label="Clear conversation" title="Clear conversation">
+        <button class="btn-icon" type="button" data-onclick="clearAIConversation()" aria-label="Clear conversation" title="Clear conversation">
             <i class="fa-solid fa-trash"></i>
         </button>
     </div>
@@ -18,7 +18,7 @@
     <div class="ai-fullpage-input">
         <textarea id="ai-page-input" class="form-control" rows="2" placeholder="e.g. Add task to project, list today's events..."></textarea>
         <div class="ai-fullpage-buttons">
-            <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('page')" aria-label="Toggle voice input">
+            <button class="btn btn-secondary ai-mic-btn" type="button" data-onclick="toggleAIVoice('page')" aria-label="Toggle voice input">
                 <i class="fa-solid fa-microphone"></i>
             </button>
             <button class="btn btn-primary ai-send-btn" type="button" id="ai-page-send" aria-label="Send AI prompt">
@@ -28,3 +28,7 @@
     </div>
 </div>
 {% endblock %}
+
+
+
+

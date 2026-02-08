@@ -4,7 +4,7 @@
 <header class="header-row tasks-header">
     <div>
         <h1>Tasks</h1>
-        <p style="color: var(--text-muted);">Manage your projects and tasks</p>
+        <p class="u-text-muted">Manage your projects and tasks</p>
     </div>
     <div class="tasks-fab-container" id="tasks-fab">
         <button class="tasks-fab-main" id="tasks-fab-main">
@@ -33,21 +33,21 @@
     </div>
 </header>
 
-<div id="hubs-container" style="display: none; margin-bottom: 2rem;">
+<div id="hubs-container" class="u-hidden u-mb-2">
     <h2 class="section-title">Project Hubs</h2>
     <div class="grid" id="hubs-grid">
         <!-- Hubs will be populated here via JS -->
     </div>
 </div>
 
-<div id="lists-container" style="display: none;">
+<div id="lists-container" class="u-hidden">
     <h2 class="section-title">Task Lists</h2>
     <div class="grid" id="lists-grid">
         <!-- Lists will be populated here via JS -->
     </div>
 </div>
 
-<div id="light-lists-container" style="display: none;">
+<div id="light-lists-container" class="u-hidden">
     <h2 class="section-title">Light Task Lists</h2>
     <div class="grid" id="light-lists-grid">
         <!-- Light lists will be populated here via JS -->
@@ -55,3 +55,12 @@
 </div>
 
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260209') }}" defer></script>
+{% endblock %}
+
+
+
+

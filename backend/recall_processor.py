@@ -506,7 +506,7 @@ def process_recall(recall_id):
     from models import RecallItem
 
     with app.app_context():
-        recall = RecallItem.query.get(recall_id)
+        recall = db.session.get(RecallItem, recall_id)
         if not recall:
             return
 
@@ -534,7 +534,7 @@ def process_recall(recall_id):
                 recall.ai_status = 'done'
                 db.session.commit()
                 try:
-                    from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
+                    from .embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
                     refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
                 except Exception as exc:
                     logger.warning("Embedding refresh failed for recall %s: %s", recall_id, exc)
@@ -555,7 +555,7 @@ def process_recall(recall_id):
             recall.ai_status = 'done'
             db.session.commit()
             try:
-                from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
+                from .embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
                 refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
             except Exception as exc:
                 logger.warning("Embedding refresh failed for recall %s: %s", recall_id, exc)
@@ -569,7 +569,7 @@ def process_recall(recall_id):
             recall.ai_status = 'failed'
             db.session.commit()
             try:
-                from embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
+                from .embedding_service import ENTITY_RECALL, refresh_embedding_for_entity
                 refresh_embedding_for_entity(recall.user_id, ENTITY_RECALL, recall.id)
             except Exception as exc:
                 logger.warning("Embedding refresh failed for recall %s: %s", recall_id, exc)

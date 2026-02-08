@@ -15,8 +15,8 @@ ipconfig
 
 **Set the server URL:**
 ```bash
-node configure-server.js http://YOUR-IP:5000
-# Example: node configure-server.js http://192.168.1.100:5000
+node tools/configure-server.js http://YOUR-IP:5000
+# Example: node tools/configure-server.js http://192.168.1.100:5000
 ```
 
 ### 2. Start Your Flask Server

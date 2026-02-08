@@ -50,11 +50,32 @@
         </div>
     </div>
 
+    <!-- Bulk Action Bar -->
+    <div class="bulk-actions u-hidden" id="vault-bulk-bar">
+        <div class="bulk-left">
+            <input type="checkbox" id="vault-select-all">
+            <label for="vault-select-all" class="u-cursor-pointer">Select all</label>
+            <span id="vault-bulk-count" class="u-text-muted u-ml-05"></span>
+            <button class="btn btn-secondary btn-small u-ml-05" type="button" id="vault-bulk-clear">Clear</button>
+        </div>
+        <div class="bulk-buttons">
+            <button class="btn btn-secondary" type="button" id="vault-bulk-pin">
+                <i class="fa-solid fa-thumbtack"></i> Pin
+            </button>
+            <button class="btn btn-secondary" type="button" id="vault-bulk-move">
+                <i class="fa-solid fa-folder"></i> Move
+            </button>
+            <button class="btn-icon delete" type="button" id="vault-bulk-delete" title="Delete selected" aria-label="Delete selected vault files">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+    </div>
+
     <div class="vault-content" id="vault-content">
         <div class="vault-grid" id="vault-grid"></div>
     </div>
 
-    <div class="vault-empty" id="vault-empty" style="display: none;">
+    <div class="vault-empty u-hidden" id="vault-empty">
         <div class="vault-empty-icon">
             <i class="fa-solid fa-folder-open"></i>
         </div>
@@ -101,7 +122,7 @@
                 <input type="text" id="vault-tags-input" class="form-control" placeholder="work, receipts, personal...">
             </div>
         </div>
-        <div class="vault-upload-progress" id="vault-upload-progress" style="display: none;">
+        <div class="vault-upload-progress u-hidden" id="vault-upload-progress">
             <div class="vault-upload-bar" id="vault-upload-bar"></div>
         </div>
         <div class="modal-actions">
@@ -117,7 +138,7 @@
     <div class="modal-content vault-preview-content">
         <div class="vault-preview-header">
             <h2 id="vault-preview-title">Document</h2>
-            <button class="btn-icon" type="button" id="vault-preview-close" title="Close">
+            <button class="btn-icon" type="button" id="vault-preview-close" title="Close" aria-label="Close preview">
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </div>
@@ -126,7 +147,7 @@
             <button class="btn btn-danger" type="button" id="vault-preview-archive">
                 <i class="fa-solid fa-box-archive"></i> Archive
             </button>
-            <div style="flex: 1;"></div>
+            <div class="u-flex-1"></div>
             <button class="btn" type="button" id="vault-preview-download">
                 <i class="fa-solid fa-download"></i> Download
             </button>
@@ -135,3 +156,11 @@
 </div>
 
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='vault.js') }}" defer></script>
+{% endblock %}
+
+
+
+

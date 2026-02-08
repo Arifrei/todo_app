@@ -6,7 +6,7 @@
     <title>Select User - Simply Tasks</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
@@ -73,6 +73,10 @@
             display: flex;
             align-items: center;
             gap: 1rem;
+            width: 100%;
+            text-align: left;
+            font: inherit;
+            appearance: none;
         }
 
         .user-card:hover {
@@ -145,7 +149,7 @@
             border: 2px solid #e0e0e0;
             border-radius: 10px;
             font-size: 1rem;
-            font-family: 'Outfit', sans-serif;
+            font-family: 'Inter', sans-serif;
             transition: border-color 0.2s;
             min-width: 0;
             box-sizing: border-box;
@@ -308,13 +312,13 @@
         <div class="user-select-card">
             <div class="user-select-header">
                 <i class="fa-solid fa-layer-group"></i>
-                <h1>TaskFlow</h1>
+                <h1>Simply Tasks</h1>
                 <p>Select or create a user to continue</p>
             </div>
 
             <div class="user-list">
                 {% for user in users %}
-                <div class="user-card" data-user-id="{{ user.id }}" data-username="{{ user.username|e }}" onclick='openPinModal({{ user.id }}, {{ user.username|tojson }})'>
+                <button class="user-card" type="button" data-user-id="{{ user.id }}" data-username="{{ user.username|e }}">
                     <div class="user-icon">
                         {{ user.username[0].upper() }}
                     </div>
@@ -322,8 +326,8 @@
                         <div class="user-name">{{ user.username }}</div>
                         <div class="user-id">User #{{ user.id }}</div>
                     </div>
-                    <i class="fa-solid fa-chevron-right" style="color: var(--text-muted);"></i>
-                </div>
+                    <i class="fa-solid fa-chevron-right u-text-muted"></i>
+                </button>
                 {% endfor %}
             </div>
 
@@ -332,11 +336,10 @@
             </div>
 
             <div class="new-user-form">
-                <input type="text" id="new-username" class="new-user-input" placeholder="Enter username"
-                       onkeypress="if(event.key==='Enter') createUser()">
+                <input type="text" id="new-username" class="new-user-input" placeholder="Enter username">
                 <input type="password" id="new-pin" class="new-user-input new-pin-input" placeholder="4-digit PIN"
-                       maxlength="4" inputmode="numeric" pattern="\\d{4}" onkeypress="if(event.key==='Enter') createUser()">
-                <button class="btn-create" onclick="createUser()">
+                       maxlength="4" inputmode="numeric" pattern="\\d{4}">
+                <button class="btn-create" id="create-user-btn" type="button">
                     <i class="fa-solid fa-plus"></i> Create
                 </button>
             </div>
@@ -351,9 +354,9 @@
             <input type="password" id="pin-input" class="pin-input" maxlength="4" inputmode="numeric" pattern="\\d{4}"
                    placeholder="0000">
             <div class="pin-error" id="pin-error"></div>
-            <div class="pin-actions" style="justify-content: flex-end; align-items: center;">
-                <button class="btn" type="button" onclick="closePinModal()">Cancel</button>
-                <button class="btn btn-create" id="pin-submit" type="button" onclick="submitPin()">Unlock</button>
+            <div class="pin-actions u-justify-end u-align-center">
+                <button class="btn" id="pin-cancel" type="button">Cancel</button>
+                <button class="btn btn-create" id="pin-submit" type="button">Unlock</button>
             </div>
         </div>
     </div>
@@ -408,7 +411,6 @@
             .then(async (r) => {
                 let data = {};
                 try { data = await r.json(); } catch (err) { /* ignore json parse issues */ }
-                console.debug('set-user response', r.status, data);
                   if (r.ok && data.success) {
                       window.location.href = '/';
                   } else {
@@ -455,7 +457,6 @@
             })
               .then(r => r.json())
               .then(data => {
-                  console.debug('create-user response', data);
                   if (data.success) {
                       window.location.href = '/';
                 } else if (data.error) {
@@ -489,6 +490,20 @@
                 openPinModal(uid, uname);
             });
         });
+
+        document.getElementById('create-user-btn')?.addEventListener('click', createUser);
+        document.getElementById('new-username')?.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') createUser();
+        });
+        document.getElementById('new-pin')?.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') createUser();
+        });
+        document.getElementById('pin-cancel')?.addEventListener('click', closePinModal);
+        document.getElementById('pin-submit')?.addEventListener('click', submitPin);
     </script>
 </body>
 </html>
+
+
+
+

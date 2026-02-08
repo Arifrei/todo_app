@@ -15,7 +15,7 @@
                 <i class="fa-solid fa-note-sticky"></i>
                 <span class="btn-text">Notes</span>
             </button>
-            <button class="btn btn-primary btn-secondary" id="note-save-btn">
+            <button class="btn btn-primary" id="note-save-btn">
                 <i class="fa-solid fa-floppy-disk"></i> Save
             </button>
             <div class="dropdown notes-actions-dropdown">
@@ -95,44 +95,44 @@
 
 <!-- Share Note Modal -->
 <div class="modal" id="share-note-modal">
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content u-max-w-500">
         <h2>Share Note</h2>
-        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Choose how to share this note</p>
+        <p class="u-text-muted u-mb-15">Choose how to share this note</p>
 
         <div id="share-note-status"></div>
 
         <!-- Share Options -->
-        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
-            <button class="btn btn-primary" id="share-note-content-btn" style="width: 100%; justify-content: center;">
+        <div class="u-flex-col-gap-075 u-mb-15">
+            <button class="btn btn-primary u-w-full u-justify-center" id="share-note-content-btn">
                 <i class="fa-solid fa-copy"></i> Copy Note Content
             </button>
-            <button class="btn btn-secondary" id="share-note-email-btn" style="width: 100%; justify-content: center;">
+            <button class="btn btn-secondary u-w-full u-justify-center" id="share-note-email-btn">
                 <i class="fa-solid fa-envelope"></i> Share via Email
             </button>
         </div>
 
-        <div style="border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
-            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Or create a shareable link that anyone can view:</p>
+        <div class="u-border-top u-pt-15">
+            <p class="u-text-muted u-fs-09 u-mb-1">Or create a shareable link that anyone can view:</p>
 
-            <div id="share-note-link-section" style="display: none;">
-                <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Shareable Link</label>
-                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-                    <input type="text" id="share-note-url" readonly style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); font-size: 0.9rem;">
+            <div id="share-note-link-section" class="u-hidden">
+                <label class="u-label-strong">Shareable Link</label>
+                <div class="u-flex-row-gap-05 u-mb-1">
+                    <input type="text" id="share-note-url" readonly class="u-share-url-input">
                     <button class="btn btn-secondary" id="share-note-copy-btn">
                         <i class="fa-solid fa-copy"></i> Copy
                     </button>
                 </div>
-                <button class="btn" id="share-note-revoke-btn" style="width: 100%;">
+                <button class="btn u-w-full" id="share-note-revoke-btn">
                     <i class="fa-solid fa-xmark"></i> Revoke Access
                 </button>
             </div>
 
-            <button class="btn" id="share-note-generate-btn" style="width: 100%;">
+            <button class="btn u-w-full" id="share-note-generate-btn">
                 <i class="fa-solid fa-link"></i> Generate Link
             </button>
         </div>
 
-        <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+        <div class="u-mt-15 u-flex-end-gap-05">
             <button class="btn" id="share-note-close-btn">Close</button>
         </div>
     </div>
@@ -140,7 +140,7 @@
 
 <!-- Linked Note Modal -->
 <div class="modal" id="note-link-modal">
-    <div class="modal-content" style="max-width: 520px;">
+    <div class="modal-content u-max-w-520">
         <h2 id="note-link-modal-title">Link note</h2>
         <p class="note-link-subtitle" id="note-link-modal-subtitle">Choose an existing note or create a new one.</p>
         <div id="note-link-match-list" class="note-link-list"></div>
@@ -160,9 +160,8 @@
 
 <!-- Edit Note Link Modal -->
 <div class="modal" id="note-edit-link-modal">
-    <div class="modal-content" style="max-width: 520px;">
+    <div class="modal-content u-max-w-520">
         <h2>Edit link</h2>
-        <br>
         <div class="form-group">
             <label>Text</label>
             <input type="text" id="note-edit-link-text" class="form-control" placeholder="Link text">
@@ -174,7 +173,7 @@
                 <option value="external">External URL</option>
             </select>
         </div>
-        <div class="form-group" id="note-edit-link-url-group" style="display:none;">
+        <div class="form-group u-hidden" id="note-edit-link-url-group">
             <label>URL</label>
             <input type="text" id="note-edit-link-url" class="form-control" placeholder="https://example.com">
         </div>
@@ -198,3 +197,13 @@
 </div>
 
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/editor.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/detail.js', v='compat-20260210') }}" defer></script>
+{% endblock %}
+
+
+
+

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Simply Tasks</title>
     <meta name="theme-color" content="#3b82f6">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
@@ -103,22 +103,22 @@
     <div class="app-container">
         <div class="mobile-topbar">
             <div class="mobile-topbar-left">
-                <button class="hamburger-btn" id="mobile-menu-btn" aria-label="Open navigation">
+                <button class="hamburger-btn" id="mobile-menu-btn" type="button" aria-label="Open navigation">
                     <span></span><span></span><span></span>
                 </button>
             </div>
             <div class="mobile-brand">
-                <img src="{{ url_for('static', filename='myo.png') }}" alt="TaskFlow">
+                <img src="{{ url_for('static', filename='myo.png') }}" alt="Simply Tasks">
             </div>
             <div class="mobile-topbar-actions">
-                <button class="btn-icon-mobile" onclick="window.location.href='/quick-access'" aria-label="Quick Access" title="Quick Access">
+                <button class="btn-icon-mobile" id="mobile-quick-access-btn" type="button" aria-label="Quick Access" title="Quick Access">
                     <i class="fa-solid fa-star"></i>
                 </button>
             </div>
         </div>
         <nav class="sidebar">
             <div class="logo">
-                <img src="{{ url_for('static', filename='cards.png') }}" alt="TaskFlow">
+                <img src="{{ url_for('static', filename='cards.png') }}" alt="Simply Tasks">
             </div>
             <div class="nav-row">
                 <ul class="nav-links">
@@ -204,19 +204,8 @@
                     <i class="fa-solid fa-right-from-bracket"></i> Logout
                 </a>
             </div>
-            <script>
-                // Load current user
-                fetch('/api/current-user')
-                    .then(r => r.json())
-                    .then(data => {
-                        const name = data.username || 'None';
-                        const desktop = document.getElementById('current-username');
-                        if (desktop) desktop.textContent = name;
-                    });
-
-            </script>
         </nav>
-        <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebarDrawer(false)"></div>
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
         <main class="content">
             {% block content %}{% endblock %}
@@ -224,73 +213,68 @@
     </div>
 
     <!-- Global Confirm Modal -->
-    <div class="modal" id="confirm-modal">
-        <div class="modal-content">
-            <h2>Are you sure?</h2>
-            <p id="confirm-message" style="color: var(--text-muted); margin: 0.5rem 0 1rem 0;">This action cannot be undone.</p>
+    <div class="modal" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-message">
+        <div class="modal-content" tabindex="-1">
+            <h2 id="confirm-modal-title">Are you sure?</h2>
+            <p id="confirm-message" class="u-muted-modal-msg">This action cannot be undone.</p>
             <div class="modal-actions">
-                <button class="btn" onclick="closeConfirmModal()">Cancel</button>
-                <button class="btn btn-danger" id="confirm-yes-button">Confirm</button>
+                <button class="btn" id="confirm-cancel-button" type="button">Cancel</button>
+                <button class="btn btn-danger" id="confirm-yes-button" type="button">Confirm</button>
             </div>
         </div>
     </div>
 
     <!-- Overlap Warning Modal -->
-    <div class="modal" id="overlap-warning-modal">
-        <div class="modal-content">
-            <h2><i class="fa-solid fa-triangle-exclamation" style="color: var(--warning-color); margin-right: 0.5rem;"></i>Event Conflict</h2>
-            <p id="overlap-warning-message" style="color: var(--text-muted); margin: 0.5rem 0 1rem 0;"></p>
+    <div class="modal" id="overlap-warning-modal" role="dialog" aria-modal="true" aria-labelledby="overlap-warning-title" aria-describedby="overlap-warning-message">
+        <div class="modal-content" tabindex="-1">
+            <h2 id="overlap-warning-title"><i class="fa-solid fa-triangle-exclamation u-icon-warning"></i>Event Conflict</h2>
+            <p id="overlap-warning-message" class="u-muted-modal-msg"></p>
             <div class="modal-actions">
-                <button class="btn" onclick="closeOverlapWarningModal()">Cancel</button>
-                <button class="btn btn-primary" id="overlap-add-anyway-button">Add Anyway</button>
+                <button class="btn" id="overlap-cancel-button" type="button">Cancel</button>
+                <button class="btn btn-primary" id="overlap-add-anyway-button" type="button">Add Anyway</button>
             </div>
         </div>
     </div>
 
     <!-- AI Assistant Panel -->
-    <div class="ai-launcher" onclick="toggleAIPanel()">
+    <button class="ai-launcher" id="ai-launcher-btn" type="button" aria-label="Open AI panel">
         <i class="fa-solid fa-robot"></i>
         <span>Ask AI</span>
-    </div>
+    </button>
     <div class="ai-panel" id="ai-panel">
         <div class="ai-panel-header">
             <div>
                 <strong>AI Assistant</strong>
                 <div class="ai-subtitle">Manage tasks, calendar, recalls & bookmarks</div>
             </div>
-            <button class="btn-icon" onclick="toggleAIPanel()" aria-label="Close AI panel">
+            <button class="btn-icon" id="ai-panel-close-btn" type="button" aria-label="Close AI panel">
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </div>
         <div class="ai-messages" id="ai-messages"></div>
         <div class="ai-input-row">
             <textarea id="ai-input" class="form-control" rows="2" placeholder="e.g. Add task to project, list today's events, save a link..."></textarea>
-            <button class="btn btn-secondary ai-mic-btn" type="button" onclick="toggleAIVoice('panel')" aria-label="Toggle voice input">
+            <button class="btn btn-secondary ai-mic-btn" id="ai-panel-voice-btn" type="button" aria-label="Toggle voice input">
                 <i class="fa-solid fa-microphone"></i>
             </button>
-            <button class="btn btn-primary ai-send-btn" type="button" onclick="sendAIPrompt()" aria-label="Send AI prompt">
+            <button class="btn btn-primary ai-send-btn" id="ai-panel-send-btn" type="button" aria-label="Send AI prompt">
                 <i class="fa-solid fa-paper-plane"></i>
             </button>
         </div>
         <div class="ai-footer-actions">
-            <button class="btn btn-secondary" type="button" onclick="clearAIConversation()">
+            <button class="btn btn-secondary" id="ai-panel-clear-btn" type="button">
                 <i class="fa-solid fa-trash"></i> Clear
             </button>
-            <button class="btn btn-secondary" type="button" onclick="openFullAIPage()">
+            <button class="btn btn-secondary" id="ai-panel-fullpage-btn" type="button">
                 <i class="fa-solid fa-expand"></i> Full page
             </button>
         </div>
     </div>
 
-    <!-- Capacitor Notification Service -->
-    <script src="{{ url_for('static', filename='capacitor-notifications.js') }}"></script>
-
-    <script src="{{ url_for('static', filename='vault.js') }}"></script>
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
     <!-- PIN Entry Modal -->
-    <div class="modal" id="pin-modal">
-        <div class="modal-content pin-modal-content">
-            <h2><i class="fa-solid fa-lock"></i> Enter PIN</h2>
+    <div class="modal" id="pin-modal" role="dialog" aria-modal="true" aria-labelledby="pin-modal-title">
+        <div class="modal-content pin-modal-content" tabindex="-1">
+            <h2 id="pin-modal-title"><i class="fa-solid fa-lock"></i> Enter PIN</h2>
             <p class="pin-modal-subtitle">Enter your 4-digit PIN to unlock protected notes</p>
             <div class="form-group">
                 <input type="password"
@@ -299,20 +283,19 @@
                        maxlength="4"
                        pattern="\d{4}"
                        inputmode="numeric"
-                       placeholder="----"
-                       onkeyup="if(event.key === 'Enter') submitPin()">
+                       placeholder="----">
             </div>
             <div class="modal-actions">
-                <button class="btn" onclick="closePinModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="submitPin()">Unlock</button>
+                <button class="btn" id="pin-cancel-btn" type="button">Cancel</button>
+                <button class="btn btn-primary" id="pin-submit-btn" type="button">Unlock</button>
             </div>
         </div>
     </div>
 
     <!-- Set PIN Modal -->
-    <div class="modal" id="set-pin-modal">
-        <div class="modal-content pin-modal-content">
-            <h2><i class="fa-solid fa-lock"></i> Set PIN</h2>
+    <div class="modal" id="set-pin-modal" role="dialog" aria-modal="true" aria-labelledby="set-pin-modal-title">
+        <div class="modal-content pin-modal-content" tabindex="-1">
+            <h2 id="set-pin-modal-title"><i class="fa-solid fa-lock"></i> Set PIN</h2>
             <p class="pin-modal-subtitle">Create a 4-digit PIN to protect your notes</p>
             <div class="form-group">
                 <label for="new-pin-input">New PIN</label>
@@ -332,29 +315,26 @@
                        maxlength="4"
                        pattern="\d{4}"
                        inputmode="numeric"
-                       placeholder="----"
-                       onkeyup="if(event.key === 'Enter') submitSetPin()">
+                       placeholder="----">
             </div>
             <div class="modal-actions">
-                <button class="btn" onclick="closeSetPinModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="submitSetPin()">Set PIN</button>
+                <button class="btn" id="set-pin-cancel-btn" type="button">Cancel</button>
+                <button class="btn btn-primary" id="set-pin-submit-btn" type="button">Set PIN</button>
             </div>
         </div>
     </div>
 
-    <script>
-        // Disable all service workers to avoid caching issues (not needed in native app)
-        if ('serviceWorker' in navigator && !window.isNativeApp?.()) {
-            navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(reg => reg.unregister()));
-        }
+    <!-- Global scripts -->
+    <script src="{{ url_for('static', filename='shared-ui.js', v='compat-20260209') }}" defer></script>
+    <script src="{{ url_for('static', filename='ai-assistant.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='pin-protection.js', v='compat-20260209') }}" defer></script>
+    <script src="{{ url_for('static', filename='app/homepage.js', v='compat-20260209') }}" defer></script>
+    <script src="{{ url_for('static', filename='capacitor-notifications.js') }}" defer></script>
 
-        // Quick Access keyboard shortcut (Ctrl+Shift+K or Cmd+Shift+K)
-        document.addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'K') {
-                e.preventDefault();
-                window.location.href = '/quick-access';
-            }
-        });
-    </script>
+    {% block page_scripts %}{% endblock %}
 </body>
 </html>
+
+
+
+

@@ -6,7 +6,7 @@
     <title>Login - Simply Tasks</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
@@ -69,7 +69,7 @@
             border: 2px solid #e0e0e0;
             border-radius: 10px;
             font-size: 1rem;
-            font-family: 'Outfit', sans-serif;
+            font-family: 'Inter', sans-serif;
             transition: border-color 0.2s;
         }
 
@@ -142,8 +142,8 @@
         <div class="auth-card">
             <div class="auth-logo">
                 <i class="fa-solid fa-layer-group"></i>
-                <h1>TaskFlow</h1>
-                <p style="color: var(--text-muted); margin-top: 0.5rem;">Sign in to your account</p>
+                <h1>Simply Tasks</h1>
+                <p class="u-text-muted u-mt-05">Sign in to your account</p>
             </div>
 
             {% with messages = get_flashed_messages(with_categories=true) %}
@@ -175,3 +175,7 @@
     </div>
 </body>
 </html>
+
+
+
+

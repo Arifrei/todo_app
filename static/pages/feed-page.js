@@ -1,0 +1,493 @@
+const feedState = {
+    items: [],
+    expandedId: null,
+    editingId: null,
+    selectedState: null,
+    filterState: 'all',
+    defaultStates: ['bored', 'work', 'free', 'travel'],
+    customStates: [],
+    addingState: false
+};
+
+function normalizeState(value) {
+    return (value || '').toString().trim().toLowerCase();
+}
+
+function formatStateLabel(state) {
+    if (!state) return '';
+    return state.charAt(0).toUpperCase() + state.slice(1);
+}
+
+function getOrderedStates() {
+    const base = feedState.defaultStates.slice();
+    const seen = new Set(base);
+    const fromItems = feedState.items
+        .map(item => normalizeState(item.state))
+        .filter(Boolean);
+    const fromCustom = feedState.customStates
+        .map(state => normalizeState(state))
+        .filter(Boolean);
+    [...fromItems, ...fromCustom].forEach((state) => {
+        if (!seen.has(state)) {
+            seen.add(state);
+            base.push(state);
+        }
+    });
+    return base;
+}
+
+function renderStateChips() {
+    const chipWrap = document.getElementById('feed-state-chips');
+    const addWrap = document.getElementById('feed-state-add');
+    if (!chipWrap || !addWrap) return;
+
+    chipWrap.innerHTML = '';
+    const states = getOrderedStates();
+    states.forEach((state) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `feed-state-chip ${feedState.selectedState === state ? 'active' : ''}`;
+        btn.textContent = formatStateLabel(state);
+        btn.addEventListener('click', () => {
+            addFeedItemFromInput(state);
+        });
+        chipWrap.appendChild(btn);
+    });
+
+    const addChip = document.createElement('button');
+    addChip.type = 'button';
+    addChip.className = 'feed-state-chip add';
+    addChip.textContent = '+ Add state';
+    addChip.addEventListener('click', () => {
+        feedState.addingState = true;
+        renderStateChips();
+        const input = document.getElementById('feed-state-input');
+        if (input) input.focus();
+    });
+
+    if (!feedState.addingState) {
+        chipWrap.appendChild(addChip);
+    }
+    addWrap.classList.toggle('active', feedState.addingState);
+}
+
+function renderFilterDropdown() {
+    const selected = document.getElementById('feed-filter-selected');
+    const menu = document.getElementById('feed-filter-menu');
+    if (!selected || !menu) return;
+
+    const label = feedState.filterState === 'all' ? 'All' : formatStateLabel(feedState.filterState);
+    selected.innerHTML = `<span>${label}</span><i class="fa-solid fa-chevron-down"></i>`;
+
+    menu.innerHTML = '';
+
+    const allItem = document.createElement('div');
+    allItem.className = `feed-filter-item ${feedState.filterState === 'all' ? 'active' : ''}`;
+    allItem.textContent = 'All';
+    allItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        feedState.filterState = 'all';
+        closeFilterDropdown();
+        renderFilterDropdown();
+        renderFeedGrid();
+    });
+    menu.appendChild(allItem);
+
+    getOrderedStates().forEach((state) => {
+        const item = document.createElement('div');
+        item.className = `feed-filter-item ${feedState.filterState === state ? 'active' : ''}`;
+        item.setAttribute('data-state', state);
+        item.textContent = formatStateLabel(state);
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            feedState.filterState = state;
+            closeFilterDropdown();
+            renderFilterDropdown();
+            renderFeedGrid();
+        });
+        menu.appendChild(item);
+    });
+}
+
+function toggleFilterDropdown() {
+    const dropdown = document.getElementById('feed-filter-dropdown');
+    if (dropdown) dropdown.classList.toggle('open');
+}
+
+function closeFilterDropdown() {
+    const dropdown = document.getElementById('feed-filter-dropdown');
+    if (dropdown) dropdown.classList.remove('open');
+}
+
+function parseFeedInput(raw) {
+    if (!raw) return null;
+    const parts = raw.split(';');
+    const title = (parts[0] || '').trim();
+    const url = (parts[1] || '').trim();
+    const description = parts.slice(2).join(';').trim();
+    return { title, url, description };
+}
+
+function normalizeUrl(url) {
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
+    if (url.startsWith('www.')) return `https://${url}`;
+    return `https://${url}`;
+}
+
+function openFeedUrl(id) {
+    const item = feedState.items.find(i => i.id === id);
+    if (!item) return;
+    const target = normalizeUrl(item.url);
+    if (target) {
+        window.open(target, '_blank', 'noopener');
+    }
+}
+
+function handleFeedAction(event, action, id) {
+    event.stopPropagation();
+    if (action === 'open') {
+        openFeedUrl(id);
+    } else if (action === 'done') {
+        confirmDeleteFeed(id);
+    } else if (action === 'edit') {
+        startEditFeed(id);
+    } else if (action === 'recall') {
+        convertFeedToRecall(id);
+    }
+}
+
+function startEditFeed(id) {
+    feedState.editingId = id;
+    feedState.expandedId = id;
+    renderFeedGrid();
+}
+
+function cancelEditFeed(event) {
+    if (event) event.stopPropagation();
+    feedState.editingId = null;
+    renderFeedGrid();
+}
+
+async function saveEditFeed(event, id) {
+    if (event) event.stopPropagation();
+    const titleInput = document.getElementById(`feed-edit-title-${id}`);
+    const urlInput = document.getElementById(`feed-edit-url-${id}`);
+    const descInput = document.getElementById(`feed-edit-desc-${id}`);
+
+    if (!titleInput || !urlInput) return;
+
+    const title = titleInput.value.trim();
+    const url = urlInput.value.trim();
+    const description = descInput ? descInput.value.trim() : '';
+
+    if (!title || !url) {
+        showToast('Title and URL are required', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/feed/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, url, description })
+        });
+        if (!res.ok) throw new Error('Update failed');
+        const updated = await res.json();
+        const idx = feedState.items.findIndex(i => i.id === id);
+        if (idx !== -1) feedState.items[idx] = updated;
+        feedState.editingId = null;
+        renderFeedGrid();
+        showToast('Updated', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update item', 'error');
+    }
+}
+
+function toggleFeedExpand(id) {
+    if (feedState.editingId) return;
+    feedState.expandedId = feedState.expandedId === id ? null : id;
+    renderFeedGrid();
+}
+
+function renderFeedGrid() {
+    const grid = document.getElementById('feed-grid');
+    if (!grid) return;
+
+    const filtered = feedState.items.filter(item => {
+        if (feedState.filterState === 'all') return true;
+        return normalizeState(item.state) === feedState.filterState;
+    });
+
+    if (!filtered.length) {
+        grid.innerHTML = '<div class="feed-empty">No items yet.</div>';
+        return;
+    }
+
+    grid.innerHTML = '';
+    filtered.forEach((item) => {
+        const isExpanded = feedState.expandedId === item.id;
+        const isEditing = feedState.editingId === item.id;
+        const card = document.createElement('div');
+        card.className = `feed-card ${isExpanded ? 'expanded' : ''} ${isEditing ? 'editing' : ''}`;
+
+        if (!isEditing) {
+            card.addEventListener('click', () => toggleFeedExpand(item.id));
+        }
+
+        if (isEditing) {
+            card.innerHTML = `
+                <div class="feed-card-content">
+                    <div class="feed-edit-form">
+                        <input type="text" id="feed-edit-title-${item.id}" class="feed-edit-input" value="${escapeHtml(item.title)}" placeholder="Title">
+                        <input type="text" id="feed-edit-url-${item.id}" class="feed-edit-input" value="${escapeHtml(item.url)}" placeholder="URL">
+                        <textarea id="feed-edit-desc-${item.id}" class="feed-edit-textarea" placeholder="Description (optional)">${escapeHtml(item.description || '')}</textarea>
+                    </div>
+                </div>
+                <div class="feed-card-actions">
+                    <button class="feed-cancel-btn" type="button" onclick="cancelEditFeed(event)">Cancel</button>
+                    <button class="feed-save-btn" type="button" onclick="saveEditFeed(event, ${item.id})">Save</button>
+                </div>
+            `;
+        } else {
+            const descriptionHtml = item.description
+                ? `<div class="feed-card-details">${escapeHtml(item.description)}</div>`
+                : '';
+
+            const expandedBtns = isExpanded
+                ? `<div class="feed-card-actions-right">
+                       <button class="feed-edit-btn" type="button" onclick="handleFeedAction(event, 'edit', ${item.id})" title="Edit" aria-label="Edit feed item">
+                           <i class="fa-solid fa-pen"></i>
+                       </button>
+                       <button class="feed-recall-btn" type="button" onclick="handleFeedAction(event, 'recall', ${item.id})" title="Move to Recalls" aria-label="Move feed item to recalls">
+                           <i class="fa-solid fa-inbox"></i>
+                       </button>
+                       <button class="feed-done-btn" type="button" onclick="handleFeedAction(event, 'done', ${item.id})">Done</button>
+                   </div>`
+                : '';
+
+            card.innerHTML = `
+                <div class="feed-card-content">
+                    <div class="feed-card-header">
+                        <div class="feed-card-title">${escapeHtml(item.title)}</div>
+                        <div class="feed-card-meta">
+                            <span class="feed-card-state" data-state="${escapeHtml(normalizeState(item.state))}">
+                                ${escapeHtml(formatStateLabel(normalizeState(item.state)))}
+                            </span>
+                        </div>
+                    </div>
+                    ${descriptionHtml}
+                </div>
+                <div class="feed-card-actions">
+                    <button class="feed-open-btn" type="button" onclick="handleFeedAction(event, 'open', ${item.id})" title="Open link" aria-label="Open feed link">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                    </button>
+                    ${expandedBtns}
+                </div>
+            `;
+        }
+
+        grid.appendChild(card);
+    });
+}
+
+async function loadFeedItems() {
+    const grid = document.getElementById('feed-grid');
+    if (grid) grid.innerHTML = '<div class="feed-empty">Loading...</div>';
+    try {
+        const res = await fetch('/api/feed');
+        if (!res.ok) throw new Error('Failed to load feed items');
+        feedState.items = await res.json();
+        renderFilterDropdown();
+        renderStateChips();
+        renderFeedGrid();
+    } catch (err) {
+        console.error(err);
+        if (grid) grid.innerHTML = '<div class="feed-empty">Could not load items.</div>';
+    }
+}
+
+async function addFeedItemFromInput(stateOverride) {
+    const input = document.getElementById('feed-add-input');
+    if (!input) return;
+    const parsed = parseFeedInput(input.value.trim());
+    if (!parsed || !parsed.title || !parsed.url) {
+        showToast('Use: Title; URL; optional description', 'error');
+        input.focus();
+        return;
+    }
+
+    const state = stateOverride || feedState.selectedState;
+    if (!state) {
+        showToast('Pick a state to add this item', 'error');
+        return;
+    }
+
+    const payload = {
+        title: parsed.title,
+        url: parsed.url,
+        description: parsed.description,
+        state
+    };
+
+    try {
+        const res = await fetch('/api/feed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Save failed');
+        const saved = await res.json();
+        feedState.items.unshift(saved);
+        input.value = '';
+        feedState.selectedState = null;
+        renderFilterDropdown();
+        renderStateChips();
+        renderFeedGrid();
+        showToast('Added to EverFeed', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not save item', 'error');
+    }
+}
+
+async function convertFeedToRecall(id) {
+    try {
+        const res = await fetch(`/api/feed/${id}/to-recall`, { method: 'POST' });
+        if (!res.ok) throw new Error('Move failed');
+        feedState.items = feedState.items.filter(item => item.id !== id);
+        if (feedState.expandedId === id) {
+            feedState.expandedId = null;
+        }
+        renderFilterDropdown();
+        renderStateChips();
+        renderFeedGrid();
+        showToast('Moved to Recalls', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not move to Recalls', 'error');
+    }
+}
+
+function confirmDeleteFeed(id) {
+    openConfirmModal('Mark as done and remove?', async () => {
+        try {
+            const res = await fetch(`/api/feed/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('Delete failed');
+            feedState.items = feedState.items.filter(item => item.id !== id);
+            if (feedState.expandedId === id) {
+                feedState.expandedId = null;
+            }
+            renderFilterDropdown();
+            renderStateChips();
+            renderFeedGrid();
+            showToast('Removed', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not remove item', 'error');
+        }
+    });
+}
+
+function closeStateInput() {
+    feedState.addingState = false;
+    const input = document.getElementById('feed-state-input');
+    if (input) input.value = '';
+    renderStateChips();
+}
+
+function confirmStateInput() {
+    const input = document.getElementById('feed-state-input');
+    if (!input) return;
+    const raw = normalizeState(input.value);
+    if (!raw) {
+        closeStateInput();
+        return;
+    }
+    if (!feedState.customStates.includes(raw) && !feedState.defaultStates.includes(raw)) {
+        feedState.customStates.push(raw);
+    }
+    closeStateInput();
+    renderFilterDropdown();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const addBtn = document.getElementById('feed-add-btn');
+    const addForm = document.getElementById('feed-add-form');
+    const addInput = document.getElementById('feed-add-input');
+    const stateConfirm = document.getElementById('feed-state-confirm');
+    const stateCancel = document.getElementById('feed-state-cancel');
+    const stateInput = document.getElementById('feed-state-input');
+
+    function updateAddButtonState(isOpen) {
+        if (!addBtn) return;
+        addBtn.setAttribute('aria-label', isOpen ? 'Cancel add' : 'Add item');
+        addBtn.setAttribute('title', isOpen ? 'Cancel add' : 'Add item');
+        const icon = addBtn.querySelector('i');
+        if (icon) {
+            icon.className = isOpen ? 'fa-solid fa-xmark' : 'fa-solid fa-plus';
+        }
+    }
+
+    if (addBtn && addForm) {
+        addBtn.addEventListener('click', () => {
+            const isOpen = addForm.classList.toggle('open');
+            updateAddButtonState(isOpen);
+            if (isOpen) {
+                if (addInput) addInput.focus();
+            } else {
+                if (addInput) addInput.value = '';
+                feedState.selectedState = null;
+                closeStateInput();
+                renderStateChips();
+            }
+        });
+    }
+
+    if (addInput) {
+        addInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+            }
+        });
+    }
+
+    if (stateConfirm) {
+        stateConfirm.addEventListener('click', confirmStateInput);
+    }
+
+    if (stateCancel) {
+        stateCancel.addEventListener('click', closeStateInput);
+    }
+
+    if (stateInput) {
+        stateInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                confirmStateInput();
+            } else if (e.key === 'Escape') {
+                closeStateInput();
+            }
+        });
+    }
+
+    const filterSelected = document.getElementById('feed-filter-selected');
+    if (filterSelected) {
+        filterSelected.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleFilterDropdown();
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        const dropdown = document.getElementById('feed-filter-dropdown');
+        if (dropdown && !dropdown.contains(e.target)) {
+            closeFilterDropdown();
+        }
+    });
+
+    renderStateChips();
+    renderFilterDropdown();
+    loadFeedItems();
+});

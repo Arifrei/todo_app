@@ -12,9 +12,13 @@ DOTENV_PATH = find_dotenv() or os.path.join(BASE_DIR, ".env")
 if DOTENV_PATH and os.path.exists(DOTENV_PATH):
     load_dotenv(DOTENV_PATH)
 
+# Backfill should not start background schedulers/jobs.
+os.environ.setdefault("ENABLE_CALENDAR_JOBS", "0")
+os.environ.setdefault("BOOTSTRAP_JOBS_ON_IMPORT", "0")
+
 from app import app
 from models import User
-from embedding_service import (
+from backend.embedding_service import (
     ENTITY_BOOKMARK,
     ENTITY_CALENDAR,
     ENTITY_RECALL,

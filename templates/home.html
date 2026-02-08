@@ -4,7 +4,7 @@
 <header class="header-row">
     <div>
         <h1>Welcome</h1>
-        <p style="color: var(--text-muted);">Choose where you want to work today.</p>
+        <p class="u-text-muted">Choose where you want to work today.</p>
     </div>
 </header>
 
@@ -35,7 +35,11 @@
     {% endfor %}
 </div>
 
-<button id="homepage-done-btn" class="btn btn-primary" style="display: none; position: fixed; top: 1rem; right: 1rem; z-index: 100;">
+<button id="homepage-done-btn" class="btn btn-primary floating-done-btn">
     Done
 </button>
 {% endblock %}
+
+
+
+

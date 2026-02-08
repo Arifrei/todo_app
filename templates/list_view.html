@@ -55,57 +55,57 @@
     <div class="header-right">
         {% if todo_list.type == 'list' %}
         <div class="header-add-menu">
-            <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
+            <button class="btn btn-primary header-add-trigger" data-onclick="toggleHeaderAddMenu(event)" title="Add">
                 <i class="fa-solid fa-plus"></i>
                 <span>Add</span>
                 <i class="fa-solid fa-caret-down"></i>
             </button>
             <div class="header-menu-dropdown header-add-dropdown" id="header-add-dropdown">
-                <button class="header-menu-item" onclick="openAddItemModal(null, 'task'); toggleHeaderAddMenu(event);">
+                <button class="header-menu-item" data-onclick="openAddItemModal(null, 'task'); toggleHeaderAddMenu(event);">
                     <i class="fa-solid fa-plus"></i> Add Task
                 </button>
-                <button class="header-menu-item" onclick="openAddItemModal(null, 'phase'); toggleHeaderAddMenu(event);">
+                <button class="header-menu-item" data-onclick="openAddItemModal(null, 'phase'); toggleHeaderAddMenu(event);">
                     <i class="fa-solid fa-layer-group"></i> Add Phase
                 </button>
             </div>
         </div>
         {% elif todo_list.type == 'light' %}
-        <button class="btn btn-primary" onclick="openAddItemModal(null, 'task')" title="Add Task">
+        <button class="btn btn-primary" data-onclick="openAddItemModal(null, 'task')" title="Add Task">
             <i class="fa-solid fa-plus"></i>
             <span>Add</span>
         </button>
         {% else %}
         <div class="header-add-menu">
-            <button class="btn btn-primary header-add-trigger" onclick="toggleHeaderAddMenu(event)" title="Add">
+            <button class="btn btn-primary header-add-trigger" data-onclick="toggleHeaderAddMenu(event)" title="Add">
                 <i class="fa-solid fa-plus"></i>
                 <span>Add</span>
                 <i class="fa-solid fa-caret-down"></i>
             </button>
             <div class="header-menu-dropdown header-add-dropdown" id="header-add-dropdown">
-                <button class="header-menu-item" onclick="openAddItemModal(null, 'project_list'); toggleHeaderAddMenu(event);">
+                <button class="header-menu-item" data-onclick="openAddItemModal(null, 'project_list'); toggleHeaderAddMenu(event);">
                     <i class="fa-solid fa-list-check"></i> Add Project (List)
                 </button>
-                <button class="header-menu-item" onclick="openAddItemModal(null, 'project_hub'); toggleHeaderAddMenu(event);">
+                <button class="header-menu-item" data-onclick="openAddItemModal(null, 'project_hub'); toggleHeaderAddMenu(event);">
                     <i class="fa-solid fa-folder-tree"></i> Add Project (Hub)
                 </button>
             </div>
         </div>
         {% endif %}
-        <button class="btn-icon header-menu-trigger" onclick="toggleHeaderMenu(event)" title="More options">
+        <button class="btn-icon header-menu-trigger" data-onclick="toggleHeaderMenu(event)" title="More options" aria-label="More list options">
             <i class="fa-solid fa-ellipsis-vertical"></i>
         </button>
         <div class="header-menu-dropdown" id="header-menu-dropdown">
-            <button class="header-menu-item" onclick="openBulkImportModal(); toggleHeaderMenu(event);">
+            <button class="header-menu-item" data-onclick="openBulkImportModal(); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-list-check"></i> Bulk Add
             </button>
             <a class="header-menu-item" href="/api/lists/{{ todo_list.id }}/export" download>
                 <i class="fa-solid fa-download"></i> Export
             </a>
             <div class="header-menu-divider"></div>
-            <button class="header-menu-item" onclick="openEditListModal(); toggleHeaderMenu(event);">
+            <button class="header-menu-item" data-onclick="openEditListModal(); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-pen"></i> Rename List
             </button>
-            <button class="header-menu-item danger" onclick="deleteList({{ todo_list.id }});">
+            <button class="header-menu-item danger" data-onclick="deleteList({{ todo_list.id }});">
                 <i class="fa-solid fa-trash"></i> Delete List
             </button>
         </div>
@@ -115,13 +115,13 @@
 {% if todo_list.type != 'light' %}
 <div class="task-filter-row">
     <div class="task-filter-dropdown" id="task-filter-dropdown">
-        <button class="btn btn-secondary btn-filter-trigger" type="button" onclick="toggleTaskFilterMenu(event)">
+        <button class="btn btn-secondary btn-filter-trigger" type="button" data-onclick="toggleTaskFilterMenu(event)">
             <i class="fa-solid fa-filter"></i>
             <span id="task-filter-label">Filter</span>
             <i class="fa-solid fa-caret-down"></i>
         </button>
         <div class="task-filter-menu" id="task-filter-menu">
-            <button class="task-filter-item task-filter-parent" type="button" onclick="toggleTaskFilterSubmenu('status', event)">
+            <button class="task-filter-item task-filter-parent" type="button" data-onclick="toggleTaskFilterSubmenu('status', event)">
                 <span>Status</span>
                 <i class="fa-solid fa-caret-right"></i>
             </button>
@@ -132,7 +132,7 @@
                 <button class="task-filter-item" data-filter="done">Done</button>
             </div>
             {% if todo_list.type == 'list' and all_tags|length %}
-            <button class="task-filter-item task-filter-parent" type="button" onclick="toggleTaskFilterSubmenu('tags', event)">
+            <button class="task-filter-item task-filter-parent" type="button" data-onclick="toggleTaskFilterSubmenu('tags', event)">
                 <span>Tags</span>
                 <i class="fa-solid fa-caret-right"></i>
             </button>
@@ -149,44 +149,44 @@
 </div>
 {% endif %}
 
-<div class="bulk-actions" id="bulk-actions" style="display: none;">
+<div class="bulk-actions u-hidden" id="bulk-actions">
     <div class="bulk-left">
-        <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
-        <label for="select-all" style="cursor: pointer;">Select all</label>
-        <span id="bulk-count" style="color: var(--text-muted); margin-left: 0.5rem;"></span>
-        <button class="btn btn-secondary btn-small" type="button" onclick="resetTaskSelection()" style="margin-left: 0.5rem;">Clear</button>
+        <input type="checkbox" id="select-all" data-onchange="toggleSelectAll(this)">
+        <label for="select-all" class="u-cursor-pointer">Select all</label>
+        <span id="bulk-count" class="u-text-muted u-ml-05"></span>
+        <button class="btn btn-secondary btn-small u-ml-05" type="button" data-onclick="resetTaskSelection()">Clear</button>
     </div>
     <div class="bulk-buttons">
-        <button class="btn btn-secondary" onclick="openBulkMoveModal()">Move selected</button>
-        <button class="btn-icon delete" onclick="bulkDelete()" title="Delete selected"><i class="fa-solid fa-trash"></i></button>
+        <button class="btn btn-secondary" data-onclick="openBulkMoveModal()">Move selected</button>
+        <button class="btn-icon delete" data-onclick="bulkDelete()" title="Delete selected" aria-label="Delete selected tasks"><i class="fa-solid fa-trash"></i></button>
         <div class="bulk-menu">
-            <button class="btn-icon bulk-more-btn" id="bulk-more-btn" type="button" aria-label="More bulk actions" onclick="toggleBulkMenu(event)">
+            <button class="btn-icon bulk-more-btn" id="bulk-more-btn" type="button" aria-label="More bulk actions" data-onclick="toggleBulkMenu(event)">
                 <i class="fa-solid fa-ellipsis-vertical"></i>
             </button>
             <div class="bulk-menu-dropdown" id="bulk-menu-dropdown">
-                <button class="bulk-menu-item bulk-menu-parent" onclick="toggleBulkSubmenu('status', event)">
+                <button class="bulk-menu-item bulk-menu-parent" data-onclick="toggleBulkSubmenu('status', event)">
                     <span><i class="fa-solid fa-list-check"></i> Change status</span>
                     <i class="fa-solid fa-chevron-right"></i>
                 </button>
                 <div class="bulk-menu-submenu" id="bulk-status-submenu">
-                    <button class="bulk-menu-item" onclick="bulkUpdateStatus('not_started'); toggleBulkMenu(event, true);">
+                    <button class="bulk-menu-item" data-onclick="bulkUpdateStatus('not_started'); toggleBulkMenu(event, true);">
                         <i class="fa-solid fa-circle-dot"></i> Not Started
                     </button>
-                    <button class="bulk-menu-item" onclick="bulkUpdateStatus('in_progress'); toggleBulkMenu(event, true);">
+                    <button class="bulk-menu-item" data-onclick="bulkUpdateStatus('in_progress'); toggleBulkMenu(event, true);">
                         <i class="fa-solid fa-play"></i> Started
                     </button>
-                    <button class="bulk-menu-item" onclick="bulkUpdateStatus('done'); toggleBulkMenu(event, true);">
+                    <button class="bulk-menu-item" data-onclick="bulkUpdateStatus('done'); toggleBulkMenu(event, true);">
                         <i class="fa-solid fa-check"></i> Done
                     </button>
                 </div>
                 {% if todo_list.type == 'list' %}
-                <button class="bulk-menu-item bulk-menu-parent" onclick="toggleBulkSubmenu('tag', event)">
+                <button class="bulk-menu-item bulk-menu-parent" data-onclick="toggleBulkSubmenu('tag', event)">
                     <span><i class="fa-solid fa-tag"></i> Add tag</span>
                     <i class="fa-solid fa-chevron-right"></i>
                 </button>
                 <div class="bulk-menu-form" id="bulk-tag-form">
                     <input type="text" id="bulk-tag-input" class="form-control" placeholder="Tag">
-                    <button class="btn btn-secondary btn-small" type="button" onclick="bulkAddTag(); toggleBulkMenu(event, true);">Add</button>
+                    <button class="btn btn-secondary btn-small" type="button" data-onclick="bulkAddTag(); toggleBulkMenu(event, true);">Add</button>
                 </div>
                 {% endif %}
             </div>
@@ -213,10 +213,10 @@
                 <i class="fa-solid fa-grip-lines"></i>
             </div>
 
-            <div class="task-body" style="flex: 1;">
+            <div class="task-body u-flex-1">
                 <div class="task-title-row">
                     {% if todo_list.type == 'list' and item.is_phase %}
-                    <button class="btn-icon phase-toggle" onclick="togglePhaseVisibility({{ item.id }})" aria-label="Toggle phase visibility">
+                    <button class="btn-icon phase-toggle" data-onclick="togglePhaseVisibility({{ item.id }})" aria-label="Toggle phase visibility">
                         <i class="fa-solid fa-chevron-up"></i>
                     </button>
                     {% endif %}
@@ -232,12 +232,11 @@
                 <div class="phase-pill">Phase</div>
                 {% endif %}
                 {% if item.description %}
-                <div class="task-description" style="font-size: 0.9rem; color: var(--text-color); margin-top: 4px;">{{
+                <div class="task-description u-fs-09 u-text-color u-mt-4px">{{
                     item.description|linkify_text }}</div>
                 {% endif %}
                 {% if item.notes %}
-                <div class="task-notes"
-                    style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; font-style: italic;">{{
+                <div class="task-notes u-fs-085 u-text-muted u-mt-4px u-italic">{{
                     item.notes|linkify_text }}</div>
                 {% endif %}
                 {% if todo_list.type == 'list' and tag_list %}
@@ -248,7 +247,7 @@
                 </div>
                 {% endif %}
                 {% if item.due_date or (item.linked_notes|length) %}
-                <div class="task-meta-lite" style="margin-top: 6px; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <div class="task-meta-lite u-mt-6px u-flex-wrap-gap-05">
                     {% if item.due_date %}
                     <span class="meta-chip time">Due {{ item.due_date }}</span>
                     {% endif %}
@@ -264,10 +263,10 @@
                 {% endif %}
 
                 {% if todo_list.type == 'hub' and item.linked_list %}
-                <div class="progress-container" style="height: 6px; margin-top: 0.5rem; width: 150px;">
+                <div class="progress-container u-h-6px u-mt-05 u-w-150">
                     <div class="progress-bar" style="width: {{ item.linked_list.get_progress() }}%"></div>
                 </div>
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
+                <div class="u-fs-075 u-text-muted u-mt-2px">
                     {{ item.linked_list.get_progress() }}% Done
                 </div>
                 {% endif %}
@@ -282,14 +281,14 @@
                     Open Project
                 </a>
                 <div class="task-actions-dropdown">
-                    <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                    <button class="btn-icon" data-onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions" aria-label="More project actions">
                         <i class="fa-solid fa-ellipsis-vertical"></i>
                     </button>
                     <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                        <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'project', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" data-onclick="openMoveModal({{ item.id }}, 'project', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-people-roof"></i> Move Project
                         </button>
-                        <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
+                        <button class="task-actions-menu-item danger" data-onclick="deleteItem({{ item.id }});">
                             <i class="fa-solid fa-trash"></i> Delete
                         </button>
                     </div>
@@ -297,18 +296,18 @@
                 {% endif %}
 
                 {% if todo_list.type == 'list' and item.is_phase %}
-                <button class="btn btn-secondary phase-inline-add" onclick="openAddItemModal({{ item.id }}, 'task')">
+                <button class="btn btn-secondary phase-inline-add" data-onclick="openAddItemModal({{ item.id }}, 'task')">
                     <i class="fa-solid fa-plus"></i> Add Task
                 </button>
                 <div class="task-actions-dropdown">
-                    <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                    <button class="btn-icon" data-onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions" aria-label="More phase actions">
                         <i class="fa-solid fa-ellipsis-vertical"></i>
                     </button>
                     <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                        <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-pen"></i> Edit
                         </button>
-                        <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
+                        <button class="task-actions-menu-item danger" data-onclick="deleteItem({{ item.id }});">
                             <i class="fa-solid fa-trash"></i> Delete
                         </button>
                     </div>
@@ -317,34 +316,34 @@
 
                 {% if todo_list.type in ['list', 'light'] and not item.is_phase %}
                 <div class="status-buttons">
-                    <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
-                    <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
+                    <button class="btn-status status-in_progress {% if item.status == 'in_progress' %}active{% endif %}" data-onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'in_progress')">Started</button>
+                    <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" data-onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
                 </div>
 
                     <div class="task-actions-dropdown">
-                        <button class="btn-icon" onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions">
+                        <button class="btn-icon" data-onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions" aria-label="More task actions">
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                            <button class="task-actions-menu-item" onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
                         </button>
                         {% if todo_list.type == 'list' %}
                         {% set dep_titles = item.dependencies|map(attribute='content')|list %}
-                        <button class="task-actions-menu-item" onclick="openDependencyModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);" {% if dep_titles %}title="Depends on: {{ dep_titles|join(', ') }}"{% endif %}>
+                        <button class="task-actions-menu-item" data-onclick="openDependencyModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);" {% if dep_titles %}title="Depends on: {{ dep_titles|join(', ') }}"{% endif %}>
                             <i class="fa-solid fa-link"></i> Dependencies{% if dep_titles %} ({{ dep_titles|length }}){% endif %}
                         </button>
                         {% endif %}
-                        <button class="task-actions-menu-item" onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" data-onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-arrow-right-to-bracket"></i> Move Task
                         </button>
-                        <button class="task-actions-menu-item" onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" data-onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-calendar-day"></i> Set Date
                         </button>
-                        <button class="task-actions-menu-item" onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, {{ item.linked_notes|map(attribute='id')|list|tojson }}); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" data-onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, {{ item.linked_notes|map(attribute='id')|list|tojson }}); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-note-sticky"></i> Link Note
                         </button>
-                        <button class="task-actions-menu-item danger" onclick="deleteItem({{ item.id }});">
+                        <button class="task-actions-menu-item danger" data-onclick="deleteItem({{ item.id }});">
                             <i class="fa-solid fa-trash"></i> Delete
                         </button>
                     </div>
@@ -360,7 +359,6 @@
 <div class="modal" id="add-item-modal">
     <div class="modal-content">
         <h2 id="add-item-title">Add {{ 'Project' if todo_list.type == 'hub' else 'Task' }}</h2>
-        <br>
         <div class="form-group">
             <label>Name</label>
             <input type="text" id="item-content" class="form-control" placeholder="Enter name...">
@@ -404,9 +402,9 @@
         <input type="hidden" id="item-phase-id">
         <input type="hidden" id="item-mode" value="task">
         <div class="modal-actions">
-            <button class="btn" onclick="closeAddItemModal()">Cancel</button>
+            <button class="btn" data-onclick="closeAddItemModal()">Cancel</button>
             <button class="btn btn-primary"
-                onclick="createItem({{ todo_list.id }}, '{{ todo_list.type }}')">Add</button>
+                data-onclick="createItem({{ todo_list.id }}, '{{ todo_list.type }}')">Add</button>
         </div>
     </div>
 </div>
@@ -415,7 +413,6 @@
 <div class="modal" id="edit-item-modal">
     <div class="modal-content">
         <h2>Edit Task</h2>
-        <br>
         <input type="hidden" id="edit-item-id">
         <div class="form-group">
             <label>Name</label>
@@ -436,8 +433,8 @@
         </div>
         {% endif %}
         <div class="modal-actions">
-            <button class="btn" onclick="closeEditItemModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveItemChanges()">Save</button>
+            <button class="btn" data-onclick="closeEditItemModal()">Cancel</button>
+            <button class="btn btn-primary" data-onclick="saveItemChanges()">Save</button>
         </div>
     </div>
 </div>
@@ -448,14 +445,14 @@
         <h2 id="dependency-title">Set Dependencies</h2>
         <div class="form-hint" id="dependency-target-label"></div>
         <div class="move-nav-header">
-            <button class="btn btn-secondary" id="dependency-back-button" style="display:none;" onclick="dependencyNavBack()">Back</button>
+            <button class="btn btn-secondary u-hidden" id="dependency-back-button" data-onclick="dependencyNavBack()">Back</button>
         </div>
         <div id="dependency-step-container" class="move-step-container">
             <!-- Navigation options populated by JS -->
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeDependencyModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveDependencies()">Save</button>
+            <button class="btn" data-onclick="closeDependencyModal()">Cancel</button>
+            <button class="btn btn-primary" data-onclick="saveDependencies()">Save</button>
         </div>
     </div>
 </div>
@@ -464,7 +461,7 @@
 <div class="modal" id="bulk-import-modal">
     <div class="modal-content">
         <h2>Bulk Import</h2>
-        <p style="color: var(--text-muted); margin: 0.25rem 0 1rem 0;">Paste an outline to create phases and tasks instantly.</p>
+        <p class="u-muted-modal-msg">Paste an outline to create phases and tasks instantly.</p>
         <div class="form-group">
             {% if todo_list.type == 'hub' %}
             <label>Project Outline</label>
@@ -486,7 +483,7 @@ Task 3 ::: notes"></textarea>
 - [x] Task 2"></textarea>
             {% endif %}
         </div>
-        <div class="form-group" style="color: var(--text-muted); font-size: 0.9rem;">
+        <div class="form-group u-text-muted u-fs-09">
             {% if todo_list.type == 'hub' %}
             <div><strong>Projects:</strong> Start with <code># </code>. To create a nested hub, add <code>[hub]</code> at the end (e.g., <code># Q4 Initiatives [hub]</code>).</div>
             <div><strong>Phases:</strong> Indent under a project and use <code>## </code> (e.g., <code>  ## Discovery</code>).</div>
@@ -497,11 +494,11 @@ Task 3 ::: notes"></textarea>
             <div><strong>Phases:</strong> Start a line with <code># </code> (e.g., <code># My Phase</code>).</div>
             <div><strong>Tasks:</strong> Use <code>- [ ]</code>, <code>- [>]</code>, or <code>- [x]</code>.</div>
             {% endif %}
-            <div style="margin-top: 0.5rem;"><strong>Metadata:</strong> Append <code>:: description</code> and/or <code>::: notes</code> to any line.</div>
+            <div class="u-mt-05"><strong>Metadata:</strong> Append <code>:: description</code> and/or <code>::: notes</code> to any line.</div>
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeBulkImportModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="bulkImportItems({{ todo_list.id }})">Import</button>
+            <button class="btn" data-onclick="closeBulkImportModal()">Cancel</button>
+            <button class="btn btn-primary" data-onclick="bulkImportItems({{ todo_list.id }})">Import</button>
         </div>
     </div>
 </div>
@@ -510,16 +507,15 @@ Task 3 ::: notes"></textarea>
 <div class="modal" id="move-item-modal">
     <div class="modal-content">
         <h2 id="move-item-title">Move Item</h2>
-        <br>
         <input type="hidden" id="move-item-id">
         <div class="move-nav-header">
-            <button class="btn btn-secondary" id="move-back-button" style="display:none;" onclick="moveNavBack()">Back</button>
+            <button class="btn btn-secondary u-hidden" id="move-back-button" data-onclick="moveNavBack()">Back</button>
         </div>
         <div id="move-step-container" class="move-step-container">
             <!-- Navigation options populated by JS -->
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeMoveModal()">Cancel</button>
+            <button class="btn" data-onclick="closeMoveModal()">Cancel</button>
         </div>
     </div>
 </div>
@@ -528,14 +524,13 @@ Task 3 ::: notes"></textarea>
 <div class="modal" id="edit-list-modal">
     <div class="modal-content">
         <h2>Rename List</h2>
-        <br>
         <div class="form-group">
             <label>Title</label>
             <input type="text" id="edit-list-title" class="form-control">
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeEditListModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveListTitle()">Save</button>
+            <button class="btn" data-onclick="closeEditListModal()">Cancel</button>
+            <button class="btn btn-primary" data-onclick="saveListTitle()">Save</button>
         </div>
     </div>
 </div>
@@ -544,15 +539,15 @@ Task 3 ::: notes"></textarea>
 <div class="modal" id="date-picker-modal">
     <div class="modal-content" id="date-picker-modal-content">
         <h2>Attach Date</h2>
-        <p id="date-picker-task-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+        <p id="date-picker-task-label" class="u-text-muted u-mt-neg-025"></p>
         <div class="form-group">
             <label>Select a date</label>
             <input type="date" id="date-picker-input" class="form-control">
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeDatePickerModal()">Cancel</button>
-            <button class="btn btn-ghost" onclick="saveDatePickerSelection(true)">Remove Date</button>
-            <button class="btn btn-primary" onclick="saveDatePickerSelection()">Attach Date</button>
+            <button class="btn" data-onclick="closeDatePickerModal()">Cancel</button>
+            <button class="btn btn-ghost" data-onclick="saveDatePickerSelection(true)">Remove Date</button>
+            <button class="btn btn-primary" data-onclick="saveDatePickerSelection()">Attach Date</button>
         </div>
     </div>
 </div>
@@ -561,7 +556,7 @@ Task 3 ::: notes"></textarea>
 <div class="modal" id="link-note-modal">
     <div class="modal-content">
         <h2>Link Note</h2>
-        <p id="link-note-task-label" style="margin-top: -0.25rem; color: var(--text-muted);"></p>
+        <p id="link-note-task-label" class="u-text-muted u-mt-neg-025"></p>
         <div class="form-group">
             <label>Choose an existing note</label>
             <div id="link-note-list" class="note-chooser"></div>
@@ -571,15 +566,15 @@ Task 3 ::: notes"></textarea>
             <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
         </div>
         <div class="modal-actions">
-            <button class="btn" onclick="closeLinkNoteModal()">
+            <button class="btn" data-onclick="closeLinkNoteModal()">
                 <i class="fa-solid fa-xmark note-action-icon"></i>
                 <span class="note-action-text">Cancel</span>
             </button>
-            <button class="btn btn-secondary" onclick="createAndLinkNote()">
+            <button class="btn btn-secondary" data-onclick="createAndLinkNote()">
                 <i class="fa-solid fa-plus note-action-icon"></i>
                 <span class="note-action-text">Create & Link</span>
             </button>
-            <button class="btn btn-primary" onclick="saveLinkedNote()">
+            <button class="btn btn-primary" data-onclick="saveLinkedNote()">
                 <i class="fa-solid fa-link note-action-icon"></i>
                 <span class="note-action-text">Attach Selected</span>
             </button>
@@ -603,3 +598,12 @@ Task 3 ::: notes"></textarea>
 </script>
 </div>
 {% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260209') }}" defer></script>
+{% endblock %}
+
+
+
+
