@@ -41,6 +41,11 @@
     flex-wrap: wrap;
 }
 
+.vault-toolbar-right .module-search-label {
+    flex-basis: 100%;
+    margin-bottom: 0;
+}
+
 .vault-toolbar-actions {
     display: flex;
     gap: 0.5rem;

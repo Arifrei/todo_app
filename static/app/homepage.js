@@ -362,6 +362,11 @@ function initBaseChrome() {
     if (document.body.dataset.baseChromeReady === '1') return;
     document.body.dataset.baseChromeReady = '1';
 
+    // Prevent accidental form submissions from presentation/action buttons.
+    document.querySelectorAll('button:not([type])').forEach((btn) => {
+        btn.type = 'button';
+    });
+
     const setCurrentUsername = () => {
         const desktop = document.getElementById('current-username');
         if (!desktop) return;
@@ -750,11 +755,15 @@ function initMobileTopbar() {
     function closeDrawer() {
         sidebar.classList.remove('open');
         overlay.classList.remove('active');
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.setAttribute('aria-label', 'Open navigation');
     }
 
     function openDrawer() {
         sidebar.classList.add('open');
         overlay.classList.add('active');
+        trigger.setAttribute('aria-expanded', 'true');
+        trigger.setAttribute('aria-label', 'Close navigation');
     }
 
     window.toggleSidebarDrawer = (forceOpen) => {

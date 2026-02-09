@@ -13,14 +13,14 @@
                 <div class="calendar-month-nav-right">
                     <button class="btn-icon" id="calendar-next-month" aria-label="Next month"><i class="fa-solid fa-chevron-right"></i></button>
                     <div class="calendar-month-menu">
-                        <button class="btn-icon calendar-month-menu-btn" id="calendar-month-menu-btn" aria-label="Calendar options" title="Options">
+                        <button class="btn-icon calendar-month-menu-btn" id="calendar-month-menu-btn" aria-label="Calendar options" title="Options" aria-controls="calendar-month-dropdown" aria-expanded="false">
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="calendar-month-dropdown" id="calendar-month-dropdown">
                             <button class="calendar-month-menu-item" id="calendar-today-month-btn">
                                 <i class="fa-solid fa-calendar-day"></i> Today
                             </button>
-                            <button class="calendar-month-menu-item" id="calendar-search-toggle">
+                            <button class="calendar-month-menu-item" id="calendar-search-toggle" aria-controls="calendar-search-panel" aria-expanded="false">
                                 <i class="fa-solid fa-magnifying-glass"></i> Search
                             </button>
                             <button class="calendar-month-menu-item" id="calendar-go-to-btn">
@@ -37,7 +37,7 @@
         <section class="calendar-search is-hidden" id="calendar-search-panel">
             <div class="calendar-search-bar">
                 <i class="fa-solid fa-magnifying-glass"></i>
-                <input type="search" id="calendar-search-input" class="form-control" placeholder="Search events and tasks" autocomplete="off">
+                <input type="search" id="calendar-search-input" class="form-control" placeholder="Search events and tasks" autocomplete="off" aria-label="Search events and tasks">
                 <button class="btn-icon calendar-search-clear is-hidden" id="calendar-search-clear" aria-label="Clear search" title="Clear">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
@@ -57,11 +57,11 @@
             <button class="btn-icon" id="calendar-quick-add-close" aria-label="Close"><i class="fa-solid fa-times"></i></button>
         </div>
         <div class="calendar-quick-add-input-row">
-            <textarea id="calendar-month-quick-input" class="form-control" rows="2" placeholder="Type your task and press Enter" disabled></textarea>
+            <textarea id="calendar-month-quick-input" class="form-control" rows="2" placeholder="Type your task and press Enter" disabled aria-label="Month quick add input"></textarea>
         </div>
         <div class="quick-hint">
             Type your task and press <kbd>Enter</kbd>. Use <strong>$</strong> <strong>#</strong> <strong>></strong> <strong>@</strong> <strong>!</strong> <strong>*</strong> <strong>?</strong> <strong>-</strong>
-            <button class="link-btn" id="calendar-quick-help-toggle">Show syntax guide</button>
+            <button class="link-btn" id="calendar-quick-help-toggle" type="button" aria-controls="calendar-quick-syntax-guide" aria-expanded="false">Show syntax guide</button>
         </div>
         <div class="calendar-syntax-guide is-hidden" id="calendar-quick-syntax-guide">
             <div class="syntax-guide-row"><strong>$</strong> Event (e.g., <code>$ Meeting @3pm</code>)</div>
@@ -90,7 +90,7 @@
             </div>
             <div class="calendar-actions">
                 <div class="calendar-sort-menu">
-                    <button class="btn btn-secondary btn-icon-only" id="calendar-day-sort-btn" aria-label="Sort day items" title="Sort: Time">
+                    <button class="btn btn-secondary btn-icon-only" id="calendar-day-sort-btn" aria-label="Sort day items" title="Sort: Time" aria-controls="calendar-day-sort-menu" aria-expanded="false">
                         <i class="fa-solid fa-arrow-down-wide-short"></i>
                     </button>
                     <div class="calendar-sort-dropdown" id="calendar-day-sort-menu">
@@ -105,7 +105,7 @@
                     <i class="fa-solid fa-calendar-days"></i><span class="btn-text">Back</span>
                 </button>
                 <div class="calendar-actions-menu">
-                    <button class="btn btn-secondary btn-icon-only" id="calendar-menu-btn" aria-label="More options" title="More options">
+                    <button class="btn btn-secondary btn-icon-only" id="calendar-menu-btn" aria-label="More options" title="More options" aria-controls="calendar-dropdown-menu" aria-expanded="false">
                         <i class="fa-solid fa-ellipsis-vertical"></i>
                     </button>
                     <div class="calendar-dropdown-menu" id="calendar-dropdown-menu">
@@ -118,7 +118,7 @@
                         <button class="calendar-menu-item" id="calendar-send-digest">
                             <i class="fa-solid fa-envelope"></i> Email Digest
                         </button>
-                        <button class="calendar-menu-item" id="calendar-sort-mobile-toggle">
+                        <button class="calendar-menu-item" id="calendar-sort-mobile-toggle" aria-controls="calendar-sort-mobile" aria-expanded="false">
                             <i class="fa-solid fa-arrow-down-wide-short"></i> Sort
                         </button>
                         <div class="calendar-sort-mobile" id="calendar-sort-mobile">
@@ -137,13 +137,13 @@
             <div class="calendar-input-row">
                 <div class="calendar-quick-title">Quick add</div>
                 <div class="quick-add-input-wrapper">
-                    <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled></textarea>
+                    <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled aria-label="Day quick add input"></textarea>
                     <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
                 </div>
-                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help" aria-label="Show syntax help">
+                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help" aria-label="Show syntax help" aria-controls="calendar-autocomplete" aria-expanded="false">
                     <i class="fa-solid fa-circle-question"></i>
                 </button>
-                <button class="btn-icon calendar-quick-toggle" id="calendar-quick-toggle" aria-label="Minimize quick add" title="Minimize quick add">
+                <button class="btn-icon calendar-quick-toggle" id="calendar-quick-toggle" aria-label="Minimize quick add" title="Minimize quick add" aria-controls="calendar-day-quick-add" aria-expanded="true">
                     <i class="fa-solid fa-chevron-up"></i>
                 </button>
             </div>
@@ -165,7 +165,7 @@
                         <i class="fa-solid fa-rotate"></i>
                     </button>
                     <div class="bulk-menu calendar-bulk-menu">
-                        <button class="btn-icon bulk-more-btn" id="calendar-bulk-more-btn" type="button" aria-label="More bulk actions">
+                        <button class="btn-icon bulk-more-btn" id="calendar-bulk-more-btn" type="button" aria-label="More bulk actions" aria-controls="calendar-bulk-more-dropdown" aria-expanded="false">
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="bulk-menu-dropdown" id="calendar-bulk-more-dropdown">
@@ -196,11 +196,11 @@
     </section>
 
     <!-- Calendar Prompt Modal -->
-    <div id="calendar-prompt-modal" class="calendar-prompt-modal is-hidden">
-        <div class="calendar-prompt-content card">
+    <div id="calendar-prompt-modal" class="calendar-prompt-modal is-hidden" role="dialog" aria-modal="true" aria-labelledby="calendar-prompt-title">
+        <div class="calendar-prompt-content card" tabindex="-1">
             <h3 id="calendar-prompt-title">Input</h3>
             <p id="calendar-prompt-message" class="calendar-prompt-message"></p>
-            <input id="calendar-prompt-input" class="form-control" type="text" value="">
+            <input id="calendar-prompt-input" class="form-control" type="text" value="" aria-label="Calendar input value">
             <div class="calendar-prompt-actions">
                 <button class="btn btn-secondary btn-small" id="calendar-prompt-cancel">Cancel</button>
                 <button class="btn btn-primary btn-small" id="calendar-prompt-save">Save</button>
@@ -209,20 +209,20 @@
     </div>
 
     <!-- Calendar Time Edit Modal -->
-    <div class="modal" id="calendar-time-modal">
-        <div class="modal-content">
-            <h2>Edit Time</h2>
+    <div class="modal" id="calendar-time-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-time-modal-title">
+        <div class="modal-content" tabindex="-1">
+            <h2 id="calendar-time-modal-title">Edit Time</h2>
             <p id="calendar-time-title" class="u-text-muted u-mt-neg-025"></p>
             <div class="form-group">
-                <label>Start time</label>
+                <label for="calendar-time-start">Start time</label>
                 <input type="text" id="calendar-time-start" class="form-control" placeholder="e.g., 3:30pm or 15:30">
             </div>
             <div class="form-group">
-                <label>End time (optional)</label>
+                <label for="calendar-time-end">End time (optional)</label>
                 <input type="text" id="calendar-time-end" class="form-control" placeholder="e.g., 5:00pm">
             </div>
             <div class="form-group">
-                <label>Reminder (e.g., 30m, 2h, 1d)</label>
+                <label for="calendar-time-reminder">Reminder (e.g., 30m, 2h, 1d)</label>
                 <input type="text" id="calendar-time-reminder" class="form-control" placeholder="e.g., 30m">
             </div>
             <div class="modal-actions">
@@ -233,12 +233,12 @@
     </div>
 
     <!-- Calendar Recurring Modal -->
-    <div class="modal" id="calendar-recurring-modal">
-        <div class="modal-content recurring-modal-content">
+    <div class="modal" id="calendar-recurring-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-recurring-modal-title">
+        <div class="modal-content recurring-modal-content" tabindex="-1">
             <!-- List View -->
             <div id="recurring-list-view">
                 <div class="recurring-header">
-                    <h2>Recurring Items</h2>
+                    <h2 id="calendar-recurring-modal-title">Recurring Items</h2>
                     <button class="btn btn-primary btn-small" id="recurring-add-new-btn">
                         <i class="fa-solid fa-plus"></i> Add New
                     </button>
@@ -276,7 +276,7 @@
                     <input type="date" id="calendar-recurring-start-day" class="form-control">
                 </div>
                 <div class="form-group">
-                    <label>Time</label>
+                    <label for="calendar-recurring-start-time">Time</label>
                     <div class="recurrence-row">
                         <input type="text" id="calendar-recurring-start-time" class="form-control" placeholder="Start time">
                         <input type="text" id="calendar-recurring-end-time" class="form-control" placeholder="End time">
@@ -312,7 +312,7 @@
                     </select>
                 </div>
                 <div class="form-group is-hidden" id="calendar-recurring-days-row">
-                    <label>Days of week</label>
+                    <label id="calendar-recurring-days-label">Days of week</label>
                     <div class="recurrence-days">
                         <label><input type="checkbox" value="0"> Mon</label>
                         <label><input type="checkbox" value="1"> Tue</label>
@@ -366,7 +366,7 @@
                     </select>
                 </div>
                 <div class="form-group is-hidden" id="calendar-recurring-custom-row">
-                    <label>Every</label>
+                    <label for="calendar-recurring-interval">Every</label>
                     <div class="recurrence-row">
                         <input type="number" id="calendar-recurring-interval" class="form-control" min="1" value="1">
                         <select id="calendar-recurring-interval-unit" class="form-control">
@@ -386,16 +386,16 @@
     </div>
 
     <!-- Link Note Modal (shared with list view) -->
-    <div class="modal" id="link-note-modal">
-        <div class="modal-content">
-            <h2>Link Note</h2>
+    <div class="modal" id="link-note-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-link-note-title">
+        <div class="modal-content" tabindex="-1">
+            <h2 id="calendar-link-note-title">Link Note</h2>
             <p id="link-note-task-label" class="u-text-muted u-mt-neg-025"></p>
             <div class="form-group">
-                <label>Choose an existing note</label>
-                <div id="link-note-list" class="note-chooser"></div>
+                <label id="calendar-link-note-list-label">Choose an existing note</label>
+                <div id="link-note-list" class="note-chooser" aria-labelledby="calendar-link-note-list-label"></div>
             </div>
             <div class="form-group">
-                <label>Create a new note</label>
+                <label for="link-note-new-title">Create a new note</label>
                 <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
             </div>
             <div class="modal-actions">
@@ -417,8 +417,8 @@
 
 
     <!-- Calendar Item Note Modal -->
-    <div class="modal" id="calendar-item-note-modal">
-        <div class="modal-content">
+    <div class="modal" id="calendar-item-note-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-item-note-title">
+        <div class="modal-content" tabindex="-1">
             <h2 id="calendar-item-note-title">Item Note</h2>
             <p id="calendar-item-note-label" class="u-text-muted u-mt-neg-025"></p>
             <div id="calendar-item-note-view" class="calendar-item-note-view"></div>
@@ -448,10 +448,10 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
-<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260209') }}" defer></script>
-<script src="{{ url_for('static', filename='calendar.js', v='compat-20260209') }}" defer></script>
-<script src="{{ url_for('static', filename='app/calendar.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js') }}" defer></script>
+<script src="{{ url_for('static', filename='calendar.js') }}" defer></script>
+<script src="{{ url_for('static', filename='app/calendar.js') }}" defer></script>
 {% endblock %}
 
 

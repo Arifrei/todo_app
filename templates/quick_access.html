@@ -43,9 +43,27 @@
             <input type="text" id="qa-title" class="form-control" placeholder="Enter title...">
         </div>
         <div class="form-group">
-            <label>Icon (FontAwesome class)</label>
+            <label id="qa-icon-picker-label">Icon</label>
+            <div class="qa-icon-dropdown" id="qa-icon-dropdown">
+                <button
+                    type="button"
+                    id="qa-icon-dropdown-btn"
+                    class="qa-icon-dropdown-btn"
+                    aria-haspopup="listbox"
+                    aria-expanded="false"
+                    aria-controls="qa-icon-grid"
+                    aria-labelledby="qa-icon-picker-label">
+                    <i id="qa-icon-dropdown-selected" class="fa-solid fa-bookmark" aria-hidden="true"></i>
+                    <i class="fa-solid fa-chevron-down qa-icon-dropdown-caret" aria-hidden="true"></i>
+                </button>
+                <div id="qa-icon-grid" class="qa-icon-grid u-hidden" role="listbox" aria-label="Icon choices"></div>
+            </div>
+            <div class="qa-icon-preview" id="qa-icon-preview" aria-live="polite">
+                <span id="qa-icon-preview-text">Selected: Bookmark</span>
+            </div>
+            <label for="qa-icon" class="qa-icon-custom-label">Custom icon class (optional)</label>
             <input type="text" id="qa-icon" class="form-control" placeholder="fa-solid fa-bookmark" value="fa-solid fa-bookmark">
-            <small class="u-text-muted">Browse icons at <a href="https://fontawesome.com/icons" target="_blank">fontawesome.com/icons</a></small>
+            <small class="u-text-muted">Need a different icon? Use any Font Awesome class from <a href="https://fontawesome.com/icons" target="_blank" rel="noopener noreferrer">fontawesome.com/icons</a></small>
         </div>
         <div class="form-group">
             <label>Type</label>

@@ -1,0 +1,104 @@
+body.shared-note-body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 2rem;
+}
+
+.shared-note-container {
+    max-width: 800px;
+    width: 100%;
+    background: var(--white);
+    border-radius: var(--card-radius);
+    box-shadow: var(--shadow-xl);
+    padding: 2rem;
+}
+
+.shared-note-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.shared-note-header h1 {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-color);
+}
+
+.shared-note-meta {
+    display: flex;
+    gap: 1rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.shared-note-content {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--text-color);
+}
+
+.shared-note-content ul,
+.shared-note-content ol {
+    padding-left: 1.2rem;
+}
+
+.shared-note-content blockquote {
+    border-left: 3px solid var(--primary-color);
+    padding-left: 0.8rem;
+    color: var(--text-muted);
+    margin: 0.75rem 0;
+    font-style: italic;
+}
+
+.shared-note-content code {
+    background: #0f172a0d;
+    padding: 0.15rem 0.35rem;
+    border-radius: 6px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.shared-note-content input[type="checkbox"] {
+    accent-color: var(--primary-color);
+    margin-right: 0.35rem;
+}
+
+.shared-note-content .note-inline-checkbox {
+    display: block;
+    margin: 0.25rem 0;
+    cursor: default;
+}
+
+.shared-note-footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 2px solid var(--border-color);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.shared-note-footer a {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.shared-note-footer a:hover {
+    text-decoration: underline;
+}
+
+.shared-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: linear-gradient(135deg, var(--primary-light), var(--secondary-light));
+    color: var(--primary-color);
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}

@@ -22,7 +22,7 @@
             {% endif %}
         </div>
         <div class="planner-fab" id="planner-fab">
-            <button class="tasks-fab-main" id="planner-fab-main" aria-label="Add">
+            <button class="tasks-fab-main" id="planner-fab-main" aria-label="Add" aria-controls="planner-fab" aria-expanded="false">
                 <i class="fa-solid fa-plus"></i>
             </button>
             <div class="planner-fab-options" id="planner-fab-options"></div>
@@ -54,8 +54,8 @@
     <div class="planner-content" id="planner-content"></div>
 </div>
 
-<div class="modal" id="planner-modal">
-    <div class="modal-content planner-modal-content">
+<div class="modal" id="planner-modal" role="dialog" aria-modal="true" aria-labelledby="planner-modal-title">
+    <div class="modal-content planner-modal-content" tabindex="-1">
         <h2 id="planner-modal-title">Add</h2>
         <div id="planner-modal-body"></div>
         <div class="modal-actions">
@@ -65,8 +65,8 @@
     </div>
 </div>
 
-<div class="modal" id="planner-note-preview-modal">
-    <div class="modal-content planner-note-preview-content">
+<div class="modal" id="planner-note-preview-modal" role="dialog" aria-modal="true" aria-labelledby="planner-note-preview-title">
+    <div class="modal-content planner-note-preview-content" tabindex="-1">
         <div class="planner-note-preview-header">
             <h2 id="planner-note-preview-title">Note</h2>
             <button class="btn-icon" type="button" data-onclick="closePlannerNotePreview()" title="Close" aria-label="Close note preview">

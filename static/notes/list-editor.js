@@ -56,11 +56,13 @@ function initListEditorPage() {
             if (!searchBar) return;
             const nextOpen = searchBar.style.display === 'none' || searchBar.style.display === '';
             searchBar.style.display = nextOpen ? 'flex' : 'none';
+            searchToggleBtn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
             if (nextOpen && searchInput) {
                 searchInput.focus();
                 searchInput.select();
             }
             if (actionsMenu) actionsMenu.classList.remove('open');
+            if (actionsToggle) actionsToggle.setAttribute('aria-expanded', 'false');
         });
     }
     if (selectToggle) selectToggle.addEventListener('click', () => toggleListSelectionMode());
@@ -119,17 +121,20 @@ function initListEditorPage() {
                 bulkMoreMenu.classList.remove('open');
                 bulkMoreMenu.style.visibility = '';
             }
+            bulkMoreToggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
         });
         bulkMoreMenu.addEventListener('click', (e) => {
             if (e.target.closest('button')) {
                 bulkMoreMenu.classList.remove('open');
                 bulkMoreMenu.style.visibility = '';
+                bulkMoreToggle.setAttribute('aria-expanded', 'false');
             }
         });
         document.addEventListener('click', (e) => {
             if (!bulkMoreMenu.contains(e.target) && !bulkMoreToggle.contains(e.target)) {
                 bulkMoreMenu.classList.remove('open');
                 bulkMoreMenu.style.visibility = '';
+                bulkMoreToggle.setAttribute('aria-expanded', 'false');
             }
         });
     }
@@ -150,6 +155,7 @@ function initListEditorPage() {
                 renderListItems();
                 const searchBar = document.getElementById('list-search');
                 if (searchBar) searchBar.style.display = 'none';
+                if (searchToggleBtn) searchToggleBtn.setAttribute('aria-expanded', 'false');
             }
         });
     }
@@ -160,6 +166,7 @@ function initListEditorPage() {
             renderListItems();
             searchInput.focus();
             if (searchBar) searchBar.style.display = 'none';
+            if (searchToggleBtn) searchToggleBtn.setAttribute('aria-expanded', 'false');
         });
     }
     if (sectionTitleInput) {
@@ -191,14 +198,20 @@ function initListEditorPage() {
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
-            actionsMenu.classList.toggle('open');
+            const nextOpen = !actionsMenu.classList.contains('open');
+            actionsMenu.classList.toggle('open', nextOpen);
+            actionsToggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
         });
         actionsMenu.addEventListener('click', (e) => {
-            if (e.target.closest('button')) actionsMenu.classList.remove('open');
+            if (e.target.closest('button')) {
+                actionsMenu.classList.remove('open');
+                actionsToggle.setAttribute('aria-expanded', 'false');
+            }
         });
         document.addEventListener('click', (e) => {
             if (!actionsMenu.contains(e.target) && !actionsToggle.contains(e.target)) {
                 actionsMenu.classList.remove('open');
+                actionsToggle.setAttribute('aria-expanded', 'false');
             }
         });
     }
@@ -684,6 +697,7 @@ function updateListSelectionUI() {
     const toggleBtn = document.getElementById('list-select-toggle');
     if (toggleBtn) {
         toggleBtn.classList.toggle('active', listSelectionState.active);
+        toggleBtn.setAttribute('aria-pressed', listSelectionState.active ? 'true' : 'false');
         toggleBtn.innerHTML = listSelectionState.active
             ? '<i class="fa-solid fa-check"></i> Done'
             : '<i class="fa-solid fa-check-square"></i> Select';
@@ -2248,7 +2262,7 @@ function loadListEditorScriptOnce(url, marker) {
 async function ensureListEditorDependencies() {
     const hasDetailHelpers = typeof window.formatNoteDate === 'function';
     if (!hasDetailHelpers) {
-        await loadListEditorScriptOnce('/static/notes/detail.js?v=compat-20260210', 'detail');
+        await loadListEditorScriptOnce('/static/notes/detail.js', 'detail');
     }
 
     const hasEditorHelpers =
@@ -2257,7 +2271,7 @@ async function ensureListEditorDependencies() {
         typeof window.shouldAllowListVisibilityToggle === 'function' &&
         typeof window.toggleListVisibility === 'function';
     if (!hasEditorHelpers) {
-        await loadListEditorScriptOnce('/static/notes/editor.js?v=compat-20260210', 'editor');
+        await loadListEditorScriptOnce('/static/notes/editor.js', 'editor');
     }
 }
 

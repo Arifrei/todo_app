@@ -4,13 +4,13 @@
 <div class="page-header">
     <div>
         <h1>Settings</h1>
-        <p class="u-text-muted u-m-0">Notification preferences (UI scaffold).</p>
+        <p class="u-text-muted u-m-0">Manage notifications and account security.</p>
     </div>
 </div>
 
 <div class="card u-max-w-800">
     <h3>Notification Preferences</h3>
-    <p class="u-text-muted u-mt-0">Choose where and what to notify.</p>
+    <p class="u-text-muted u-mt-0">Choose how reminders and updates are delivered.</p>
     <div class="settings-grid">
         <label class="setting-row">
             <div>
@@ -62,13 +62,14 @@
             <input type="number" id="pref-snooze-minutes" min="1" max="120" class="u-w-80">
         </label>
     </div>
-    <div class="u-mt-1 u-flex-row-gap-075">
+    <div class="u-mt-1 u-flex-row-gap-075 u-align-center">
         <button class="btn btn-secondary btn-small" id="pref-save-btn">
             <i class="fa-solid fa-floppy-disk"></i> Save
         </button>
         <button class="btn btn-ghost btn-small" id="pref-test-btn">
             <i class="fa-solid fa-paper-plane"></i> Send test (in-app)
         </button>
+        <span id="pref-save-status" class="u-text-muted" aria-live="polite"></span>
     </div>
 </div>
 

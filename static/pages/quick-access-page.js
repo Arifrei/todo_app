@@ -1,5 +1,91 @@
 const qaItemsById = new Map();
 let qaEditingId = null;
+const QA_ICON_DEFAULT = 'fa-solid fa-bookmark';
+const QA_ICON_OPTIONS = [
+    { icon: 'fa-solid fa-bookmark', label: 'Bookmark' },
+    { icon: 'fa-solid fa-star', label: 'Star' },
+    { icon: 'fa-solid fa-calendar-day', label: 'Calendar' },
+    { icon: 'fa-solid fa-list-check', label: 'Tasks' },
+    { icon: 'fa-solid fa-note-sticky', label: 'Note' },
+    { icon: 'fa-solid fa-folder', label: 'Folder' },
+    { icon: 'fa-solid fa-bolt', label: 'Quick' },
+    { icon: 'fa-solid fa-link', label: 'Link' },
+    { icon: 'fa-solid fa-briefcase', label: 'Work' },
+    { icon: 'fa-solid fa-house', label: 'Home' },
+    { icon: 'fa-solid fa-graduation-cap', label: 'Learn' },
+    { icon: 'fa-solid fa-heart', label: 'Personal' }
+];
+
+function normalizeQAIconClass(iconClass) {
+    const normalized = String(iconClass || '').trim();
+    return normalized || QA_ICON_DEFAULT;
+}
+
+function getQAIconOption(iconClass) {
+    return QA_ICON_OPTIONS.find((option) => option.icon === iconClass) || null;
+}
+
+function setQAIconDropdownOpen(isOpen) {
+    const grid = document.getElementById('qa-icon-grid');
+    const button = document.getElementById('qa-icon-dropdown-btn');
+    if (!grid || !button) return;
+    grid.classList.toggle('u-hidden', !isOpen);
+    button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+}
+
+function syncQAIconSelection(iconClass, { updateInput = true } = {}) {
+    const normalized = normalizeQAIconClass(iconClass);
+    const iconInput = document.getElementById('qa-icon');
+    const dropdownSelectedIcon = document.getElementById('qa-icon-dropdown-selected');
+    const iconGrid = document.getElementById('qa-icon-grid');
+    const previewIcon = document.getElementById('qa-icon-preview-icon');
+    const previewText = document.getElementById('qa-icon-preview-text');
+
+    if (updateInput && iconInput) {
+        iconInput.value = normalized;
+    }
+    if (dropdownSelectedIcon) {
+        dropdownSelectedIcon.className = normalized;
+    }
+    if (previewIcon) {
+        previewIcon.className = normalized;
+    }
+    if (iconGrid) {
+        iconGrid.querySelectorAll('.qa-icon-grid-item').forEach((btn) => {
+            const isSelected = btn.dataset.icon === normalized;
+            btn.classList.toggle('selected', isSelected);
+            btn.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+        });
+    }
+    if (previewText) {
+        const matched = getQAIconOption(normalized);
+        previewText.textContent = matched ? `Selected: ${matched.label}` : 'Selected: Custom icon';
+    }
+}
+
+function renderQAIconPicker() {
+    const grid = document.getElementById('qa-icon-grid');
+    if (!grid || grid.dataset.ready === '1') return;
+    grid.dataset.ready = '1';
+    grid.innerHTML = '';
+
+    QA_ICON_OPTIONS.forEach((option) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'qa-icon-grid-item';
+        button.dataset.icon = option.icon;
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-label', option.label);
+        button.setAttribute('aria-selected', 'false');
+        button.title = option.label;
+        button.innerHTML = `<i class="${option.icon}" aria-hidden="true"></i>`;
+        button.addEventListener('click', () => {
+            syncQAIconSelection(option.icon);
+            setQAIconDropdownOpen(false);
+        });
+        grid.appendChild(button);
+    });
+}
 
 // Load user's quick access items
 async function loadQuickAccessItems() {
@@ -69,7 +155,6 @@ function handleQuickAccessCardClick(e) {
 
     const card = e.currentTarget;
     const isProtected = card.dataset.protected === 'true';
-
     if (!isProtected) return; // Let normal navigation happen
 
     e.preventDefault();
@@ -80,7 +165,6 @@ function handleQuickAccessCardClick(e) {
     const referenceId = card.dataset.referenceId;
     const protectedFolderId = card.dataset.protectedFolderId;
     const targetUrl = card.href;
-
     // Store pending action for PIN verification using Quick Access specific state
     window.qaProtectedState.pendingUrl = targetUrl;
     window.qaProtectedState.protectedType = protectedType;
@@ -165,9 +249,10 @@ function openAddQuickAccessModal() {
     qaEditingId = null;
     setQuickAccessModalMode('add');
     document.getElementById('add-quick-access-modal').classList.add('active');
+    setQAIconDropdownOpen(false);
     // Reset form
     document.getElementById('qa-title').value = '';
-    document.getElementById('qa-icon').value = 'fa-solid fa-bookmark';
+    syncQAIconSelection(QA_ICON_DEFAULT);
     document.getElementById('qa-type').value = 'custom';
     document.getElementById('qa-url').value = '';
     document.getElementById('qa-date').value = '';
@@ -184,6 +269,7 @@ function openAddQuickAccessModal() {
 
 function closeAddQuickAccessModal() {
     document.getElementById('add-quick-access-modal').classList.remove('active');
+    setQAIconDropdownOpen(false);
     qaEditingId = null;
     setQuickAccessModalMode('add');
     resetQANavState();
@@ -809,9 +895,10 @@ function openEditQuickAccessModal(id, event) {
     qaEditingId = id;
     setQuickAccessModalMode('edit');
     document.getElementById('add-quick-access-modal').classList.add('active');
+    setQAIconDropdownOpen(false);
 
     document.getElementById('qa-title').value = item.title || '';
-    document.getElementById('qa-icon').value = item.icon || 'fa-solid fa-bookmark';
+    syncQAIconSelection(item.icon || QA_ICON_DEFAULT);
     document.getElementById('qa-type').value = item.item_type || 'custom';
     document.getElementById('qa-url').value = item.url || '';
     document.getElementById('qa-date').value = item.item_type === 'calendar' ? extractCalendarDate(item.url) : '';
@@ -844,7 +931,7 @@ function openEditQuickAccessModal(id, event) {
 async function saveQuickAccessItem() {
     const type = document.getElementById('qa-type').value;
     const title = document.getElementById('qa-title').value.trim();
-    const icon = document.getElementById('qa-icon').value.trim();
+    const icon = normalizeQAIconClass(document.getElementById('qa-icon').value);
 
     if (!title) {
         showToast('Please enter a title', 'warning');
@@ -1480,6 +1567,30 @@ function initQuickAccessPage() {
     if (qaCancel) qaCancel.addEventListener('click', closeAddQuickAccessModal);
     const qaSave = document.getElementById('qa-save-btn');
     if (qaSave) qaSave.addEventListener('click', saveQuickAccessItem);
+    const iconInput = document.getElementById('qa-icon');
+    const iconDropdown = document.getElementById('qa-icon-dropdown');
+    const iconDropdownBtn = document.getElementById('qa-icon-dropdown-btn');
+    renderQAIconPicker();
+    if (iconDropdownBtn) {
+        iconDropdownBtn.addEventListener('click', () => {
+            const isExpanded = iconDropdownBtn.getAttribute('aria-expanded') === 'true';
+            setQAIconDropdownOpen(!isExpanded);
+        });
+    }
+    document.addEventListener('click', (event) => {
+        if (iconDropdown && !iconDropdown.contains(event.target)) {
+            setQAIconDropdownOpen(false);
+        }
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            setQAIconDropdownOpen(false);
+        }
+    });
+    if (iconInput) {
+        iconInput.addEventListener('input', () => syncQAIconSelection(iconInput.value, { updateInput: false }));
+        syncQAIconSelection(iconInput.value || QA_ICON_DEFAULT, { updateInput: false });
+    }
 
     loadQuickAccessItems();
 }

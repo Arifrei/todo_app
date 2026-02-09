@@ -1,6 +1,8 @@
 :root {
     /* Base Colors - Light & Airy */
     --bg-color: #f8f9fd;
+    --bg-light: #f8fafc;
+    --bg-hover: #eef2ff;
     --text-color: #1e293b;
     --text-muted: #64748b;
 
@@ -61,6 +63,24 @@ body {
     min-height: 100dvh;
     overflow-x: hidden;
     font-size: 14px;
+}
+
+.skip-link {
+    position: fixed;
+    top: 0.5rem;
+    left: 0.5rem;
+    z-index: 3000;
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    background: #0f172a;
+    color: #fff;
+    text-decoration: none;
+    transform: translateY(-140%);
+    transition: transform 0.2s ease;
+}
+
+.skip-link:focus {
+    transform: translateY(0);
 }
 
 /* Animated Background Elements */
@@ -2483,6 +2503,12 @@ header p {
     flex-wrap: wrap;
 }
 
+.task-inline-action {
+    padding: 0.36rem 0.62rem;
+    font-size: 0.78rem;
+    min-height: 30px;
+}
+
 .task-footer {
     display: flex;
     align-items: center;
@@ -3231,7 +3257,6 @@ textarea.form-control {
         flex-shrink: 0;
         visibility: visible !important;
         opacity: 1 !important;
-        border: 3px solid red !important;
         z-index: 999 !important;
     }
 
@@ -3693,6 +3718,12 @@ textarea.form-control {
         gap: 0.25rem;
     }
 
+    .task-inline-action {
+        padding: 0.3rem 0.5rem;
+        font-size: 0.72rem;
+        min-height: 26px;
+    }
+
     .task-item:not(.phase) .btn-icon {
         width: 26px;
         height: 26px;
@@ -3798,7 +3829,6 @@ textarea.form-control {
         flex-shrink: 0;
         visibility: visible !important;
         opacity: 1 !important;
-        border: 3px solid red !important;
         z-index: 999 !important;
     }
 

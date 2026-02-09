@@ -93,6 +93,7 @@
     </script>
 </head>
 <body class="{{ body_class|default('') }}">
+    <a class="skip-link" href="#main-content">Skip to main content</a>
     <div class="gradient-bg"></div>
     <div class="background-blobs">
         <div class="blob blob-1"></div>
@@ -103,7 +104,7 @@
     <div class="app-container">
         <div class="mobile-topbar">
             <div class="mobile-topbar-left">
-                <button class="hamburger-btn" id="mobile-menu-btn" type="button" aria-label="Open navigation">
+                <button class="hamburger-btn" id="mobile-menu-btn" type="button" aria-label="Open navigation" aria-controls="sidebar-nav" aria-expanded="false">
                     <span></span><span></span><span></span>
                 </button>
             </div>
@@ -116,80 +117,80 @@
                 </button>
             </div>
         </div>
-        <nav class="sidebar">
+        <nav class="sidebar" id="sidebar-nav" aria-label="Primary navigation">
             <div class="logo">
                 <img src="{{ url_for('static', filename='cards.png') }}" alt="Simply Tasks">
             </div>
             <div class="nav-row">
                 <ul class="nav-links">
                     <li data-nav-id="home">
-                        <a href="/" class="{{ 'active' if request.path == '/' else '' }}">
+                        <a href="/" class="{{ 'active' if request.path == '/' else '' }}"{% if request.path == '/' %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-house"></i></span>
                             <span class="nav-label">Home</span>
                         </a>
                     </li>
                     <li data-nav-id="tasks">
-                        <a href="/tasks" class="{{ 'active' if request.path.startswith('/tasks') or request.path.startswith('/list') else '' }}">
+                        <a href="/tasks" class="{{ 'active' if request.path.startswith('/tasks') or request.path.startswith('/list') else '' }}"{% if request.path.startswith('/tasks') or request.path.startswith('/list') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-list-check"></i></span>
                             <span class="nav-label">Tasks</span>
                         </a>
                     </li>
                     <li data-nav-id="calendar">
-                        <a href="/calendar" class="{{ 'active' if request.path.startswith('/calendar') else '' }}">
+                        <a href="/calendar" class="{{ 'active' if request.path.startswith('/calendar') else '' }}"{% if request.path.startswith('/calendar') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-calendar-day"></i></span>
                             <span class="nav-label">Calendar</span>
                         </a>
                     </li>
                     <li data-nav-id="notes">
-                        <a href="/notes" class="{{ 'active' if request.path.startswith('/notes') else '' }}">
+                        <a href="/notes" class="{{ 'active' if request.path.startswith('/notes') else '' }}"{% if request.path.startswith('/notes') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-note-sticky"></i></span>
                             <span class="nav-label">Notes</span>
                         </a>
                     </li>
                     <li data-nav-id="vault">
-                        <a href="/vault" class="{{ 'active' if request.path.startswith('/vault') else '' }}">
+                        <a href="/vault" class="{{ 'active' if request.path.startswith('/vault') else '' }}"{% if request.path.startswith('/vault') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-folder-open"></i></span>
                             <span class="nav-label">Vault</span>
                         </a>
                     </li>
                     <li data-nav-id="recalls">
-                        <a href="/recalls" class="{{ 'active' if request.path.startswith('/recalls') else '' }}">
+                        <a href="/recalls" class="{{ 'active' if request.path.startswith('/recalls') else '' }}"{% if request.path.startswith('/recalls') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-inbox"></i></span>
                             <span class="nav-label">Recalls</span>
                         </a>
                     </li>
                     <li data-nav-id="bookmarks">
-                        <a href="/bookmarks" class="{{ 'active' if request.path.startswith('/bookmarks') else '' }}">
+                        <a href="/bookmarks" class="{{ 'active' if request.path.startswith('/bookmarks') else '' }}"{% if request.path.startswith('/bookmarks') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-bookmark"></i></span>
                             <span class="nav-label">Bookmarks</span>
                         </a>
                     </li>
                     <li data-nav-id="planner">
-                        <a href="/planner" class="{{ 'active' if request.path.startswith('/planner') else '' }}">
+                        <a href="/planner" class="{{ 'active' if request.path.startswith('/planner') else '' }}"{% if request.path.startswith('/planner') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-folder-tree"></i></span>
                             <span class="nav-label">Planner</span>
                         </a>
                     </li>
                     <li data-nav-id="feed">
-                        <a href="/feed" class="{{ 'active' if request.path.startswith('/feed') else '' }}">
+                        <a href="/feed" class="{{ 'active' if request.path.startswith('/feed') else '' }}"{% if request.path.startswith('/feed') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-bolt"></i></span>
                             <span class="nav-label">EverFeed</span>
                         </a>
                     </li>
                     <li data-nav-id="quick-access">
-                        <a href="/quick-access" class="{{ 'active' if request.path.startswith('/quick-access') else '' }}">
+                        <a href="/quick-access" class="{{ 'active' if request.path.startswith('/quick-access') else '' }}"{% if request.path.startswith('/quick-access') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-star"></i></span>
                             <span class="nav-label">Quick Access</span>
                         </a>
                     </li>
                     <li data-nav-id="ai">
-                        <a href="/ai" class="{{ 'active' if request.path.startswith('/ai') else '' }}">
+                        <a href="/ai" class="{{ 'active' if request.path.startswith('/ai') else '' }}"{% if request.path.startswith('/ai') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-robot"></i></span>
                             <span class="nav-label">Assistant</span>
                         </a>
                     </li>
                     <li data-nav-id="settings">
-                        <a href="/settings" class="{{ 'active' if request.path.startswith('/settings') else '' }}">
+                        <a href="/settings" class="{{ 'active' if request.path.startswith('/settings') else '' }}"{% if request.path.startswith('/settings') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-gear"></i></span>
                             <span class="nav-label">Settings</span>
                         </a>
@@ -207,7 +208,7 @@
         </nav>
         <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-        <main class="content">
+        <main class="content" id="main-content">
             {% block content %}{% endblock %}
         </main>
     </div>
@@ -237,14 +238,14 @@
     </div>
 
     <!-- AI Assistant Panel -->
-    <button class="ai-launcher" id="ai-launcher-btn" type="button" aria-label="Open AI panel">
+    <button class="ai-launcher" id="ai-launcher-btn" type="button" aria-label="Open AI panel" aria-controls="ai-panel" aria-expanded="false">
         <i class="fa-solid fa-robot"></i>
         <span>Ask AI</span>
     </button>
-    <div class="ai-panel" id="ai-panel">
+    <div class="ai-panel" id="ai-panel" role="dialog" aria-modal="false" aria-labelledby="ai-panel-heading">
         <div class="ai-panel-header">
             <div>
-                <strong>AI Assistant</strong>
+                <strong id="ai-panel-heading">AI Assistant</strong>
                 <div class="ai-subtitle">Manage tasks, calendar, recalls & bookmarks</div>
             </div>
             <button class="btn-icon" id="ai-panel-close-btn" type="button" aria-label="Close AI panel">
@@ -325,10 +326,10 @@
     </div>
 
     <!-- Global scripts -->
-    <script src="{{ url_for('static', filename='shared-ui.js', v='compat-20260209') }}" defer></script>
+    <script src="{{ url_for('static', filename='shared-ui.js') }}" defer></script>
     <script src="{{ url_for('static', filename='ai-assistant.js') }}" defer></script>
-    <script src="{{ url_for('static', filename='pin-protection.js', v='compat-20260209') }}" defer></script>
-    <script src="{{ url_for('static', filename='app/homepage.js', v='compat-20260209') }}" defer></script>
+    <script src="{{ url_for('static', filename='pin-protection.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='app/homepage.js') }}" defer></script>
     <script src="{{ url_for('static', filename='capacitor-notifications.js') }}" defer></script>
 
     {% block page_scripts %}{% endblock %}

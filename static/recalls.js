@@ -19,21 +19,28 @@ function initRecallsPage() {
     if (document.body && document.body.dataset.recallsPageInit === '1') return;
     if (document.body) document.body.dataset.recallsPageInit = '1';
 
+    function setRecallAddButtonState(isOpen) {
+        if (!addBtn) return;
+        addBtn.classList.toggle('active', isOpen);
+        addBtn.innerHTML = `<i class="fa-solid ${isOpen ? 'fa-xmark' : 'fa-plus'}"></i>`;
+        addBtn.setAttribute('aria-label', isOpen ? 'Close add recall form' : 'Add recall');
+        addBtn.title = isOpen ? 'Close add form' : 'Add recall';
+    }
+
     // Toggle add form visibility
     if (addBtn && addForm) {
         addBtn.addEventListener('click', () => {
             const isOpen = addForm.classList.contains('open');
             if (isOpen) {
                 addForm.classList.remove('open');
-                addBtn.classList.remove('active');
-                addBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add';
+                setRecallAddButtonState(false);
             } else {
                 addForm.classList.add('open');
-                addBtn.classList.add('active');
-                addBtn.innerHTML = '<i class="fa-solid fa-times"></i> Cancel';
+                setRecallAddButtonState(true);
                 if (addInput) addInput.focus();
             }
         });
+        setRecallAddButtonState(false);
     }
 
     // Setup add input - Enter key submits immediately
@@ -413,7 +420,9 @@ async function handleAddRecall(input) {
         if (addForm) addForm.classList.remove('open');
         if (addBtn) {
             addBtn.classList.remove('active');
-            addBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add';
+            addBtn.innerHTML = '<i class="fa-solid fa-plus"></i>';
+            addBtn.setAttribute('aria-label', 'Add recall');
+            addBtn.title = 'Add recall';
         }
 
         renderRecallCards();

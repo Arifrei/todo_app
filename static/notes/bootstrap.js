@@ -431,7 +431,7 @@ function createNoteItem(note, options = {}) {
             ${lockIcon}
             ${isPinned ? '<i class="notes-item-pinned fa-solid fa-thumbtack"></i>' : ''}
             <div class="notes-item-dropdown">
-                <button class="btn-icon" type="button" data-note-id="${note.id}" data-pin-label="${pinLabel}" onclick="toggleNoteActionsMenu(${note.id}, event)" title="More actions" aria-label="More note actions">
+                <button class="btn-icon" id="notes-note-menu-btn-${note.id}" type="button" data-note-id="${note.id}" data-pin-label="${pinLabel}" onclick="toggleNoteActionsMenu(${note.id}, event)" title="More actions" aria-label="More note actions" aria-haspopup="menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis-vertical"></i>
                 </button>
             </div>
@@ -474,7 +474,7 @@ function createFolderItem(folder, options = {}) {
             ${lockIcon}
             <i class="notes-item-chevron fa-solid fa-chevron-right"></i>
             <div class="notes-item-dropdown">
-                <button class="btn-icon" type="button" data-folder-id="${folder.id}" data-folder-name="${escapeHtml(folder.name)}" onclick="toggleFolderActionsMenu(${folder.id}, event)" title="More actions" aria-label="More folder actions">
+                <button class="btn-icon" id="notes-folder-menu-btn-${folder.id}" type="button" data-folder-id="${folder.id}" data-folder-name="${escapeHtml(folder.name)}" onclick="toggleFolderActionsMenu(${folder.id}, event)" title="More actions" aria-label="More folder actions" aria-haspopup="menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis-vertical"></i>
                 </button>
             </div>
@@ -747,6 +747,7 @@ function handleSwipeDelete(noteId) {
 
 // Global reference to active notes dropdown
 let activeNotesDropdown = null;
+let activeNotesDropdownTrigger = null;
 
 /**
  * Close any active notes dropdown menu
@@ -755,6 +756,11 @@ function closeNotesDropdown() {
     if (activeNotesDropdown) {
         activeNotesDropdown.remove();
         activeNotesDropdown = null;
+    }
+    if (activeNotesDropdownTrigger) {
+        activeNotesDropdownTrigger.setAttribute('aria-expanded', 'false');
+        activeNotesDropdownTrigger.removeAttribute('aria-controls');
+        activeNotesDropdownTrigger = null;
     }
 }
 
@@ -842,7 +848,10 @@ function toggleNoteActionsMenu(noteId, event) {
 
     // Create dropdown
     const dropdown = document.createElement('div');
+    const dropdownId = `notes-item-menu-note-${noteId}`;
     dropdown.className = 'notes-item-menu active';
+    dropdown.id = dropdownId;
+    dropdown.setAttribute('role', 'menu');
     dropdown.dataset.noteId = noteId;
     dropdown.innerHTML = `
         ${pinOption}
@@ -886,6 +895,11 @@ function toggleNoteActionsMenu(noteId, event) {
     document.body.appendChild(dropdown);
     positionNotesDropdown(dropdown, button);
     activeNotesDropdown = dropdown;
+    activeNotesDropdownTrigger = button;
+    if (button) {
+        button.setAttribute('aria-controls', dropdownId);
+        button.setAttribute('aria-expanded', 'true');
+    }
 }
 
 /**
@@ -923,7 +937,10 @@ function toggleFolderActionsMenu(folderId, event) {
 
     // Create dropdown
     const dropdown = document.createElement('div');
+    const dropdownId = `notes-item-menu-folder-${folderId}`;
     dropdown.className = 'notes-item-menu active';
+    dropdown.id = dropdownId;
+    dropdown.setAttribute('role', 'menu');
     dropdown.dataset.folderId = folderId;
     dropdown.innerHTML = `
         <button class="notes-item-menu-option" data-action="rename">
@@ -959,11 +976,22 @@ function toggleFolderActionsMenu(folderId, event) {
     document.body.appendChild(dropdown);
     positionNotesDropdown(dropdown, button);
     activeNotesDropdown = dropdown;
+    activeNotesDropdownTrigger = button;
+    if (button) {
+        button.setAttribute('aria-controls', dropdownId);
+        button.setAttribute('aria-expanded', 'true');
+    }
 }
 
 // Close notes dropdown when clicking outside
 document.addEventListener('click', (e) => {
     if (activeNotesDropdown && !e.target.closest('.notes-item-dropdown')) {
+        closeNotesDropdown();
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && activeNotesDropdown) {
         closeNotesDropdown();
     }
 });
@@ -1707,7 +1735,7 @@ async function ensureNotesDetailLoaded() {
 
     await new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = '/static/notes/detail.js?v=compat-20260210';
+        script.src = '/static/notes/detail.js';
         script.defer = true;
         script.dataset.notesDetailLoader = '1';
         script.addEventListener('load', resolve, { once: true });

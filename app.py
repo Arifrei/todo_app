@@ -1044,4 +1044,4 @@ if __name__ == '__main__':
     except (TypeError, ValueError):
         port = 5004
     debug = os.environ.get('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes', 'on')
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=port, debug=True)

@@ -117,6 +117,9 @@ function showToast(message, type = 'info', duration = 4000) {
         container = document.createElement('div');
         container.id = 'toast-container';
         container.className = 'toast-container';
+        container.setAttribute('role', 'status');
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-atomic', 'true');
         document.body.appendChild(container);
     }
 
@@ -607,10 +610,68 @@ function initModalAccessibility() {
     });
 }
 
+function isControlledRegionExpanded(region) {
+    if (!region) return false;
+    if (region.classList.contains('is-hidden')) return false;
+    if (region.hasAttribute('hidden')) return false;
+    if (region.getAttribute('aria-hidden') === 'true') return false;
+    if (
+        region.classList.contains('active') ||
+        region.classList.contains('open') ||
+        region.classList.contains('show') ||
+        region.classList.contains('expanded')
+    ) {
+        return true;
+    }
+    const computed = window.getComputedStyle(region);
+    if (!computed) return false;
+    return computed.display !== 'none' && computed.visibility !== 'hidden';
+}
+
+function syncAriaExpandedState(control) {
+    if (!control) return;
+    const controlledId = control.getAttribute('aria-controls');
+    if (!controlledId) return;
+    const region = document.getElementById(controlledId);
+    if (!region) return;
+    control.setAttribute('aria-expanded', isControlledRegionExpanded(region) ? 'true' : 'false');
+}
+
+function initAriaControls() {
+    const controls = Array.from(document.querySelectorAll('[aria-controls]'));
+    if (!controls.length) return;
+
+    const controlsById = new Map();
+    controls.forEach((control) => {
+        const controlledId = control.getAttribute('aria-controls');
+        if (!controlledId) return;
+        if (!controlsById.has(controlledId)) controlsById.set(controlledId, []);
+        controlsById.get(controlledId).push(control);
+        syncAriaExpandedState(control);
+
+        control.addEventListener('click', () => {
+            setTimeout(() => syncAriaExpandedState(control), 0);
+        });
+    });
+
+    controlsById.forEach((linkedControls, controlledId) => {
+        const region = document.getElementById(controlledId);
+        if (!region) return;
+        const observer = new MutationObserver(() => {
+            linkedControls.forEach((control) => syncAriaExpandedState(control));
+        });
+        observer.observe(region, { attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'] });
+    });
+}
+
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initModalAccessibility);
+    document.addEventListener('DOMContentLoaded', () => {
+        initModalAccessibility();
+        initAriaControls();
+    });
 } else {
     initModalAccessibility();
+    initAriaControls();
 }
 
 window.escapeHtml = escapeHtml;

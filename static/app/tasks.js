@@ -51,6 +51,13 @@ function updateBulkBar() {
     window.scrollTo(0, scrollY);
 }
 
+function setAriaExpandedForControls(controlledId, expanded) {
+    if (!controlledId) return;
+    document.querySelectorAll(`[aria-controls="${controlledId}"]`).forEach((control) => {
+        control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+}
+
 function toggleBulkMenu(event, forceClose = false) {
     if (event) event.stopPropagation();
     const menu = document.getElementById('bulk-menu-dropdown');
@@ -67,6 +74,9 @@ function toggleBulkMenu(event, forceClose = false) {
         const tagForm = document.getElementById('bulk-tag-form');
         if (statusMenu) statusMenu.classList.remove('show');
         if (tagForm) tagForm.classList.remove('show');
+        setAriaExpandedForControls('bulk-menu-dropdown', false);
+        setAriaExpandedForControls('bulk-status-submenu', false);
+        setAriaExpandedForControls('bulk-tag-form', false);
         return;
     }
 
@@ -83,8 +93,12 @@ function toggleBulkMenu(event, forceClose = false) {
         const tagForm = document.getElementById('bulk-tag-form');
         if (statusMenu) statusMenu.classList.remove('show');
         if (tagForm) tagForm.classList.remove('show');
+        setAriaExpandedForControls('bulk-status-submenu', false);
+        setAriaExpandedForControls('bulk-tag-form', false);
+        setAriaExpandedForControls('bulk-menu-dropdown', false);
         return;
     }
+    setAriaExpandedForControls('bulk-menu-dropdown', true);
 
     const isListView = !!document.querySelector('.list-view');
     const positionBulkMenuAbove = (rect) => {
@@ -138,12 +152,16 @@ function toggleBulkSubmenu(kind, event) {
     if (kind === 'status') {
         if (tagForm) tagForm.classList.remove('show');
         if (statusMenu) statusMenu.classList.toggle('show');
+        setAriaExpandedForControls('bulk-tag-form', false);
+        setAriaExpandedForControls('bulk-status-submenu', !!(statusMenu && statusMenu.classList.contains('show')));
     }
     if (kind === 'tag') {
         if (statusMenu) statusMenu.classList.remove('show');
+        setAriaExpandedForControls('bulk-status-submenu', false);
         if (tagForm) {
             const willShow = !tagForm.classList.contains('show');
             tagForm.classList.toggle('show', willShow);
+            setAriaExpandedForControls('bulk-tag-form', willShow);
             if (willShow) {
                 const input = document.getElementById('bulk-tag-input');
                 if (input) input.focus();
@@ -168,6 +186,9 @@ document.addEventListener('click', (e) => {
         const tagForm = document.getElementById('bulk-tag-form');
         if (statusMenu) statusMenu.classList.remove('show');
         if (tagForm) tagForm.classList.remove('show');
+        setAriaExpandedForControls('bulk-menu-dropdown', false);
+        setAriaExpandedForControls('bulk-status-submenu', false);
+        setAriaExpandedForControls('bulk-tag-form', false);
     }
 });
 
@@ -212,6 +233,7 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        setAriaExpandedForControls('calendar-bulk-more-dropdown', false);
         return;
     }
     const shouldShow = !menu.classList.contains('show');
@@ -219,8 +241,10 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
     menu.classList.toggle('show', shouldShow);
       if (!shouldShow) {
           restoreCalendarNoteChoiceDropdown(menu);
+          setAriaExpandedForControls('calendar-bulk-more-dropdown', false);
           return;
       }
+    setAriaExpandedForControls('calendar-bulk-more-dropdown', true);
 
     if (window.innerWidth <= 768 && event && event.currentTarget) {
         const rect = event.currentTarget.getBoundingClientRect();
@@ -251,6 +275,7 @@ document.addEventListener('click', (e) => {
     if (!menu) return;
     if (!e.target.closest('.calendar-bulk-menu')) {
         menu.classList.remove('show');
+        setAriaExpandedForControls('calendar-bulk-more-dropdown', false);
     }
 });
 

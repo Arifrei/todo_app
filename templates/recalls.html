@@ -24,8 +24,8 @@
 </div>
 
 <!-- Recall Detail Modal -->
-<div class="recall-modal-overlay" id="recall-modal-overlay">
-    <div class="recall-modal">
+<div class="recall-modal-overlay" id="recall-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="recall-modal-title-text">
+    <div class="recall-modal" tabindex="-1">
         <div class="recall-modal-header">
             <h2 id="recall-modal-title-text">Recall</h2>
             <button class="recall-modal-close" id="recall-modal-close" type="button" aria-label="Close recall dialog">&times;</button>
@@ -38,7 +38,7 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='recalls.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='recalls.js') }}" defer></script>
 {% endblock %}
 
 

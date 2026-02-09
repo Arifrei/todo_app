@@ -9,7 +9,7 @@
         <div class="notes-header-actions">
             <div class="list-search u-hidden" id="list-search">
                 <i class="fa-solid fa-magnifying-glass"></i>
-                <input id="list-search-input" type="text" placeholder="Search list..." autocomplete="off">
+                <input id="list-search-input" type="text" placeholder="Search list..." autocomplete="off" aria-label="Search list items">
                 <button class="btn btn-icon-only" id="list-search-clear" aria-label="Clear search" title="Clear search">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
@@ -24,17 +24,17 @@
                 <i class="fa-solid fa-floppy-disk"></i> Save
             </button>
             <div class="dropdown notes-actions-dropdown">
-                <button class="btn btn-ghost btn-icon-only" id="list-actions-toggle" aria-label="More actions" title="More actions">
+                <button class="btn btn-ghost btn-icon-only" id="list-actions-toggle" aria-label="More actions" title="More actions" aria-controls="list-actions-menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis-vertical"></i>
                 </button>
                 <div class="dropdown-menu notes-actions-menu" id="list-actions-menu">
-                    <button class="dropdown-item" id="list-select-toggle">
+                    <button class="dropdown-item" id="list-select-toggle" type="button" aria-pressed="false">
                         <i class="fa-solid fa-check-square"></i> Select
                     </button>
                     <button class="dropdown-item" id="list-duplicates-btn">
                         <i class="fa-solid fa-clone"></i> Find duplicates
                     </button>
-                    <button class="dropdown-item" id="list-search-toggle">
+                    <button class="dropdown-item" id="list-search-toggle" type="button" aria-controls="list-search" aria-expanded="false">
                         <i class="fa-solid fa-magnifying-glass"></i> Search list
                     </button>
                     <button class="dropdown-item" id="list-share-btn">
@@ -59,7 +59,7 @@
 
     <section class="notes-editor card list-editor-card">
         <div class="note-meta list-meta">
-            <input id="list-title" type="text" placeholder="Untitled list" autocomplete="off" />
+            <input id="list-title" type="text" placeholder="Untitled list" autocomplete="off" aria-label="List title" />
             <div class="note-meta-right list-meta-right">
                 <label class="list-toggle">
                     <input type="checkbox" id="list-checkbox-toggle" />
@@ -84,7 +84,7 @@
         </div>
         <div class="bulk-buttons">
             <div class="list-bulk-dropdown">
-                <button class="btn btn-secondary btn-icon" id="list-bulk-more-toggle" title="More actions" aria-label="More bulk actions" type="button">
+                <button class="btn btn-secondary btn-icon" id="list-bulk-more-toggle" title="More actions" aria-label="More bulk actions" type="button" aria-controls="list-bulk-more-menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis"></i>
                 </button>
                 <div class="list-bulk-menu" id="list-bulk-more-menu">
@@ -105,9 +105,9 @@
         </div>
     </div>
 
-    <div class="modal" id="list-section-modal">
-        <div class="modal-content">
-            <h2>New Section</h2>
+    <div class="modal" id="list-section-modal" role="dialog" aria-modal="true" aria-labelledby="list-section-modal-title">
+        <div class="modal-content" tabindex="-1">
+            <h2 id="list-section-modal-title">New Section</h2>
             <div class="form-group">
                 <label for="list-section-title">Section title</label>
                 <input type="text" id="list-section-title" class="form-control" placeholder="Optional">
@@ -119,9 +119,9 @@
         </div>
     </div>
 
-    <div class="modal" id="list-duplicates-modal">
-        <div class="modal-content list-duplicates-content">
-            <h2>Possible duplicates</h2>
+    <div class="modal" id="list-duplicates-modal" role="dialog" aria-modal="true" aria-labelledby="list-duplicates-modal-title">
+        <div class="modal-content list-duplicates-content" tabindex="-1">
+            <h2 id="list-duplicates-modal-title">Possible duplicates</h2>
             <p id="list-duplicates-subtitle" class="u-muted-modal-msg">Scanning your list...</p>
             <div class="list-duplicates-list" id="list-duplicates-list"></div>
             <div class="modal-actions">
@@ -132,8 +132,8 @@
     </div>
 
     <!-- Linked Note Modal -->
-    <div class="modal" id="note-link-modal">
-        <div class="modal-content u-max-w-520">
+    <div class="modal" id="note-link-modal" role="dialog" aria-modal="true" aria-labelledby="note-link-modal-title">
+        <div class="modal-content u-max-w-520" tabindex="-1">
             <h2 id="note-link-modal-title">Link note</h2>
             <p class="note-link-subtitle" id="note-link-modal-subtitle">Choose an existing note or create a new one.</p>
             <div id="note-link-match-list" class="note-link-list"></div>
@@ -154,10 +154,10 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/detail.js', v='compat-20260210') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/editor.js', v='compat-20260210') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/list-editor.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/detail.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/editor.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/list-editor.js') }}" defer></script>
 {% endblock %}
 
 

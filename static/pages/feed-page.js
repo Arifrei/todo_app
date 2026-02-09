@@ -240,8 +240,11 @@ function renderFeedGrid() {
             card.innerHTML = `
                 <div class="feed-card-content">
                     <div class="feed-edit-form">
+                        <label for="feed-edit-title-${item.id}" class="feed-edit-label">Title</label>
                         <input type="text" id="feed-edit-title-${item.id}" class="feed-edit-input" value="${escapeHtml(item.title)}" placeholder="Title">
+                        <label for="feed-edit-url-${item.id}" class="feed-edit-label">URL</label>
                         <input type="text" id="feed-edit-url-${item.id}" class="feed-edit-input" value="${escapeHtml(item.url)}" placeholder="URL">
+                        <label for="feed-edit-desc-${item.id}" class="feed-edit-label">Description (optional)</label>
                         <textarea id="feed-edit-desc-${item.id}" class="feed-edit-textarea" placeholder="Description (optional)">${escapeHtml(item.description || '')}</textarea>
                     </div>
                 </div>

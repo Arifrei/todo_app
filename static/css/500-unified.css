@@ -225,6 +225,14 @@
     flex-wrap: wrap;
 }
 
+.module-search-label {
+    display: block;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 0.35rem;
+}
+
 .floating-done-btn {
     display: none;
     position: fixed;

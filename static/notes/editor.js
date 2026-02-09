@@ -45,14 +45,20 @@ function initNoteEditorPage() {
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
-            actionsMenu.classList.toggle('open');
+            const nextOpen = !actionsMenu.classList.contains('open');
+            actionsMenu.classList.toggle('open', nextOpen);
+            actionsToggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
         });
         actionsMenu.addEventListener('click', (e) => {
-            if (e.target.closest('button')) actionsMenu.classList.remove('open');
+            if (e.target.closest('button')) {
+                actionsMenu.classList.remove('open');
+                actionsToggle.setAttribute('aria-expanded', 'false');
+            }
         });
         document.addEventListener('click', (e) => {
             if (!actionsMenu.contains(e.target) && !actionsToggle.contains(e.target)) {
                 actionsMenu.classList.remove('open');
+                actionsToggle.setAttribute('aria-expanded', 'false');
             }
         });
     }

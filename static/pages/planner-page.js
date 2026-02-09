@@ -514,7 +514,7 @@ function buildPlannerModalForm(type, folder) {
             title: 'New Collection',
             body: `
                 <div class="form-group">
-                    <label>Name</label>
+                    <label for="planner-modal-name">Name</label>
                     <input type="text" id="planner-modal-name" class="form-control" placeholder="Collection name">
                 </div>
             `,
@@ -526,7 +526,7 @@ function buildPlannerModalForm(type, folder) {
             title: 'New Subfolder',
             body: `
                 <div class="form-group">
-                    <label>Name</label>
+                    <label for="planner-modal-name">Name</label>
                     <input type="text" id="planner-modal-name" class="form-control" placeholder="Subfolder name">
                 </div>
             `,
@@ -538,19 +538,19 @@ function buildPlannerModalForm(type, folder) {
             title: 'New Link',
             body: `
                 <div class="form-group">
-                    <label>Title</label>
+                    <label for="planner-modal-title-input">Title</label>
                     <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Title">
                 </div>
                 <div class="form-group">
-                    <label>Value</label>
+                    <label for="planner-modal-value">Value</label>
                     <input type="text" id="planner-modal-value" class="form-control" placeholder="URL or value">
                 </div>
                 <div class="form-group">
-                    <label>Description (optional)</label>
+                    <label for="planner-modal-description">Description (optional)</label>
                     <input type="text" id="planner-modal-description" class="form-control" placeholder="Optional description">
                 </div>
                 <div class="form-group">
-                    <label>Tags (optional)</label>
+                    <label for="planner-modal-tags">Tags (optional)</label>
                     <input type="text" id="planner-modal-tags" class="form-control" placeholder="Comma-separated tags">
                 </div>
             `,
@@ -562,15 +562,15 @@ function buildPlannerModalForm(type, folder) {
             title: 'New Note',
             body: `
                 <div class="form-group">
-                    <label>Title</label>
+                    <label for="planner-modal-title-input">Title</label>
                     <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Title">
                 </div>
                 <div class="form-group">
-                    <label>Text</label>
+                    <label for="planner-modal-text">Text</label>
                     <textarea id="planner-modal-text" class="form-control" rows="5" placeholder="Note content"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>Tags (optional)</label>
+                    <label for="planner-modal-tags">Tags (optional)</label>
                     <input type="text" id="planner-modal-tags" class="form-control" placeholder="Comma-separated tags">
                 </div>
             `,
@@ -582,11 +582,11 @@ function buildPlannerModalForm(type, folder) {
             title: 'New Entry',
             body: `
                 <div class="form-group">
-                    <label>Title</label>
+                    <label for="planner-modal-title-input">Title</label>
                     <input type="text" id="planner-modal-title-input" class="form-control" placeholder="Entry title">
                 </div>
                 <div class="form-group">
-                    <label>Lines</label>
+                    <label for="planner-modal-lines">Lines</label>
                     <textarea id="planner-modal-lines" class="form-control" rows="3" placeholder="One line per value"></textarea>
                 </div>
             `,
@@ -1001,7 +1001,7 @@ function openPlannerDateModal(itemType, itemId) {
     title.textContent = 'Set Date';
     body.innerHTML = `
         <div class="form-group">
-            <label>Scheduled Date</label>
+            <label for="planner-date-input">Scheduled Date</label>
             <input type="date" id="planner-date-input" class="form-control" value="${currentDate || ''}">
         </div>
         <div class="form-group">
@@ -1064,7 +1064,7 @@ function openPlannerListAttachmentModal(context = {}) {
     title.textContent = 'New List';
     body.innerHTML = `
         <div class="form-group">
-            <label>Title</label>
+            <label for="planner-list-title">Title</label>
             <input type="text" id="planner-list-title" class="form-control" placeholder="Untitled list">
         </div>
         <div class="form-group">
@@ -1274,19 +1274,19 @@ function openPlannerEditSimpleItem(itemId) {
         : `<input type="text" id="planner-modal-value" class="form-control" value="${escapeHtml(item.value)}">`;
     body.innerHTML = `
         <div class="form-group">
-            <label>Title</label>
+            <label for="planner-modal-title-input">Title</label>
             <input type="text" id="planner-modal-title-input" class="form-control" value="${escapeHtml(item.title)}">
         </div>
         <div class="form-group">
-            <label>Value</label>
+            <label for="planner-modal-value">Value</label>
             ${valueField}
         </div>
         <div class="form-group">
-            <label>Description (optional)</label>
+            <label for="planner-modal-description">Description (optional)</label>
             <input type="text" id="planner-modal-description" class="form-control" value="${escapeHtml(item.description || '')}">
         </div>
         <div class="form-group">
-            <label>Tags (optional)</label>
+            <label for="planner-modal-tags">Tags (optional)</label>
             <input type="text" id="planner-modal-tags" class="form-control" value="${escapeHtml((item.tags || []).join(', '))}">
         </div>
     `;
@@ -1371,11 +1371,11 @@ function openPlannerEditGroupItem(event, itemId) {
     title.textContent = 'Edit Entry';
     body.innerHTML = `
         <div class="form-group">
-            <label>Title</label>
+            <label for="planner-modal-title-input">Title</label>
             <input type="text" id="planner-modal-title-input" class="form-control" value="${escapeHtml(item.title)}">
         </div>
         <div class="form-group">
-            <label>Lines</label>
+            <label for="planner-modal-lines">Lines</label>
             <textarea id="planner-modal-lines" class="form-control" rows="4">${escapeHtml(lines.join('\n'))}</textarea>
         </div>
     `;

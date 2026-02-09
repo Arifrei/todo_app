@@ -277,19 +277,19 @@ function renderBookmarkModalEdit(itemOrId) {
 
     body.innerHTML = `
         <div class="form-group">
-            <label>Title</label>
+            <label for="bookmark-title-input">Title</label>
             <input type="text" id="bookmark-title-input" class="form-control" value="${escapeHtml(item.title || '')}" placeholder="Title">
         </div>
         <div class="form-group">
-            <label>Description (optional)</label>
+            <label for="bookmark-desc-input">Description (optional)</label>
             <textarea id="bookmark-desc-input" class="form-control" rows="2" placeholder="Short context...">${escapeHtml(item.description || '')}</textarea>
         </div>
         <div class="form-group">
-            <label>Value</label>
+            <label for="bookmark-value-input">Value</label>
             <textarea id="bookmark-value-input" class="form-control" rows="4" placeholder="Command, URL, account info...">${escapeHtml(item.value || '')}</textarea>
         </div>
         <div class="form-group">
-            <label><input type="checkbox" id="bookmark-pin-input" ${item.pinned ? 'checked' : ''}> Pin to top</label>
+            <label for="bookmark-pin-input"><input type="checkbox" id="bookmark-pin-input" ${item.pinned ? 'checked' : ''}> Pin to top</label>
         </div>
         <div class="bookmark-modal-actions">
             <button class="btn" type="button" onclick="cancelBookmarkEdit()">Cancel</button>

@@ -3,10 +3,17 @@
  * Additional styles for better mobile UX
  */
 
-/* Prevent text selection on long press (for better drag/drop UX) */
-.task-item,
-.calendar-event-item,
-.card {
+/* Prevent accidental selection on controls that are frequently dragged/tapped */
+.drag-handle,
+.tasks-fab-main,
+.tasks-fab-option,
+.notes-fab-main,
+.notes-fab-option,
+.module-fab-main,
+.module-fab-option,
+.quick-access-card,
+.qa-nav-item,
+.user-card {
     -webkit-user-select: none;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
@@ -338,6 +345,10 @@ textarea:focus-visible {
 
 /* Optimize animations for mobile */
 @media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto !important;
+    }
+
     *,
     *::before,
     *::after {

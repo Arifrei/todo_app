@@ -13,6 +13,7 @@
     </header>
 
     <div class="bookmarks-toolbar">
+        <label class="module-search-label" for="bookmark-search">Search bookmarks</label>
         <div class="bookmarks-search">
             <i class="fa-solid fa-magnifying-glass"></i>
             <input type="text" id="bookmark-search" placeholder="Search bookmarks...">
@@ -40,8 +41,8 @@
     <div class="bookmark-grid" id="bookmark-grid"></div>
 </div>
 
-<div class="bookmark-modal-overlay" id="bookmark-modal-overlay">
-    <div class="bookmark-modal">
+<div class="bookmark-modal-overlay" id="bookmark-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bookmark-modal-title">
+    <div class="bookmark-modal" tabindex="-1">
         <div class="bookmark-modal-header">
             <h2 id="bookmark-modal-title">Bookmark</h2>
             <button class="bookmark-modal-close" id="bookmark-modal-close" type="button" aria-label="Close bookmark dialog">&times;</button>

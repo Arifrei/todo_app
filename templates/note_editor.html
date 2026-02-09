@@ -19,7 +19,7 @@
                 <i class="fa-solid fa-floppy-disk"></i> Save
             </button>
             <div class="dropdown notes-actions-dropdown">
-                <button class="btn btn-ghost btn-icon-only" id="note-actions-toggle" aria-label="More actions" title="More actions">
+                <button class="btn btn-ghost btn-icon-only" id="note-actions-toggle" aria-label="More actions" title="More actions" aria-controls="note-actions-menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis-vertical"></i>
                 </button>
                 <div class="dropdown-menu notes-actions-menu" id="note-actions-menu">
@@ -51,7 +51,7 @@
 
     <section class="notes-editor card">
         <div class="note-meta">
-            <input id="note-title" type="text" placeholder="Untitled note" autocomplete="off" />
+            <input id="note-title" type="text" placeholder="Untitled note" autocomplete="off" aria-label="Note title" />
             <div class="note-meta-right">
                 <span class="note-updated" id="note-updated-label">New note</span>
             </div>
@@ -75,28 +75,28 @@
                 <option value="24">24</option>
             </select>
             <span class="note-tool-divider"></span>
-            <button class="note-tool" data-command="bold" title="Bold (Ctrl/Cmd+B)"><i class="fa-solid fa-bold"></i></button>
-            <button class="note-tool" data-command="italic" title="Italic (Ctrl/Cmd+I)"><i class="fa-solid fa-italic"></i></button>
-            <button class="note-tool" data-command="underline" title="Underline (Ctrl/Cmd+U)"><i class="fa-solid fa-underline"></i></button>
-            <button class="note-tool" data-command="strikeThrough" title="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
+            <button class="note-tool" type="button" data-command="bold" title="Bold (Ctrl/Cmd+B)" aria-label="Bold" aria-pressed="false"><i class="fa-solid fa-bold"></i></button>
+            <button class="note-tool" type="button" data-command="italic" title="Italic (Ctrl/Cmd+I)" aria-label="Italic" aria-pressed="false"><i class="fa-solid fa-italic"></i></button>
+            <button class="note-tool" type="button" data-command="underline" title="Underline (Ctrl/Cmd+U)" aria-label="Underline" aria-pressed="false"><i class="fa-solid fa-underline"></i></button>
+            <button class="note-tool" type="button" data-command="strikeThrough" title="Strikethrough" aria-label="Strikethrough" aria-pressed="false"><i class="fa-solid fa-strikethrough"></i></button>
             <span class="note-tool-divider"></span>
-            <button class="note-tool" data-command="insertUnorderedList" title="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
-            <button class="note-tool" data-command="insertOrderedList" title="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
-            <button class="note-tool" data-command="checkbox" title="Checkbox"><i class="fa-regular fa-square-check"></i></button>
+            <button class="note-tool" type="button" data-command="insertUnorderedList" title="Bullet list" aria-label="Bullet list" aria-pressed="false"><i class="fa-solid fa-list-ul"></i></button>
+            <button class="note-tool" type="button" data-command="insertOrderedList" title="Numbered list" aria-label="Numbered list" aria-pressed="false"><i class="fa-solid fa-list-ol"></i></button>
+            <button class="note-tool" type="button" data-command="checkbox" title="Checkbox" aria-label="Insert checkbox" aria-pressed="false"><i class="fa-regular fa-square-check"></i></button>
             <span class="note-tool-divider"></span>
-            <button class="note-tool" data-command="quote" title="Quote block"><i class="fa-solid fa-quote-left"></i></button>
-            <button class="note-tool" data-command="code" title="Code"><i class="fa-solid fa-code"></i></button>
-            <button class="note-tool" data-command="removeFormat" title="Clear formatting"><i class="fa-solid fa-eraser"></i></button>
+            <button class="note-tool" type="button" data-command="quote" title="Quote block" aria-label="Quote block" aria-pressed="false"><i class="fa-solid fa-quote-left"></i></button>
+            <button class="note-tool" type="button" data-command="code" title="Code" aria-label="Code formatting" aria-pressed="false"><i class="fa-solid fa-code"></i></button>
+            <button class="note-tool" type="button" data-command="removeFormat" title="Clear formatting" aria-label="Clear formatting"><i class="fa-solid fa-eraser"></i></button>
         </div>
 
-        <div id="note-editor" class="note-editor-surface" contenteditable="true" data-placeholder="Start typing your note..."></div>
+        <div id="note-editor" class="note-editor-surface" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Note content editor" data-placeholder="Start typing your note..."></div>
     </section>
 </div>
 
 <!-- Share Note Modal -->
-<div class="modal" id="share-note-modal">
-    <div class="modal-content u-max-w-500">
-        <h2>Share Note</h2>
+<div class="modal" id="share-note-modal" role="dialog" aria-modal="true" aria-labelledby="share-note-modal-title">
+    <div class="modal-content u-max-w-500" tabindex="-1">
+        <h2 id="share-note-modal-title">Share Note</h2>
         <p class="u-text-muted u-mb-15">Choose how to share this note</p>
 
         <div id="share-note-status"></div>
@@ -139,8 +139,8 @@
 </div>
 
 <!-- Linked Note Modal -->
-<div class="modal" id="note-link-modal">
-    <div class="modal-content u-max-w-520">
+<div class="modal" id="note-link-modal" role="dialog" aria-modal="true" aria-labelledby="note-link-modal-title">
+    <div class="modal-content u-max-w-520" tabindex="-1">
         <h2 id="note-link-modal-title">Link note</h2>
         <p class="note-link-subtitle" id="note-link-modal-subtitle">Choose an existing note or create a new one.</p>
         <div id="note-link-match-list" class="note-link-list"></div>
@@ -159,22 +159,22 @@
 </div>
 
 <!-- Edit Note Link Modal -->
-<div class="modal" id="note-edit-link-modal">
-    <div class="modal-content u-max-w-520">
-        <h2>Edit link</h2>
+<div class="modal" id="note-edit-link-modal" role="dialog" aria-modal="true" aria-labelledby="note-edit-link-modal-title">
+    <div class="modal-content u-max-w-520" tabindex="-1">
+        <h2 id="note-edit-link-modal-title">Edit link</h2>
         <div class="form-group">
-            <label>Text</label>
+            <label for="note-edit-link-text">Text</label>
             <input type="text" id="note-edit-link-text" class="form-control" placeholder="Link text">
         </div>
         <div class="form-group">
-            <label>Link type</label>
+            <label for="note-edit-link-type">Link type</label>
             <select id="note-edit-link-type" class="form-control">
                 <option value="note">Note</option>
                 <option value="external">External URL</option>
             </select>
         </div>
         <div class="form-group u-hidden" id="note-edit-link-url-group">
-            <label>URL</label>
+            <label for="note-edit-link-url">URL</label>
             <input type="text" id="note-edit-link-url" class="form-control" placeholder="https://example.com">
         </div>
         <div class="form-group" id="note-edit-link-note-group">
@@ -199,9 +199,9 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/editor.js', v='compat-20260210') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/detail.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/editor.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/detail.js') }}" defer></script>
 {% endblock %}
 
 

@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const prefStatusEl = document.getElementById('pref-save-status');
     const prefsInputs = {
         in_app_enabled: document.getElementById('pref-in-app'),
         email_enabled: document.getElementById('pref-email'),
@@ -20,6 +21,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let saveTimer = null;
 
+    function setPrefStatus(message, isError = false) {
+        if (!prefStatusEl) return;
+        prefStatusEl.textContent = message || '';
+        prefStatusEl.style.color = isError ? 'var(--danger-color)' : 'var(--text-muted)';
+    }
+
     async function loadPrefs() {
         try {
             const res = await fetch('/api/notifications/settings');
@@ -35,8 +42,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (prefsInputs.push_enabled && prefsInputs.push_enabled.checked) {
                 ensurePushSubscribed();
             }
+            setPrefStatus('');
         } catch (e) {
             console.error('Error loading preferences', e);
+            setPrefStatus('Could not load notification preferences.', true);
         }
     }
 
@@ -50,6 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
             digest_hour: prefsInputs.digest_hour?.value ? parseInt(prefsInputs.digest_hour.value, 10) : undefined,
             default_snooze_minutes: prefsInputs.default_snooze_minutes?.value ? parseInt(prefsInputs.default_snooze_minutes.value, 10) : undefined,
         };
+        setPrefStatus('Saving...');
         try {
             const res = await fetch('/api/notifications/settings', {
                 method: 'PUT',
@@ -60,11 +70,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await res.json().catch(() => ({}));
                 throw new Error(data.error || 'Failed to save notification preferences');
             }
+            setPrefStatus('Saved.');
             if (showSuccess) {
                 showToast('Notification preferences saved', 'success', 1800);
             }
         } catch (e) {
             console.error('Error saving preferences', e);
+            setPrefStatus('Failed to save.', true);
             showToast('Could not save notification preferences', 'error', 2200);
         }
     }
@@ -223,9 +235,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             await loadPrefs();
             window.dispatchEvent(new Event('notifications:refresh'));
+            setPrefStatus('Test notification sent.');
             showToast('Test notification sent', 'success', 1800);
         } catch (e) {
             console.error('Error sending test', e);
+            setPrefStatus('Could not send test notification.', true);
             showToast('Could not send test notification', 'error', 2200);
         }
     }

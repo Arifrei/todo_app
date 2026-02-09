@@ -526,6 +526,12 @@
     gap: 0.5rem;
 }
 
+.feed-edit-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
 .feed-edit-input,
 .feed-edit-textarea {
     padding: 0.5rem 0.75rem;
@@ -2360,6 +2366,116 @@
 
 .quick-access-subtitle {
     font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.qa-icon-dropdown {
+    position: relative;
+    display: inline-block;
+    margin-bottom: 0.6rem;
+}
+
+.qa-icon-dropdown-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    width: 64px;
+    height: 42px;
+    padding: 0 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--white);
+    color: var(--text-color);
+    transition: var(--transition);
+}
+
+.qa-icon-dropdown-btn:hover {
+    border-color: var(--primary-color);
+}
+
+.qa-icon-dropdown-btn:focus-visible {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: var(--shadow-sm);
+}
+
+.qa-icon-dropdown-btn i:first-child {
+    font-size: 1rem;
+}
+
+#qa-icon-dropdown-selected {
+    color: #7c3aed;
+}
+
+.qa-icon-dropdown-caret {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.qa-icon-grid {
+    position: absolute;
+    z-index: 60;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    width: 230px;
+    display: grid;
+    grid-template-columns: repeat(4, 42px);
+    gap: 0.45rem;
+    padding: 0.6rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--white);
+    box-shadow: var(--shadow-lg);
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.qa-icon-grid-item {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--surface-soft, #f8f9fb);
+    color: var(--text-color);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.qa-icon-grid-item:hover {
+    border-color: var(--primary-color);
+    background: var(--primary-light);
+    color: var(--primary-color);
+}
+
+.qa-icon-grid-item.selected {
+    border-color: var(--primary-color);
+    background: var(--primary-light);
+    color: var(--primary-color);
+    box-shadow: var(--shadow-sm);
+}
+
+.qa-icon-grid-item i {
+    font-size: 0.95rem;
+}
+
+.qa-icon-preview {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.qa-icon-custom-label {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.82rem;
+    font-weight: 600;
     color: var(--text-muted);
 }
 

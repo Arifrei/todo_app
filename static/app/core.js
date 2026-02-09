@@ -1585,6 +1585,13 @@ function repositionLinkedNoteChips() {
     });
 }
 
+function setCoreAriaExpandedForControls(controlledId, expanded) {
+    if (!controlledId) return;
+    document.querySelectorAll(`[aria-controls="${controlledId}"]`).forEach((control) => {
+        control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+}
+
 function toggleTaskFilterSubmenu(kind, event) {
     if (event) event.stopPropagation();
     const menu = document.getElementById('task-filter-menu');
@@ -1598,10 +1605,14 @@ function toggleTaskFilterSubmenu(kind, event) {
     if (kind === 'status') {
         statusMenu.classList.toggle('show', !openStatus);
         if (tagsMenu) tagsMenu.classList.remove('show');
+        setCoreAriaExpandedForControls('task-filter-submenu-status', !!statusMenu.classList.contains('show'));
+        setCoreAriaExpandedForControls('task-filter-submenu-tags', false);
     } else if (kind === 'tags') {
         if (!tagsMenu) return;
         tagsMenu.classList.toggle('show', !openTags);
         statusMenu.classList.remove('show');
+        setCoreAriaExpandedForControls('task-filter-submenu-status', false);
+        setCoreAriaExpandedForControls('task-filter-submenu-tags', !!tagsMenu.classList.contains('show'));
     }
 }
 
@@ -1626,11 +1637,14 @@ function toggleTaskFilterMenu(event) {
     if (!menu) return;
     const shouldShow = !menu.classList.contains('show');
     menu.classList.toggle('show', shouldShow);
+    setCoreAriaExpandedForControls('task-filter-menu', shouldShow);
     if (!shouldShow) {
         const statusMenu = document.getElementById('task-filter-submenu-status');
         if (statusMenu) statusMenu.classList.remove('show');
         const tagsMenu = document.getElementById('task-filter-submenu-tags');
         if (tagsMenu) tagsMenu.classList.remove('show');
+        setCoreAriaExpandedForControls('task-filter-submenu-status', false);
+        setCoreAriaExpandedForControls('task-filter-submenu-tags', false);
     }
 }
 
@@ -1641,6 +1655,9 @@ function closeTaskFilterMenu() {
     if (statusMenu) statusMenu.classList.remove('show');
     const tagsMenu = document.getElementById('task-filter-submenu-tags');
     if (tagsMenu) tagsMenu.classList.remove('show');
+    setCoreAriaExpandedForControls('task-filter-menu', false);
+    setCoreAriaExpandedForControls('task-filter-submenu-status', false);
+    setCoreAriaExpandedForControls('task-filter-submenu-tags', false);
 }
 
 // Toggle task actions dropdown
@@ -1651,14 +1668,19 @@ function toggleTaskActionsMenu(itemId, event) {
 
     // Close all other menus and remove menu-open class from all task items
     document.querySelectorAll('.task-actions-menu').forEach(el => {
-        if (el !== menu) el.classList.remove('active');
+        if (el !== menu) {
+            el.classList.remove('active');
+            if (el.id) setCoreAriaExpandedForControls(el.id, false);
+        }
     });
     document.querySelectorAll('.task-item.menu-open').forEach(el => {
         if (el !== taskItem) el.classList.remove('menu-open');
     });
 
     if (menu) {
-        menu.classList.toggle('active');
+        const shouldOpen = !menu.classList.contains('active');
+        menu.classList.toggle('active', shouldOpen);
+        if (menu.id) setCoreAriaExpandedForControls(menu.id, shouldOpen);
         // Add/remove menu-open class to task item
         if (taskItem) {
             taskItem.classList.toggle('menu-open', menu.classList.contains('active'));
@@ -1681,6 +1703,7 @@ window.addEventListener('click', function (e) {
     if (!e.target.closest('.task-actions-dropdown')) {
         document.querySelectorAll('.task-actions-menu').forEach(el => {
             el.classList.remove('active');
+            if (el.id) setCoreAriaExpandedForControls(el.id, false);
         });
         document.querySelectorAll('.task-item.menu-open').forEach(el => {
             el.classList.remove('menu-open');
@@ -1813,7 +1836,10 @@ function toggleHeaderMenu(event) {
     if (event) event.stopPropagation();
     const addDropdown = document.getElementById('header-add-dropdown');
     if (addDropdown) addDropdown.classList.remove('show');
-    dropdown.classList.toggle('show');
+    const shouldShow = !dropdown.classList.contains('show');
+    dropdown.classList.toggle('show', shouldShow);
+    setCoreAriaExpandedForControls('header-menu-dropdown', shouldShow);
+    setCoreAriaExpandedForControls('header-add-dropdown', false);
 }
 
 function toggleHeaderAddMenu(event) {
@@ -1822,7 +1848,10 @@ function toggleHeaderAddMenu(event) {
     if (event) event.stopPropagation();
     const mainDropdown = document.getElementById('header-menu-dropdown');
     if (mainDropdown) mainDropdown.classList.remove('show');
-    dropdown.classList.toggle('show');
+    const shouldShow = !dropdown.classList.contains('show');
+    dropdown.classList.toggle('show', shouldShow);
+    setCoreAriaExpandedForControls('header-add-dropdown', shouldShow);
+    setCoreAriaExpandedForControls('header-menu-dropdown', false);
 }
 
 function toggleNoteAddMenu(event, dropdownId) {
@@ -1830,9 +1859,14 @@ function toggleNoteAddMenu(event, dropdownId) {
     if (!dropdown) return;
     if (event) event.stopPropagation();
     document.querySelectorAll('.header-add-dropdown').forEach(el => {
-        if (el !== dropdown) el.classList.remove('show');
+        if (el !== dropdown) {
+            el.classList.remove('show');
+            if (el.id) setCoreAriaExpandedForControls(el.id, false);
+        }
     });
-    dropdown.classList.toggle('show');
+    const shouldShow = !dropdown.classList.contains('show');
+    dropdown.classList.toggle('show', shouldShow);
+    if (dropdown.id) setCoreAriaExpandedForControls(dropdown.id, shouldShow);
 }
 
 // Close header menu when clicking outside
@@ -1841,17 +1875,20 @@ document.addEventListener('click', (e) => {
     if (dropdown && dropdown.classList.contains('show')) {
         if (!e.target.closest('.header-main-menu')) {
             dropdown.classList.remove('show');
+            setCoreAriaExpandedForControls('header-menu-dropdown', false);
         }
     }
     const addDropdown = document.getElementById('header-add-dropdown');
     if (addDropdown && addDropdown.classList.contains('show')) {
         if (!e.target.closest('.header-add-menu')) {
             addDropdown.classList.remove('show');
+            setCoreAriaExpandedForControls('header-add-dropdown', false);
         }
     }
     document.querySelectorAll('.header-add-dropdown').forEach(dropdown => {
         if (dropdown.classList.contains('show') && !e.target.closest('.header-add-menu')) {
             dropdown.classList.remove('show');
+            if (dropdown.id) setCoreAriaExpandedForControls(dropdown.id, false);
         }
     });
 });

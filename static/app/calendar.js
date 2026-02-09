@@ -1189,16 +1189,21 @@ function initCalendarPage() {
     if (menuBtn && dropdownMenu) {
         menuBtn.onclick = (e) => {
             e.stopPropagation();
-            dropdownMenu.classList.toggle('active');
+            const nextOpen = !dropdownMenu.classList.contains('active');
+            dropdownMenu.classList.toggle('active', nextOpen);
+            menuBtn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
         };
         // Close dropdown when clicking outside
           document.addEventListener('click', (e) => {
               if (!e.target.closest('.calendar-actions-menu')) {
                   dropdownMenu.classList.remove('active');
+                  menuBtn.setAttribute('aria-expanded', 'false');
                   if (sortMobileMenu) sortMobileMenu.classList.remove('active');
+                  if (sortMobileToggle) sortMobileToggle.setAttribute('aria-expanded', 'false');
               }
               if (sortMenu && !e.target.closest('.calendar-sort-menu')) {
                   sortMenu.classList.remove('active');
+                  if (sortBtn) sortBtn.setAttribute('aria-expanded', 'false');
               }
               if (!e.target.closest('.calendar-search')) {
                   hideCalendarSearchResults();
@@ -1310,9 +1315,7 @@ function initCalendarPage() {
     const goToBtn = document.getElementById('calendar-go-to-btn');
     if (goToBtn) {
         goToBtn.onclick = () => {
-            // Close dropdown menu if open
-            const menu = document.querySelector('.calendar-month-menu');
-            if (menu) menu.classList.remove('open');
+            closeCalendarMonthMenu();
             openCalendarPrompt({
                 title: 'Go to date',
                 message: 'Pick any date to jump to.',
@@ -1340,20 +1343,24 @@ function initCalendarPage() {
     const monthMenuBtn = document.getElementById('calendar-month-menu-btn');
     const monthMenu = document.querySelector('.calendar-month-menu');
     if (monthMenuBtn && monthMenu) {
+        const setMonthMenuOpenState = (open) => {
+            monthMenu.classList.toggle('open', open);
+            monthMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
         monthMenuBtn.onclick = (e) => {
             e.stopPropagation();
-            monthMenu.classList.toggle('open');
+            setMonthMenuOpenState(!monthMenu.classList.contains('open'));
         };
         // Close dropdown when clicking outside
         document.addEventListener('click', (e) => {
             if (!monthMenu.contains(e.target)) {
-                monthMenu.classList.remove('open');
+                setMonthMenuOpenState(false);
             }
         });
         // Close dropdown when clicking menu items
         monthMenu.querySelectorAll('.calendar-month-menu-item').forEach(item => {
             item.addEventListener('click', () => {
-                monthMenu.classList.remove('open');
+                setMonthMenuOpenState(false);
             });
         });
     }
@@ -1362,6 +1369,7 @@ function initCalendarPage() {
             if (!searchPanel) return;
             const willOpen = searchPanel.classList.contains('is-hidden');
             searchPanel.classList.toggle('is-hidden', !willOpen);
+            searchToggleBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
             if (willOpen && searchInput) {
                 searchInput.focus();
                 searchInput.select();
@@ -1374,7 +1382,9 @@ function initCalendarPage() {
     }
     function closeCalendarMonthMenu() {
         const menu = document.querySelector('.calendar-month-menu');
+        const menuBtn = document.getElementById('calendar-month-menu-btn');
         if (menu) menu.classList.remove('open');
+        if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
     }
 
     if (quickInput) {
@@ -1464,9 +1474,7 @@ function initCalendarPage() {
         });
     }
     if (recurringBtn) recurringBtn.onclick = () => {
-        // Close dropdown menu if open
-        const menu = document.querySelector('.calendar-month-menu');
-        if (menu) menu.classList.remove('open');
+        closeCalendarMonthMenu();
         openRecurringModal();
     };
     if (recurringSaveBtn) recurringSaveBtn.onclick = saveRecurringModal;
@@ -1524,14 +1532,18 @@ function initCalendarPage() {
     if (sortBtn && sortMenu) {
         sortBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            sortMenu.classList.toggle('active');
+            const nextOpen = !sortMenu.classList.contains('active');
+            sortMenu.classList.toggle('active', nextOpen);
+            sortBtn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
         });
     }
 
     if (sortMobileToggle && sortMobileMenu) {
         sortMobileToggle.addEventListener('click', (e) => {
             e.stopPropagation();
-            sortMobileMenu.classList.toggle('active');
+            const nextOpen = !sortMobileMenu.classList.contains('active');
+            sortMobileMenu.classList.toggle('active', nextOpen);
+            sortMobileToggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
         });
     }
 
@@ -1540,8 +1552,11 @@ function initCalendarPage() {
             const mode = btn.getAttribute('data-sort') || 'time';
             setDaySort(mode);
             if (sortMenu) sortMenu.classList.remove('active');
+            if (sortBtn) sortBtn.setAttribute('aria-expanded', 'false');
             if (dropdownMenu) dropdownMenu.classList.remove('active');
+            if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
             if (sortMobileMenu) sortMobileMenu.classList.remove('active');
+            if (sortMobileToggle) sortMobileToggle.setAttribute('aria-expanded', 'false');
         });
     });
 
@@ -1555,6 +1570,7 @@ function initCalendarPage() {
             const label = collapsed ? 'Expand quick add' : 'Minimize quick add';
             quickToggleBtn.setAttribute('aria-label', label);
             quickToggleBtn.setAttribute('title', label);
+            quickToggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
         };
 
         quickToggleBtn.addEventListener('click', () => {
@@ -1594,6 +1610,7 @@ function initCalendarPage() {
         quickHelpToggle.onclick = () => {
             const isHidden = syntaxGuide.classList.toggle('is-hidden');
             quickHelpToggle.textContent = isHidden ? 'Show syntax guide' : 'Hide syntax guide';
+            quickHelpToggle.setAttribute('aria-expanded', isHidden ? 'false' : 'true');
         };
     }
 

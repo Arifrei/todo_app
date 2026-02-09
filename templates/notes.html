@@ -4,7 +4,7 @@
 <div class="notes-page" data-folder-id="{{ current_folder.id if current_folder else '' }}">
     <header class="notes-page-header">
         <div class="notes-page-title">
-            <a href="/notes" class="notes-home-link"><h1>Notes</h1></a>
+            <h1><a href="/notes" class="notes-home-link">Notes</a></h1>
             {% if current_folder %}
             <div class="notes-folder-breadcrumb">
                 <div class="notes-folder-actions">
@@ -20,7 +20,7 @@
         <div class="notes-header-actions">
             <!-- FAB Button -->
             <div class="notes-fab-container notes-fab-header" id="notes-fab">
-                <button class="notes-fab-main" id="notes-fab-main">
+                <button class="notes-fab-main" id="notes-fab-main" aria-label="Add note options" aria-controls="notes-fab" aria-expanded="false">
                     <i class="fa-solid fa-plus"></i>
                 </button>
                 <div class="notes-fab-options" id="notes-fab-options">
@@ -73,11 +73,11 @@
 </div>
 
 <!-- List Create Modal -->
-<div class="modal" id="note-list-modal">
-    <div class="modal-content">
-        <h2>New List</h2>
+<div class="modal" id="note-list-modal" role="dialog" aria-modal="true" aria-labelledby="note-list-modal-title">
+    <div class="modal-content" tabindex="-1">
+        <h2 id="note-list-modal-title">New List</h2>
         <div class="form-group">
-            <label>Title</label>
+            <label for="note-list-title">Title</label>
             <input type="text" id="note-list-title" class="form-control" placeholder="List title">
         </div>
         <div class="form-group">
@@ -87,7 +87,7 @@
             </label>
         </div>
         <div class="form-group">
-            <label>Folder (optional)</label>
+            <label for="note-list-folder">Folder (optional)</label>
             <select id="note-list-folder" class="form-control">
                 <option value="">No folder</option>
             </select>
@@ -100,11 +100,11 @@
 </div>
 
 <!-- Note Folder Modal -->
-<div class="modal" id="note-folder-modal">
-    <div class="modal-content">
+<div class="modal" id="note-folder-modal" role="dialog" aria-modal="true" aria-labelledby="note-folder-modal-title">
+    <div class="modal-content" tabindex="-1">
         <h2 id="note-folder-modal-title">New Folder</h2>
         <div class="form-group">
-            <label>Folder name</label>
+            <label for="note-folder-name">Folder name</label>
             <input type="text" id="note-folder-name" class="form-control" placeholder="Folder name">
         </div>
         <input type="hidden" id="note-folder-id">
@@ -116,8 +116,8 @@
 </div>
 
 <!-- Note Move Modal -->
-<div class="modal" id="note-move-modal">
-    <div class="modal-content">
+<div class="modal" id="note-move-modal" role="dialog" aria-modal="true" aria-labelledby="note-move-title">
+    <div class="modal-content" tabindex="-1">
         <h2 id="note-move-title">Move Note</h2>
         <div class="move-nav-header">
             <button class="btn btn-secondary u-hidden" id="note-move-back-button" data-onclick="noteMoveNavBack()">Back</button>
@@ -132,10 +132,10 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='app/core.js', v='compat-20260210') }}" defer></script>
-<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260210') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/bootstrap.js', v='compat-20260210') }}" defer></script>
-<script src="{{ url_for('static', filename='notes/detail.js', v='compat-20260210') }}" defer></script>
+<script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/bootstrap.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/detail.js') }}" defer></script>
 {% endblock %}
 
 

@@ -9,7 +9,7 @@
         </div>
         <div class="vault-header-actions">
             <div class="tasks-fab-container" id="vault-fab">
-                <button class="tasks-fab-main" id="vault-fab-main" aria-label="Add">
+                <button class="tasks-fab-main" id="vault-fab-main" aria-label="Add" aria-controls="vault-fab" aria-expanded="false">
                     <i class="fa-solid fa-plus"></i>
                 </button>
                 <div class="tasks-fab-options" id="vault-fab-options">
@@ -29,6 +29,7 @@
     <div class="vault-toolbar">
         <nav class="vault-nav" id="vault-breadcrumb"></nav>
         <div class="vault-toolbar-right">
+            <label class="module-search-label" for="vault-search-input">Search files</label>
             <div class="vault-search-box" id="vault-search-box">
                 <i class="fa-solid fa-magnifying-glass"></i>
                 <input type="text" id="vault-search-input" placeholder="Search files...">
@@ -87,11 +88,11 @@
     </div>
 </div>
 
-<div class="modal" id="vault-folder-modal">
-    <div class="modal-content vault-modal-content">
+<div class="modal" id="vault-folder-modal" role="dialog" aria-modal="true" aria-labelledby="vault-folder-modal-title">
+    <div class="modal-content vault-modal-content" tabindex="-1">
         <h2 id="vault-folder-modal-title">New Folder</h2>
         <div class="form-group">
-            <label>Folder name</label>
+            <label for="vault-folder-name">Folder name</label>
             <input type="text" id="vault-folder-name" class="form-control" placeholder="Enter folder name...">
         </div>
         <input type="hidden" id="vault-folder-id">
@@ -102,9 +103,9 @@
     </div>
 </div>
 
-<div class="modal" id="vault-upload-modal">
-    <div class="modal-content vault-modal-content vault-upload-content">
-        <h2>Upload Files</h2>
+<div class="modal" id="vault-upload-modal" role="dialog" aria-modal="true" aria-labelledby="vault-upload-modal-title">
+    <div class="modal-content vault-modal-content vault-upload-content" tabindex="-1">
+        <h2 id="vault-upload-modal-title">Upload Files</h2>
         <div class="vault-drop-zone" id="vault-drop-zone">
             <div class="vault-drop-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
             <div class="vault-drop-text">Drop files here or</div>
@@ -114,11 +115,11 @@
         <div class="vault-upload-files" id="vault-upload-files"></div>
         <div class="vault-upload-options">
             <div class="form-group">
-                <label>Destination</label>
+                <label for="vault-folder-select">Destination</label>
                 <select id="vault-folder-select" class="form-control"></select>
             </div>
             <div class="form-group">
-                <label>Tags <span class="form-hint">(comma separated)</span></label>
+                <label for="vault-tags-input">Tags <span class="form-hint">(comma separated)</span></label>
                 <input type="text" id="vault-tags-input" class="form-control" placeholder="work, receipts, personal...">
             </div>
         </div>
@@ -134,8 +135,8 @@
     </div>
 </div>
 
-<div class="modal" id="vault-preview-modal">
-    <div class="modal-content vault-preview-content">
+<div class="modal" id="vault-preview-modal" role="dialog" aria-modal="true" aria-labelledby="vault-preview-title">
+    <div class="modal-content vault-preview-content" tabindex="-1">
         <div class="vault-preview-header">
             <h2 id="vault-preview-title">Document</h2>
             <button class="btn-icon" type="button" id="vault-preview-close" title="Close" aria-label="Close preview">

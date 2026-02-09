@@ -7,7 +7,7 @@
         <p class="u-text-muted">Manage your projects and tasks</p>
     </div>
     <div class="tasks-fab-container" id="tasks-fab">
-        <button class="tasks-fab-main" id="tasks-fab-main">
+        <button class="tasks-fab-main" id="tasks-fab-main" aria-label="Add task list options" aria-controls="tasks-fab" aria-expanded="false">
             <i class="fa-solid fa-plus"></i>
         </button>
         <div class="tasks-fab-options" id="tasks-fab-options">
@@ -57,8 +57,8 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='app/core.js', v='compat-20260209') }}" defer></script>
-<script src="{{ url_for('static', filename='app/tasks.js', v='compat-20260209') }}" defer></script>
+<script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='app/tasks.js') }}" defer></script>
 {% endblock %}
 
 
