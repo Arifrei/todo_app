@@ -320,13 +320,6 @@
                     <button class="btn-status status-done {% if item.status == 'done' %}active{% endif %}" data-onclick="inlineToggleStatus({{ item.id }}, '{{ item.status }}', 'done')">Done</button>
                 </div>
 
-                    <button class="btn btn-secondary btn-small task-inline-action" data-onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}');" title="Move task">
-                        Move
-                    </button>
-                    <button class="btn btn-secondary btn-small task-inline-action" data-onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`);" title="Set date">
-                        Date
-                    </button>
-
                     <div class="task-actions-dropdown">
                         <button class="btn-icon" data-onclick="toggleTaskActionsMenu({{ item.id }}, event)" title="More actions" aria-label="More task actions" aria-controls="task-actions-menu-{{ item.id }}" aria-expanded="false">
                             <i class="fa-solid fa-ellipsis-vertical"></i>
@@ -334,21 +327,27 @@
                         <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
                             <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
-                        </button>
-                        {% if todo_list.type == 'list' %}
-                        {% set dep_titles = item.dependencies|map(attribute='content')|list %}
-                        <button class="task-actions-menu-item" data-onclick="openDependencyModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);" {% if dep_titles %}title="Depends on: {{ dep_titles|join(', ') }}"{% endif %}>
-                            <i class="fa-solid fa-link"></i> Dependencies{% if dep_titles %} ({{ dep_titles|length }}){% endif %}
-                        </button>
-                        {% endif %}
-                        <button class="task-actions-menu-item" data-onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, {{ item.linked_notes|map(attribute='id')|list|tojson }}); toggleTaskActionsMenu({{ item.id }}, event);">
-                            <i class="fa-solid fa-note-sticky"></i> Link Note
-                        </button>
-                        <button class="task-actions-menu-item danger" data-onclick="deleteItem({{ item.id }});">
-                            <i class="fa-solid fa-trash"></i> Delete
-                        </button>
+                            </button>
+                            <button class="task-actions-menu-item" data-onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-arrow-right"></i> Move to
+                            </button>
+                            <button class="task-actions-menu-item" data-onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-calendar-days"></i> Date
+                            </button>
+                            <button class="task-actions-menu-item" data-onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, {{ item.linked_notes|map(attribute='id')|list|tojson }}); toggleTaskActionsMenu({{ item.id }}, event);">
+                                <i class="fa-solid fa-note-sticky"></i> Note
+                            </button>
+                            {% if todo_list.type == 'list' %}
+                            {% set dep_titles = item.dependencies|map(attribute='content')|list %}
+                            <button class="task-actions-menu-item" data-onclick="openDependencyModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);" {% if dep_titles %}title="Depends on: {{ dep_titles|join(', ') }}"{% endif %}>
+                                <i class="fa-solid fa-link"></i> Dependencies{% if dep_titles %} ({{ dep_titles|length }}){% endif %}
+                            </button>
+                            {% endif %}
+                            <button class="task-actions-menu-item danger" data-onclick="deleteItem({{ item.id }});">
+                                <i class="fa-solid fa-trash"></i> Delete
+                            </button>
+                        </div>
                     </div>
-                </div>
                 {% endif %}
             </div>
         </div>

@@ -49,5 +49,5 @@ def bulk_bookmarks():
 
 if __name__ == '__main__':
     debug_enabled = os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes', 'on')
-    app.run(host='0.0.0.0', port=5004, debug=debug_enabled)
+    app.run(host='0.0.0.0', port=5000, debug=debug_enabled)
 

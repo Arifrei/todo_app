@@ -12,6 +12,7 @@ function initListEditorPage() {
     page.dataset.listEditorInit = '1';
 
     const saveBtn = document.getElementById('list-save-btn');
+    const cancelBtn = document.getElementById('list-cancel-btn');
     const deleteBtn = document.getElementById('list-delete-btn');
     const shareBtn = document.getElementById('list-share-btn');
     const protectBtn = document.getElementById('list-protect-btn');
@@ -43,6 +44,7 @@ function initListEditorPage() {
     const duplicatesDeleteSelectedBtn = document.getElementById('list-duplicates-delete-selected-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveListMetadata({ closeAfter: true }));
+    if (cancelBtn) cancelBtn.addEventListener('click', async () => { await cancelListMetadataChanges(); });
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentList());
     if (shareBtn) shareBtn.addEventListener('click', () => shareCurrentList());
     if (protectBtn) protectBtn.addEventListener('click', () => toggleListProtection());
@@ -294,11 +296,13 @@ function setListEditorReadOnly(isReadOnly) {
     const titleInput = document.getElementById('list-title');
     const checkboxToggle = document.getElementById('list-checkbox-toggle');
     const saveBtn = document.getElementById('list-save-btn');
+    const cancelBtn = document.getElementById('list-cancel-btn');
     const selectToggle = document.getElementById('list-select-toggle');
     const bulkBar = document.getElementById('list-bulk-bar');
     if (titleInput) titleInput.disabled = isReadOnly;
     if (checkboxToggle) checkboxToggle.disabled = isReadOnly;
     if (saveBtn) saveBtn.disabled = isReadOnly;
+    if (cancelBtn) cancelBtn.disabled = isReadOnly || !hasListSessionChanges();
     if (selectToggle) selectToggle.disabled = isReadOnly;
     if (bulkBar && isReadOnly) bulkBar.classList.remove('active');
     if (isReadOnly) setListSelectionMode(false);
@@ -406,6 +410,10 @@ async function loadListForEditor(listId) {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode
         };
+        listState.sessionSnapshot = {
+            title: list.title || '',
+            checkboxMode: !!list.checkbox_mode
+        };
         listState.dirty = false;
         listState.insertionIndex = null;
         listState.editingItemId = null;
@@ -447,7 +455,9 @@ function refreshListDirtyState() {
 function setListDirty(dirty) {
     listState.dirty = dirty;
     const saveBtn = document.getElementById('list-save-btn');
+    const cancelBtn = document.getElementById('list-cancel-btn');
     if (saveBtn) saveBtn.disabled = false;
+    if (cancelBtn) cancelBtn.disabled = listState.isArchived || !hasListSessionChanges();
     if (!dirty) {
         if (listAutoSaveTimer) {
             clearTimeout(listAutoSaveTimer);
@@ -456,6 +466,48 @@ function setListDirty(dirty) {
         return;
     }
     scheduleListAutosave();
+}
+
+function getCurrentListMetadataSnapshot() {
+    const titleInput = document.getElementById('list-title');
+    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    return {
+        title: titleInput ? (titleInput.value || '').trim() : '',
+        checkboxMode: checkboxToggle ? !!checkboxToggle.checked : false
+    };
+}
+
+function getListSessionSnapshot() {
+    return listState.sessionSnapshot || listState.activeSnapshot || { title: '', checkboxMode: false };
+}
+
+function hasListSessionChanges() {
+    const current = getCurrentListMetadataSnapshot();
+    const session = getListSessionSnapshot();
+    return current.title !== (session.title || '') || current.checkboxMode !== !!session.checkboxMode;
+}
+
+async function cancelListMetadataChanges() {
+    if (!hasListSessionChanges()) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const titleInput = document.getElementById('list-title');
+    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    if (!titleInput || !checkboxToggle) return;
+    const snapshot = getListSessionSnapshot();
+    titleInput.value = snapshot.title || '';
+    checkboxToggle.checked = !!snapshot.checkboxMode;
+    listState.checkboxMode = !!snapshot.checkboxMode;
+    refreshListDirtyState();
+    if (listState.dirty) {
+        await saveListMetadata({ silent: true });
+    } else {
+        setListDirty(false);
+    }
+    renderListItems();
+    showToast('Restored to session start.', 'success', 1800);
 }
 
 function scheduleListAutosave() {

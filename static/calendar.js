@@ -5,6 +5,30 @@ function formatCalendarLabel(dayStr) {
     return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric', timeZone: USER_TIMEZONE });
 }
 
+function renderCalendarDayLabel(dayStr) {
+    const label = document.getElementById('calendar-day-label');
+    if (!label) return;
+    if (!dayStr) {
+        label.textContent = 'Pick a day';
+        return;
+    }
+    const d = new Date(dayStr + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) {
+        label.textContent = 'Pick a day';
+        return;
+    }
+    const weekday = d.toLocaleDateString(undefined, { weekday: 'long', timeZone: USER_TIMEZONE });
+    const dateText = d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: USER_TIMEZONE });
+    label.innerHTML = '';
+    const weekdayEl = document.createElement('div');
+    weekdayEl.className = 'calendar-day-label-weekday';
+    weekdayEl.textContent = weekday;
+    const dateEl = document.createElement('div');
+    dateEl.className = 'calendar-day-label-date';
+    dateEl.textContent = dateText;
+    label.append(weekdayEl, dateEl);
+}
+
 function formatMonthLabel(dateObj) {
     return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: USER_TIMEZONE });
 }
@@ -30,7 +54,7 @@ function setDayControlsEnabled(enabled) {
     if (quickInput) {
         quickInput.disabled = !enabled;
         quickInput.placeholder = enabled
-            ? "Type your task and press Enter. Use $ # > @ ! *"
+            ? "Type your task and press Enter. Use $ # > @ ! * &"
             : 'Pick a day to open its schedule';
     }
     if (prevBtn) prevBtn.disabled = !enabled;
@@ -54,8 +78,7 @@ function hideDayView() {
     calendarState.dayViewOpen = false;
     calendarState.detailsOpen = false;
     setDayControlsEnabled(false);
-    const label = document.getElementById('calendar-day-label');
-    if (label) label.textContent = 'Pick a day';
+    renderCalendarDayLabel('');
 }
 
 function returnToMonthView() {
@@ -228,7 +251,7 @@ async function setCalendarDay(dayStr, options = {}) {
     const label = document.getElementById('calendar-day-label');
     const picker = document.getElementById('calendar-date-picker');
     if (!skipLabel) {
-        if (label) label.textContent = formatCalendarLabel(dayStr);
+        if (label) renderCalendarDayLabel(dayStr);
         if (picker) picker.value = dayStr;
     }
     renderCalendarMonth(); // keep the month grid highlight in sync
@@ -1047,6 +1070,318 @@ function parseTimeToMinutes(value) {
     return (hours * 60) + mins;
 }
 
+function getCalendarDayViewMode() {
+    const mode = calendarState.dayViewMode || 'timeline';
+    return ['list', 'timeline'].includes(mode) ? mode : 'timeline';
+}
+
+function getCalendarDisplayMode(ev) {
+    const raw = (ev && ev.display_mode) ? String(ev.display_mode).toLowerCase() : 'both';
+    return raw === 'timeline_only' ? 'timeline_only' : 'both';
+}
+
+function shouldShowInCalendarList(ev) {
+    if (!ev) return false;
+    if (ev.is_phase || ev.is_group) return true;
+    return getCalendarDisplayMode(ev) !== 'timeline_only';
+}
+
+function formatTimelineHourLabel(hour24) {
+    const normalized = ((hour24 % 24) + 24) % 24;
+    const period = normalized >= 12 ? 'PM' : 'AM';
+    const hour = ((normalized + 11) % 12) + 1;
+    return `${hour}${period}`;
+}
+
+function getTimelineSpanMinutes(ev) {
+    const start = parseTimeToMinutes(ev.start_time);
+    if (start === null) return null;
+    let end = parseTimeToMinutes(ev.end_time);
+    if (end === null || end <= start) {
+        end = Math.min(start + 30, 24 * 60);
+    }
+    return { start, end };
+}
+
+function placeTimelineItems(items) {
+    const placed = [];
+    const clusterColumns = {};
+    let active = [];
+    let clusterId = -1;
+    let lastStartHour = null;
+
+    items.forEach((item) => {
+        active = active.filter(a => a.end > item.start_minutes);
+        const startHour = Math.floor(item.start_minutes / 60);
+        // Keep a stable cluster within the same hour so widths stay consistent
+        // for items that start in that hour.
+        if (!active.length && (startHour !== lastStartHour || clusterId < 0)) {
+            clusterId += 1;
+        }
+        const taken = new Set(active.map(a => a.lane));
+        let lane = 0;
+        while (taken.has(lane)) lane += 1;
+        active.push({ end: item.end_minutes, lane, clusterId });
+        const cols = lane + 1;
+        clusterColumns[clusterId] = Math.max(clusterColumns[clusterId] || 0, cols);
+        placed.push({ ...item, lane, clusterId });
+        lastStartHour = startHour;
+    });
+
+    return placed.map(item => ({
+        ...item,
+        overlap_columns: clusterColumns[item.clusterId] || 1
+    }));
+}
+
+async function openTimelineItemTimeEditor(ev) {
+    if (!ev) return;
+    if (ev.is_task_link) {
+        const linked = await ensureLinkedTaskEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+        return;
+    }
+    if (ev.is_planner_item) {
+        const linked = await ensureLinkedPlannerEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+        return;
+    }
+    openCalendarTimeModal(ev);
+}
+
+async function toggleCalendarDisplayMode(ev) {
+    if (!ev) return;
+    const nextMode = getCalendarDisplayMode(ev) === 'timeline_only' ? 'both' : 'timeline_only';
+    if (ev.is_task_link) {
+        const linked = await ensureLinkedTaskEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        await updateCalendarEvent(linked.calendar_event_id, { display_mode: nextMode });
+        ev.display_mode = nextMode;
+        return;
+    }
+    if (ev.is_planner_item) {
+        const linked = await ensureLinkedPlannerEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        await updateCalendarEvent(linked.calendar_event_id, { display_mode: nextMode });
+        ev.display_mode = nextMode;
+        return;
+    }
+    await updateCalendarEvent(ev.id, { display_mode: nextMode });
+    ev.display_mode = nextMode;
+}
+
+function createDisplayModeMenuItem(ev, dropdown) {
+    const isTimelineOnly = getCalendarDisplayMode(ev) === 'timeline_only';
+    const item = document.createElement('button');
+    item.className = 'calendar-item-menu-option';
+    item.innerHTML = `<i class="fa-solid fa-chart-column ${isTimelineOnly ? 'active-icon' : ''}"></i> ${isTimelineOnly ? 'Show in list' : 'Timeline only'}`;
+    item.onclick = async (e) => {
+        e.stopPropagation();
+        if (dropdown) dropdown.classList.remove('active');
+        await toggleCalendarDisplayMode(ev);
+    };
+    return item;
+}
+
+function renderDayTimelinePanel(allItems) {
+    const layout = document.getElementById('calendar-day-layout');
+    const wrap = document.getElementById('calendar-timeline-wrap');
+    const timelineEl = document.getElementById('calendar-day-timeline');
+    const metaEl = document.getElementById('calendar-timeline-meta');
+    const unscheduledEl = document.getElementById('calendar-unscheduled-items');
+    if (layout) layout.setAttribute('data-view-mode', getCalendarDayViewMode());
+    if (!wrap || !timelineEl || !unscheduledEl || !metaEl) return;
+
+    const viewMode = getCalendarDayViewMode();
+    const showTimeline = viewMode === 'timeline';
+    wrap.classList.toggle('is-hidden', !showTimeline);
+    if (!showTimeline) return;
+
+    const setEmptyState = (message) => {
+        timelineEl.innerHTML = `<div class="calendar-empty">${message}</div>`;
+        unscheduledEl.innerHTML = '';
+        metaEl.textContent = '';
+    };
+
+    if (!calendarState.selectedDay) {
+        setEmptyState('Pick a day to open timeline view.');
+        return;
+    }
+    if (!calendarState.detailsOpen) {
+        setEmptyState('Double-click a day to open its full schedule.');
+        return;
+    }
+
+    const source = Array.isArray(allItems) ? allItems.filter(ev => !ev.is_phase && !ev.is_group) : [];
+    if (!source.length) {
+        setEmptyState('Nothing planned for this day yet.');
+        return;
+    }
+
+    const timed = [];
+    const unscheduled = [];
+    source.forEach((ev) => {
+        const span = getTimelineSpanMinutes(ev);
+        if (!span) {
+            unscheduled.push(ev);
+            return;
+        }
+        timed.push({ ...ev, start_minutes: span.start, end_minutes: span.end });
+    });
+
+    timed.sort((a, b) => {
+        if (a.start_minutes !== b.start_minutes) return a.start_minutes - b.start_minutes;
+        if (a.end_minutes !== b.end_minutes) return a.end_minutes - b.end_minutes;
+        return (a.title || '').localeCompare(b.title || '');
+    });
+    const placed = placeTimelineItems(timed);
+    const hourBuckets = new Map();
+    placed.forEach((ev) => {
+        const hour = Math.floor(ev.start_minutes / 60);
+        if (!hourBuckets.has(hour)) hourBuckets.set(hour, []);
+        hourBuckets.get(hour).push(ev);
+    });
+    hourBuckets.forEach((bucket) => {
+        bucket.sort((a, b) => {
+            if (a.start_minutes !== b.start_minutes) return a.start_minutes - b.start_minutes;
+            if (a.end_minutes !== b.end_minutes) return a.end_minutes - b.end_minutes;
+            return (a.title || '').localeCompare(b.title || '');
+        });
+        bucket.forEach((ev, idx) => {
+            ev.hour_bucket_count = bucket.length;
+            ev.hour_bucket_index = idx;
+        });
+    });
+
+    const defaultStart = 6 * 60;
+    const defaultEnd = 22 * 60;
+    const minStart = placed.length ? Math.min(...placed.map(i => i.start_minutes)) : defaultStart;
+    const maxEnd = placed.length ? Math.max(...placed.map(i => i.end_minutes)) : defaultEnd;
+    const startHour = Math.max(0, Math.floor(Math.min(minStart, defaultStart) / 60));
+    const endHour = Math.min(24, Math.ceil(Math.max(maxEnd, defaultEnd) / 60));
+    const pixelsPerMinute = 1.3;
+    const timelineTopPadding = 14;
+    const timelineBottomPadding = 14;
+    const timelineHeight = Math.max((endHour - startHour) * 60 * pixelsPerMinute, 320);
+
+    timelineEl.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'calendar-timeline-grid';
+    grid.style.height = `${timelineHeight + timelineTopPadding + timelineBottomPadding}px`;
+    const track = document.createElement('div');
+    track.className = 'calendar-timeline-track';
+    grid.appendChild(track);
+
+    for (let hour = startHour; hour <= endHour; hour += 1) {
+        const top = timelineTopPadding + ((hour - startHour) * 60 * pixelsPerMinute);
+        const label = document.createElement('div');
+        label.className = 'calendar-timeline-hour-label';
+        label.style.top = `${top}px`;
+        label.textContent = formatTimelineHourLabel(hour);
+        grid.appendChild(label);
+
+        const line = document.createElement('div');
+        line.className = 'calendar-timeline-hour-line';
+        line.style.top = `${top}px`;
+        track.appendChild(line);
+    }
+
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    if (calendarState.selectedDay === todayStr) {
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        if (nowMinutes >= startHour * 60 && nowMinutes <= endHour * 60) {
+            const nowLine = document.createElement('div');
+            nowLine.className = 'calendar-timeline-now';
+            nowLine.style.top = `${timelineTopPadding + ((nowMinutes - startHour * 60) * pixelsPerMinute)}px`;
+            track.appendChild(nowLine);
+        }
+    }
+
+    placed.forEach((ev) => {
+        const block = document.createElement('button');
+        block.type = 'button';
+        const isTimelineOnly = getCalendarDisplayMode(ev) === 'timeline_only';
+        const typeClass = ev.is_event
+            ? 'event'
+            : (ev.is_task_link ? 'task-link' : (ev.is_planner_item ? 'planner' : 'task'));
+        block.className = `calendar-timeline-block ${typeClass} ${isTimelineOnly ? 'timeline-only' : ''}`;
+        const overlapCols = ev.overlap_columns || 1;
+        const rawLane = ev.lane || 0;
+        const bucketCount = ev.hour_bucket_count || 1;
+        const bucketIndex = ev.hour_bucket_index || 0;
+        let visualCols = overlapCols;
+        let visualLane = rawLane;
+        let laneRowOffset = 0;
+
+        // Prefer hour-bucket layout to keep item widths stable when one hour
+        // contains many entries.
+        if (bucketCount === 2) {
+            visualCols = 2;
+            visualLane = bucketIndex % 2;
+        } else if (bucketCount >= 3) {
+            // Dense same-hour schedule: stack full-width rows for readability.
+            visualCols = 1;
+            visualLane = 0;
+            laneRowOffset = bucketIndex * 12;
+            block.classList.add('dense');
+        } else if (overlapCols >= 3) {
+            // Fallback for dense overlap spanning multiple hours.
+            visualCols = 1;
+            visualLane = 0;
+            laneRowOffset = rawLane * 10;
+            block.classList.add('dense');
+        }
+
+        const durationPx = Math.max((ev.end_minutes - ev.start_minutes) * pixelsPerMinute, 30);
+        block.style.top = `${timelineTopPadding + ((ev.start_minutes - startHour * 60) * pixelsPerMinute) + laneRowOffset}px`;
+        block.style.height = `${Math.max(durationPx - laneRowOffset, 26)}px`;
+        if ((ev.end_minutes - ev.start_minutes) < 20 || bucketCount >= 4 || overlapCols >= 4) {
+            block.classList.add('compact');
+        }
+        const widthPct = 100 / visualCols;
+        block.style.left = `calc(${visualLane * widthPct}% + 2px)`;
+        block.style.width = `calc(${widthPct}% - 4px)`;
+        block.title = `${ev.title || 'Untitled'}${formatTimeRange(ev) ? ` (${formatTimeRange(ev)})` : ''}`;
+
+        const time = document.createElement('span');
+        time.className = 'time';
+        time.textContent = formatTimeRange(ev) || 'Timed';
+        const title = document.createElement('span');
+        title.className = 'title';
+        title.textContent = ev.title || 'Untitled';
+        block.append(time, title);
+        block.onclick = () => openTimelineItemTimeEditor(ev);
+        track.appendChild(block);
+    });
+
+    timelineEl.appendChild(grid);
+    metaEl.textContent = `${placed.length} timed - ${unscheduled.length} unscheduled`;
+
+    unscheduledEl.innerHTML = '';
+    if (!unscheduled.length) {
+        unscheduledEl.innerHTML = `<div class="calendar-unscheduled-empty">No unscheduled items.</div>`;
+        return;
+    }
+    unscheduled.forEach((ev) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        const isTimelineOnly = getCalendarDisplayMode(ev) === 'timeline_only';
+        row.className = `calendar-unscheduled-item ${isTimelineOnly ? 'timeline-only' : ''}`;
+        const title = document.createElement('span');
+        title.className = 'title';
+        title.textContent = ev.title || 'Untitled';
+        const hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = isTimelineOnly ? 'timeline only' : 'tap to add time';
+        row.append(title, hint);
+        row.onclick = () => openTimelineItemTimeEditor(ev);
+        unscheduledEl.appendChild(row);
+    });
+}
+
 function sortCalendarItems(items, mode) {
     const priorityRank = { high: 0, medium: 1, low: 2 };
     const statusRank = { not_started: 0, in_progress: 1, done: 2, canceled: 3 };
@@ -1095,6 +1430,13 @@ function sortCalendarItems(items, mode) {
 function renderCalendarEvents() {
     const container = document.getElementById('calendar-events');
     if (!container) return;
+    renderDayTimelinePanel(calendarState.events || []);
+    const dayViewMode = getCalendarDayViewMode();
+    container.classList.toggle('is-hidden', dayViewMode === 'timeline');
+    if (dayViewMode === 'timeline') {
+        resetCalendarSelection();
+        return;
+    }
     container.innerHTML = '';
     if (!calendarState.selectedDay) {
         container.innerHTML = `<div class="calendar-empty">Pick a day from the calendar to view its schedule.</div>`;
@@ -1111,9 +1453,15 @@ function renderCalendarEvents() {
         resetCalendarSelection();
         return;
     }
+    const listEvents = (calendarState.events || []).filter(shouldShowInCalendarList);
+    if (!listEvents.length) {
+        container.innerHTML = `<div class="calendar-empty">No list items for this day. Use Timeline view or add regular calendar tasks/events.</div>`;
+        resetCalendarSelection();
+        return;
+    }
     const sortMode = getCalendarSortMode();
-    const tasksDue = (calendarState.events || []).filter(ev => ev.is_task_link);
-    const timeline = (calendarState.events || []).filter(ev => !ev.is_task_link);
+    const tasksDue = listEvents.filter(ev => ev.is_task_link);
+    const timeline = listEvents.filter(ev => !ev.is_task_link);
     const groupMap = new Map();
     const rootItems = [];
     const rootNonGroup = [];
@@ -1302,7 +1650,8 @@ function renderCalendarEvents() {
             unpinTaskDate(ev.task_id);
         };
 
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, openBtn, unpinBtn);
+        const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, openBtn, unpinBtn);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -1507,7 +1856,8 @@ function renderCalendarEvents() {
                 unpinPlannerDate(ev);
             };
 
-            overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, openPlannerBtn, unpinBtn);
+            const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
+            overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, openPlannerBtn, unpinBtn);
             overflowMenuContainer.append(overflowBtn);
             document.body.appendChild(overflowDropdown);
 
@@ -1855,8 +2205,9 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        // Order: reminder, rollover, allow overlap, note, move, delete
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
+        // Order: reminder, rollover, allow overlap, timeline mode, note, move, delete
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
@@ -2121,7 +2472,8 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
-        overflowDropdown.append(reminderMenuItem, canceledMenuItem, rolloverMenuItem, allowOverlapMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
+        overflowDropdown.append(reminderMenuItem, canceledMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, convertMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -2714,6 +3066,7 @@ function parseCalendarQuickInput(text) {
     let rollover = true;
     let isEvent = false;
     let allowOverlap = false;
+    let displayMode = 'both';
     let groupName = null;
 
     // SYMBOL-BASED SYNTAX
@@ -2729,6 +3082,14 @@ function parseCalendarQuickInput(text) {
     if (working.includes('?')) {
         allowOverlap = true;
         working = working.replace(/\?/g, '').trim();
+    }
+
+    // Timeline-only marker: & (hide from day list, keep in timeline)
+    // Also supports legacy "~" marker.
+    const timelineOnlyPattern = /(^|\s)[&~](?=\s|$)/;
+    if (timelineOnlyPattern.test(working)) {
+        displayMode = 'timeline_only';
+        working = working.replace(/(^|\s)[&~](?=\s|$)/g, ' ').trim();
     }
 
     // Time: @time or @time-time
@@ -2795,6 +3156,7 @@ function parseCalendarQuickInput(text) {
         reminder_minutes_before: reminder,
         phase_name: phaseName,
         group_name: groupName,
+        display_mode: displayMode,
         rollover_enabled: rollover
     };
 }

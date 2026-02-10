@@ -524,6 +524,7 @@ input:-webkit-autofill:focus {
         gap: 0.25rem !important;
         left: 0.25rem !important;
         right: auto !important;
+        top: auto !important;
         bottom: 0.5rem !important;
         width: max-content !important;
         max-width: calc(100vw - 0.5rem) !important;
@@ -535,6 +536,7 @@ input:-webkit-autofill:focus {
         -webkit-overflow-scrolling: touch !important;
         line-height: 1 !important;
         border-radius: 8px !important;
+        box-sizing: border-box !important;
         scrollbar-width: none !important;
         -ms-overflow-style: none !important;
     }
@@ -629,6 +631,76 @@ input:-webkit-autofill:focus {
 
     .bulk-menu-item i {
         font-size: 0.8rem;
+    }
+
+    /* List page: slightly larger than global compact mode, but still on-screen */
+    .list-view #bulk-actions {
+        inset: auto max(0.5rem, env(safe-area-inset-right, 0px)) calc(0.5rem + env(safe-area-inset-bottom, 0px)) max(0.5rem, env(safe-area-inset-left, 0px)) !important;
+        width: auto !important;
+        max-width: none !important;
+        padding: 0.38rem 0.5rem !important;
+        gap: 0.35rem !important;
+        border-radius: 10px !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        box-sizing: border-box !important;
+        margin: 0 !important;
+        transform: none !important;
+    }
+
+    .list-view #bulk-actions .bulk-left {
+        width: auto;
+        margin-right: 0.2rem;
+        gap: 0.28rem;
+        flex-wrap: nowrap;
+        flex-shrink: 0;
+        font-size: 0.74rem;
+    }
+
+    .list-view #bulk-actions .bulk-left label {
+        display: inline;
+        font-size: 0.72rem;
+    }
+
+    .list-view #bulk-actions .bulk-left .btn-small {
+        padding: 0.22rem 0.35rem;
+        font-size: 0.68rem;
+        min-height: 24px;
+        line-height: 1;
+    }
+
+    .list-view #bulk-actions .bulk-buttons {
+        width: auto;
+        gap: 0.24rem !important;
+        flex-wrap: nowrap !important;
+        justify-content: flex-start !important;
+        flex-shrink: 0;
+    }
+
+    .list-view #bulk-actions .bulk-buttons .btn {
+        padding: 0.24rem 0.38rem;
+        font-size: 0.69rem;
+        min-height: 24px;
+        line-height: 1;
+    }
+
+    .list-view #bulk-actions .bulk-buttons .btn-icon {
+        width: 24px;
+        height: 24px;
+        min-width: 24px;
+        min-height: 24px;
+        font-size: 0.72rem;
+        line-height: 1;
+    }
+
+    .list-view #bulk-actions #bulk-count {
+        font-size: 0.72rem;
+    }
+
+    .list-view #bulk-actions #select-all {
+        transform: scale(0.8);
     }
 
     /* ===== VAULT MOBILE SELECTION ===== */

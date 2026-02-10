@@ -406,6 +406,7 @@ class CalendarEvent(db.Model):
     is_phase = db.Column(db.Boolean, default=False)
     is_event = db.Column(db.Boolean, default=False)  # informational event (not a task)
     allow_overlap = db.Column(db.Boolean, default=False)  # allow tasks to overlap this event
+    display_mode = db.Column(db.String(20), default='both')  # both | timeline_only
     is_group = db.Column(db.Boolean, default=False)  # grouping header
     phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
     phase = db.relationship('CalendarEvent', remote_side=[id], backref='phase_events', foreign_keys=[phase_id])
@@ -446,6 +447,7 @@ class CalendarEvent(db.Model):
             'is_phase': self.is_phase,
             'is_event': self.is_event,
             'allow_overlap': self.allow_overlap,
+            'display_mode': self.display_mode or 'both',
             'is_group': self.is_group,
             'phase_id': self.phase_id,
             'group_id': self.group_id,

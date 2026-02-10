@@ -60,7 +60,7 @@
             <textarea id="calendar-month-quick-input" class="form-control" rows="2" placeholder="Type your task and press Enter" disabled aria-label="Month quick add input"></textarea>
         </div>
         <div class="quick-hint">
-            Type your task and press <kbd>Enter</kbd>. Use <strong>$</strong> <strong>#</strong> <strong>></strong> <strong>@</strong> <strong>!</strong> <strong>*</strong> <strong>?</strong> <strong>-</strong>
+            Type your task and press <kbd>Enter</kbd>. Use <strong>$</strong> <strong>#</strong> <strong>></strong> <strong>@</strong> <strong>!</strong> <strong>*</strong> <strong>?</strong> <strong>&amp;</strong> <strong>-</strong>
             <button class="link-btn" id="calendar-quick-help-toggle" type="button" aria-controls="calendar-quick-syntax-guide" aria-expanded="false">Show syntax guide</button>
         </div>
         <div class="calendar-syntax-guide is-hidden" id="calendar-quick-syntax-guide">
@@ -71,6 +71,7 @@
             <div class="syntax-guide-row"><strong>!</strong> Priority (e.g., <code>!h</code> !m !l)</div>
             <div class="syntax-guide-row"><strong>*</strong> Reminder (e.g., <code>*30m</code>, <code>*2h</code>, <code>*1d</code>)</div>
             <div class="syntax-guide-row"><strong>?</strong> Overlap (events allow overlap; tasks disallow overlap)</div>
+            <div class="syntax-guide-row"><strong>&amp;</strong> Timeline only (hide from list view)</div>
             <div class="syntax-guide-row"><strong>-</strong> Disable rollover (prevents task from rolling to next day)</div>
         </div>
     </section>
@@ -89,6 +90,15 @@
                 <button class="btn-icon" id="calendar-next-day" aria-label="Next day"><i class="fa-solid fa-chevron-right"></i></button>
             </div>
             <div class="calendar-actions">
+                <div class="calendar-view-mode-menu" id="calendar-view-mode-menu">
+                    <button class="btn btn-secondary btn-small calendar-view-mode-trigger" id="calendar-view-mode-btn" type="button" aria-label="Change day view" aria-controls="calendar-view-mode-dropdown" aria-expanded="false">
+                        <i class="fa-solid fa-clock"></i><span>Timeline</span><i class="fa-solid fa-chevron-down chevron"></i>
+                    </button>
+                    <div class="calendar-view-mode-dropdown" id="calendar-view-mode-dropdown">
+                        <button class="calendar-view-mode-option" type="button" data-view-mode="list">List</button>
+                        <button class="calendar-view-mode-option" type="button" data-view-mode="timeline">Timeline</button>
+                    </div>
+                </div>
                 <div class="calendar-sort-menu">
                     <button class="btn btn-secondary btn-icon-only" id="calendar-day-sort-btn" aria-label="Sort day items" title="Sort: Time" aria-controls="calendar-day-sort-menu" aria-expanded="false">
                         <i class="fa-solid fa-arrow-down-wide-short"></i>
@@ -191,7 +201,20 @@
                     </button>
                 </div>
             </div>
-            <div id="calendar-events" class="calendar-events"></div>
+            <div id="calendar-day-layout" class="calendar-day-layout" data-view-mode="timeline">
+                <div id="calendar-timeline-wrap" class="calendar-timeline-wrap">
+                    <div class="calendar-timeline-header">
+                        <div class="calendar-timeline-title">Day Timeline</div>
+                        <div class="calendar-timeline-meta" id="calendar-timeline-meta"></div>
+                    </div>
+                    <div id="calendar-day-timeline" class="calendar-day-timeline"></div>
+                    <div class="calendar-unscheduled">
+                        <div class="calendar-unscheduled-title">Unscheduled</div>
+                        <div id="calendar-unscheduled-items" class="calendar-unscheduled-items"></div>
+                    </div>
+                </div>
+                <div id="calendar-events" class="calendar-events"></div>
+            </div>
         </section>
     </section>
 

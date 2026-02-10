@@ -140,6 +140,7 @@ async function handleCalendarQuickAdd() {
                 end_time: taskParsed.end_time,
                 priority: taskParsed.priority,
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
+                display_mode: taskParsed.display_mode,
                 group_id: taskParsed.group_name ? (await getOrCreateGroup(taskParsed.group_name)) : null,
                 rollover_enabled: taskParsed.rollover_enabled
             });
@@ -191,6 +192,7 @@ async function handleCalendarQuickAdd() {
                 end_time: taskParsed.end_time,
                 priority: taskParsed.priority,
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
+                display_mode: taskParsed.display_mode,
                 rollover_enabled: taskParsed.rollover_enabled
             });
             if (!createdTask) {
@@ -277,6 +279,7 @@ async function handleCalendarQuickAdd() {
         end_time: parsed.end_time,
         priority: parsed.priority,
         reminder_minutes_before: parsed.reminder_minutes_before,
+        display_mode: parsed.display_mode,
         phase_id: isEvent ? null : phaseId,
         rollover_enabled: parsed.rollover_enabled
     });
@@ -358,6 +361,7 @@ async function handleMonthQuickAdd() {
                 end_time: taskParsed.end_time,
                 priority: taskParsed.priority,
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
+                display_mode: taskParsed.display_mode,
                 rollover_enabled: taskParsed.rollover_enabled
             });
             if (!createdTask) {
@@ -419,6 +423,7 @@ async function handleMonthQuickAdd() {
                 end_time: taskParsed.end_time,
                 priority: taskParsed.priority,
                 reminder_minutes_before: taskParsed.reminder_minutes_before,
+                display_mode: taskParsed.display_mode,
                 rollover_enabled: taskParsed.rollover_enabled
             });
             if (!createdTask) {
@@ -504,6 +509,7 @@ async function handleMonthQuickAdd() {
         end_time: parsed.end_time,
         priority: parsed.priority,
         reminder_minutes_before: parsed.reminder_minutes_before,
+        display_mode: parsed.display_mode,
         phase_id: isEvent ? null : phaseId,
         rollover_enabled: parsed.rollover_enabled
     });
@@ -1162,6 +1168,11 @@ function initCalendarPage() {
     const searchInput = document.getElementById('calendar-search-input');
     const searchClearBtn = document.getElementById('calendar-search-clear');
     const searchResults = document.getElementById('calendar-search-results');
+    const dayLayout = document.getElementById('calendar-day-layout');
+    const viewModeBtn = document.getElementById('calendar-view-mode-btn');
+    const viewModeMenu = document.getElementById('calendar-view-mode-menu');
+    const viewModeDropdown = document.getElementById('calendar-view-mode-dropdown');
+    const viewModeOptions = Array.from(document.querySelectorAll('.calendar-view-mode-option'));
 
     const sortLabelMap = {
         time: 'Time',
@@ -1185,6 +1196,36 @@ function initCalendarPage() {
         }
     };
 
+    const setDayViewMode = (mode) => {
+        const dayViewLabelMap = {
+            list: 'List',
+            timeline: 'Timeline'
+        };
+        const dayViewIconMap = {
+            list: 'fa-list-ul',
+            timeline: 'fa-clock'
+        };
+        const allowed = new Set(['list', 'timeline']);
+        const next = allowed.has(mode) ? mode : 'timeline';
+        calendarState.dayViewMode = next;
+        localStorage.setItem('calendarDayViewMode', next);
+        if (dayLayout) {
+            dayLayout.setAttribute('data-view-mode', next);
+        }
+        viewModeOptions.forEach((btn) => {
+            btn.classList.toggle('active', btn.getAttribute('data-view-mode') === next);
+        });
+        if (viewModeBtn) {
+            const label = dayViewLabelMap[next] || 'Timeline';
+            const icon = dayViewIconMap[next] || 'fa-clock';
+            viewModeBtn.innerHTML = `<i class="fa-solid ${icon}"></i><span>${label}</span><i class="fa-solid fa-chevron-down chevron"></i>`;
+        }
+        if (next === 'timeline') {
+            resetCalendarSelection();
+        }
+        renderCalendarEvents();
+    };
+
     // Dropdown menu toggle
     if (menuBtn && dropdownMenu) {
         menuBtn.onclick = (e) => {
@@ -1204,6 +1245,10 @@ function initCalendarPage() {
               if (sortMenu && !e.target.closest('.calendar-sort-menu')) {
                   sortMenu.classList.remove('active');
                   if (sortBtn) sortBtn.setAttribute('aria-expanded', 'false');
+              }
+              if (viewModeMenu && !e.target.closest('.calendar-view-mode-menu')) {
+                  viewModeMenu.classList.remove('active');
+                  if (viewModeBtn) viewModeBtn.setAttribute('aria-expanded', 'false');
               }
               if (!e.target.closest('.calendar-search')) {
                   hideCalendarSearchResults();
@@ -1528,6 +1573,25 @@ function initCalendarPage() {
         calendarState.daySort = savedSort;
     }
     setDaySort(calendarState.daySort || 'time');
+
+    if (viewModeBtn && viewModeMenu && viewModeDropdown) {
+        viewModeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const nextOpen = !viewModeMenu.classList.contains('active');
+            viewModeMenu.classList.toggle('active', nextOpen);
+            viewModeBtn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+        });
+        viewModeOptions.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const mode = btn.getAttribute('data-view-mode') || 'timeline';
+                setDayViewMode(mode);
+                viewModeMenu.classList.remove('active');
+                viewModeBtn.setAttribute('aria-expanded', 'false');
+            });
+        });
+    }
+    const savedDayViewMode = localStorage.getItem('calendarDayViewMode');
+    setDayViewMode(savedDayViewMode || calendarState.dayViewMode || 'timeline');
 
     if (sortBtn && sortMenu) {
         sortBtn.addEventListener('click', (e) => {

@@ -63,6 +63,7 @@ function prepareNewNoteEditor() {
     notesState.notes = [];
     notesState.activeNoteId = null;
     notesState.activeSnapshot = { title: '', content: '' };
+    notesState.sessionSnapshot = { title: '', content: '' };
     notesState.activeFolderId = folderId;
     notesState.checkboxMode = false;
     notesState.activeNoteIsArchived = false;
@@ -1210,8 +1211,12 @@ function handleNoteEditorKeydown(e) {
 function setNoteDirty(dirty) {
     notesState.dirty = dirty;
     const saveBtn = document.getElementById('note-save-btn');
+    const cancelBtn = document.getElementById('note-cancel-btn');
     if (saveBtn) {
         saveBtn.disabled = false;
+    }
+    if (cancelBtn) {
+        cancelBtn.disabled = notesState.activeNoteIsArchived || !hasNoteSessionChanges();
     }
     if (!dirty) {
         if (noteAutoSaveTimer) {
@@ -1231,6 +1236,51 @@ function refreshNoteDirtyState() {
     const currentContent = editor ? (editor.innerHTML || '').trim() : '';
     const dirty = currentTitle !== (snapshot.title || '') || currentContent !== (snapshot.content || '');
     setNoteDirty(dirty);
+}
+
+function getCurrentNoteEditorSnapshot() {
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    return {
+        title: titleInput ? (titleInput.value || '').trim() : '',
+        content: editor ? (editor.innerHTML || '').trim() : ''
+    };
+}
+
+function getNoteSessionSnapshot() {
+    return notesState.sessionSnapshot || notesState.activeSnapshot || { title: '', content: '' };
+}
+
+function hasNoteSessionChanges() {
+    const current = getCurrentNoteEditorSnapshot();
+    const session = getNoteSessionSnapshot();
+    return current.title !== (session.title || '') || current.content !== (session.content || '');
+}
+
+async function cancelCurrentNoteChanges() {
+    if (!hasNoteSessionChanges()) return;
+    if (notesState.activeNoteIsArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const editor = document.getElementById('note-editor');
+    const titleInput = document.getElementById('note-title');
+    if (!editor || !titleInput) return;
+    const snapshot = getNoteSessionSnapshot();
+    editor.innerHTML = snapshot.content || '';
+    titleInput.value = snapshot.title || '';
+    titleInput.placeholder = 'Untitled note';
+    bindNoteCheckboxes();
+    updateNoteToolbarStates();
+    hideNoteCleanupActions();
+    autoGenerateTitle();
+    refreshNoteDirtyState();
+    if (notesState.dirty && notesState.activeNoteId) {
+        await saveCurrentNote({ silent: true, keepOpen: true });
+    } else {
+        setNoteDirty(false);
+    }
+    showToast('Restored to session start.', 'success', 1800);
 }
 
 async function loadNotes(options = {}) {
@@ -1543,6 +1593,10 @@ async function setActiveNote(noteId, options = {}) {
     editor.innerHTML = note.content || '';
     updatedLabel.textContent = `Updated ${formatNoteDate(note.updated_at)}`;
     notesState.activeSnapshot = {
+        title: (note.title || '').trim(),
+        content: (note.content || '').trim()
+    };
+    notesState.sessionSnapshot = {
         title: (note.title || '').trim(),
         content: (note.content || '').trim()
     };
@@ -1904,6 +1958,7 @@ function clearNoteEditor() {
     if (updatedLabel) updatedLabel.textContent = 'No note selected';
     notesState.activeNoteId = null;
     notesState.activeSnapshot = null;
+    notesState.sessionSnapshot = null;
     notesState.activeFolderId = null;
     notesState.checkboxMode = false; // Reset checkbox mode
     setNoteDirty(false);

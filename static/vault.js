@@ -12,6 +12,7 @@ const vaultState = {
 // Vault selection manager
 let vaultSelection = null;
 let vaultBulkActions = null;
+let vaultUploadAbortController = null;
 
 function initVaultSelection() {
     vaultSelection = new SelectionManager({
@@ -418,9 +419,18 @@ function openVaultUploadModal() {
     if (filesContainer) filesContainer.innerHTML = '';
 }
 
-function closeVaultUploadModal() {
+function closeVaultUploadModal(options = {}) {
+    const abortUpload = options.abortUpload !== false;
+    if (abortUpload && vaultUploadAbortController) {
+        vaultUploadAbortController.abort();
+        vaultUploadAbortController = null;
+    }
     const modal = document.getElementById('vault-upload-modal');
     if (modal) modal.classList.remove('active');
+    const progressWrap = document.getElementById('vault-upload-progress');
+    const progressBar = document.getElementById('vault-upload-bar');
+    if (progressWrap) progressWrap.style.display = 'none';
+    if (progressBar) progressBar.style.width = '0%';
 }
 
 function vaultDownloadDoc(doc) {
@@ -558,14 +568,19 @@ function resetVaultFolderModal() {
     }
 }
 
-function vaultHandleUpload() {
+async function vaultHandleUpload() {
     const fileInput = document.getElementById('vault-file-input');
-    if (!fileInput || !fileInput.files.length) {
+    const files = fileInput ? Array.from(fileInput.files || []) : [];
+    if (!files.length) {
         showToast('Select at least one file', 'warning');
         return;
     }
+    if (vaultUploadAbortController) {
+        showToast('Upload already in progress', 'info');
+        return;
+    }
     const formData = new FormData();
-    [...fileInput.files].forEach(file => formData.append('files', file));
+    files.forEach(file => formData.append('files', file));
     const tagsInput = document.getElementById('vault-tags-input');
     const folderSelect = document.getElementById('vault-folder-select');
     if (tagsInput && tagsInput.value.trim()) formData.append('tags', tagsInput.value.trim());
@@ -575,33 +590,50 @@ function vaultHandleUpload() {
     const progressBar = document.getElementById('vault-upload-bar');
     if (progressWrap && progressBar) {
         progressWrap.style.display = 'block';
-        progressBar.style.width = '0%';
+        progressBar.style.width = '35%';
     }
+    vaultUploadAbortController = new AbortController();
+    try {
+        const res = await fetch('/api/vault/documents', {
+            method: 'POST',
+            body: formData,
+            signal: vaultUploadAbortController.signal
+        });
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/vault/documents');
-    xhr.upload.addEventListener('progress', (evt) => {
-        if (!progressBar || !evt.lengthComputable) return;
-        const percent = Math.round((evt.loaded / evt.total) * 100);
-        progressBar.style.width = `${percent}%`;
-    });
-    xhr.onload = async () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-            showToast('Upload complete', 'success');
-            closeVaultUploadModal();
-            fileInput.value = '';
-            await loadVaultDocuments();
-            await loadVaultStats();
-        } else {
-            showToast('Upload failed', 'error');
+        if (progressBar) progressBar.style.width = '100%';
+
+        if (!res.ok) {
+            let message = 'Upload failed';
+            try {
+                const data = await res.json();
+                if (data && data.error) message = data.error;
+            } catch (jsonErr) {
+                try {
+                    const text = await res.text();
+                    if (text) message = text;
+                } catch (textErr) {
+                    console.error('Upload error parsing failed:', textErr);
+                }
+            }
+            throw new Error(message);
         }
+
+        showToast('Upload complete', 'success');
+        closeVaultUploadModal({ abortUpload: false });
+        if (fileInput) fileInput.value = '';
+        await loadVaultDocuments();
+        await loadVaultStats();
+    } catch (err) {
+        if (err && err.name === 'AbortError') {
+            showToast('Upload canceled', 'info');
+        } else {
+            console.error(err);
+            showToast(err && err.message ? err.message : 'Upload failed', 'error');
+        }
+    } finally {
+        vaultUploadAbortController = null;
         if (progressWrap) progressWrap.style.display = 'none';
-    };
-    xhr.onerror = () => {
-        showToast('Upload failed', 'error');
-        if (progressWrap) progressWrap.style.display = 'none';
-    };
-    xhr.send(formData);
+    }
 }
 
 function bindVaultDropZone() {
@@ -759,7 +791,7 @@ function renderVaultUploadFiles() {
     const container = document.getElementById('vault-upload-files');
     if (!fileInput || !container) return;
 
-    const files = [...(fileInput.files || [])];
+    const files = Array.from(fileInput.files || []);
     if (!files.length) {
         container.innerHTML = '';
         return;

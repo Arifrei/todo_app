@@ -9,7 +9,7 @@ Idempotent updates:
 - Normalize legacy pending -> not_started and backfill order_index
 - Ensure todo_list has user_id
 - Ensure note has todo_item_id, calendar_event_id, title/content timestamps
-- Ensure calendar_event table exists with all current columns (is_event, is_group, group_id, priority, status, reminder_minutes_before, rollover_enabled, timestamps)
+- Ensure calendar_event table exists with all current columns (is_event, is_group, group_id, display_mode, priority, status, reminder_minutes_before, rollover_enabled, timestamps)
 - Ensure recall_items exists with new schema
 - Ensure do_feed_item exists for the Do-Feed module
 - Ensure planner tables exist for the Planner module
@@ -177,6 +177,7 @@ def ensure_calendar_event(cur):
                 is_phase BOOLEAN DEFAULT 0,
                 is_event BOOLEAN DEFAULT 0,
                 allow_overlap BOOLEAN DEFAULT 0,
+                display_mode VARCHAR(20) DEFAULT 'both',
                 is_group BOOLEAN DEFAULT 0,
                 phase_id INTEGER,
                 group_id INTEGER,
@@ -197,6 +198,7 @@ def ensure_calendar_event(cur):
     add_column(cur, "calendar_event", "is_phase", "BOOLEAN DEFAULT 0")
     add_column(cur, "calendar_event", "is_event", "BOOLEAN DEFAULT 0")
     add_column(cur, "calendar_event", "allow_overlap", "BOOLEAN DEFAULT 0", default_sql="0")
+    add_column(cur, "calendar_event", "display_mode", "VARCHAR(20) DEFAULT 'both'", default_sql="'both'")
     add_column(cur, "calendar_event", "is_group", "BOOLEAN DEFAULT 0")
     add_column(cur, "calendar_event", "phase_id", "INTEGER")
     add_column(cur, "calendar_event", "group_id", "INTEGER")

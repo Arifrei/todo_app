@@ -284,6 +284,7 @@ def ensure_calendar_event_table(cur):
                 is_phase BOOLEAN DEFAULT 0,
                 is_event BOOLEAN DEFAULT 0,
                 allow_overlap BOOLEAN DEFAULT 0,
+                display_mode VARCHAR(20) DEFAULT 'both',
                 is_group BOOLEAN DEFAULT 0,
                 phase_id INTEGER,
                 group_id INTEGER,
@@ -310,6 +311,7 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "is_phase", "BOOLEAN DEFAULT 0")
     add_column(cur, "calendar_event", "is_event", "BOOLEAN DEFAULT 0")
     add_column(cur, "calendar_event", "allow_overlap", "BOOLEAN DEFAULT 0", default_sql="0")
+    add_column(cur, "calendar_event", "display_mode", "VARCHAR(20) DEFAULT 'both'", default_sql="'both'")
     add_column(cur, "calendar_event", "is_group", "BOOLEAN DEFAULT 0")
     add_column(cur, "calendar_event", "phase_id", "INTEGER")
     add_column(cur, "calendar_event", "group_id", "INTEGER")

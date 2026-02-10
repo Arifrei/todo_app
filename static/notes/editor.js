@@ -9,6 +9,7 @@ function initNoteEditorPage() {
     page.dataset.noteEditorInit = '1';
 
     const saveBtn = document.getElementById('note-save-btn');
+    const cancelBtn = document.getElementById('note-cancel-btn');
     const deleteBtn = document.getElementById('note-delete-btn');
     const shareBtn = document.getElementById('note-share-btn');
     const cleanupBtn = document.getElementById('note-cleanup-btn');
@@ -26,6 +27,7 @@ function initNoteEditorPage() {
     const visibilityBtn = document.getElementById('note-visibility-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentNote({ closeAfter: true }));
+    if (cancelBtn) cancelBtn.addEventListener('click', async () => { await cancelCurrentNoteChanges(); });
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteCurrentNote());
     if (shareBtn) shareBtn.addEventListener('click', () => openShareNoteModal());
     if (cleanupBtn) cleanupBtn.addEventListener('click', () => cleanupCurrentNote());
@@ -184,12 +186,14 @@ function setNoteEditorReadOnly(isReadOnly) {
     const editor = document.getElementById('note-editor');
     const titleInput = document.getElementById('note-title');
     const saveBtn = document.getElementById('note-save-btn');
+    const cancelBtn = document.getElementById('note-cancel-btn');
     const cleanupBtn = document.getElementById('note-cleanup-btn');
     const convertBtn = document.getElementById('note-convert-btn');
     const toolbar = document.getElementById('note-toolbar');
     if (editor) editor.setAttribute('contenteditable', isReadOnly ? 'false' : 'true');
     if (titleInput) titleInput.disabled = isReadOnly;
     if (saveBtn) saveBtn.disabled = isReadOnly;
+    if (cancelBtn) cancelBtn.disabled = isReadOnly || !hasNoteSessionChanges();
     if (cleanupBtn) cleanupBtn.disabled = isReadOnly;
     if (convertBtn) convertBtn.disabled = isReadOnly;
     if (toolbar) {

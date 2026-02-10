@@ -204,6 +204,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_key,
@@ -237,6 +238,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_key,
@@ -268,6 +270,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_key,
@@ -302,6 +305,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_key,
@@ -370,6 +374,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_obj.isoformat(),
@@ -398,6 +403,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_obj.isoformat(),
@@ -424,6 +430,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_obj.isoformat(),
@@ -453,6 +460,7 @@ def calendar_events():
                 'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
+                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
                 'day': day_obj.isoformat(),
@@ -549,6 +557,9 @@ def calendar_events():
     priority = (data.get('priority') or 'medium').lower()
     if priority not in ALLOWED_PRIORITIES:
         priority = 'medium'
+    display_mode = str(data.get('display_mode') or 'both').strip().lower()
+    if display_mode not in {'both', 'timeline_only'}:
+        display_mode = 'both'
     status = (data.get('status') or 'not_started')
     if status not in ALLOWED_STATUSES:
         status = 'not_started'
@@ -682,6 +693,7 @@ def calendar_events():
         is_phase=is_phase,
         is_event=is_event and not is_phase and not is_group,
         allow_overlap=new_allow_overlap if not is_phase and not is_group else False,
+        display_mode=display_mode if not is_phase and not is_group else 'both',
         is_group=is_group and not is_phase and not is_event,
         phase_id=resolved_phase_id if not is_phase and not is_group else None,
         group_id=resolved_group_id if not is_group else None,
@@ -1060,6 +1072,11 @@ def calendar_event_detail(event_id):
         event.is_event = bool(data.get('is_event'))
     if 'allow_overlap' in data and (not event.is_phase) and (not event.is_group):
         event.allow_overlap = bool(data.get('allow_overlap'))
+    if 'display_mode' in data and (not event.is_phase) and (not event.is_group):
+        display_mode = str(data.get('display_mode') or 'both').strip().lower()
+        if display_mode not in {'both', 'timeline_only'}:
+            display_mode = 'both'
+        event.display_mode = display_mode
     if 'is_group' in data and not event.is_phase and not event.is_event:
         event.is_group = bool(data.get('is_group'))
     if 'rollover_enabled' in data:

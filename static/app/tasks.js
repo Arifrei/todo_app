@@ -1533,6 +1533,13 @@ function getSyntaxSuggestions(text, cursorPosition) {
         example: '*30m or *2h'
     });
 
+    // Timeline-only visibility
+    suggestions.push({
+        syntax: '&',
+        description: 'Timeline only (hide from list section)',
+        example: '$ Lunch @12pm-12:30pm &'
+    });
+
     // Disable rollover
     suggestions.push({
         syntax: '-',

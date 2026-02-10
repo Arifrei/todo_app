@@ -1069,6 +1069,8 @@ def _rollover_incomplete_events():
                         priority=ev.priority,
                         is_phase=False,
                         is_event=ev.is_event,
+                        allow_overlap=ev.allow_overlap,
+                        display_mode=getattr(ev, 'display_mode', None) or 'both',
                         is_group=ev.is_group,
                         phase_id=new_phase_id,
                         order_index=_next_calendar_order(today, uid),
