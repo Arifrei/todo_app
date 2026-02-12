@@ -327,11 +327,18 @@ function tryConvertBracketLink(editor, event) {
     if (!node || node.nodeType !== Node.TEXT_NODE) return false;
     const text = node.nodeValue || '';
     const offset = range.startOffset;
-    if (offset < 2 || text.slice(offset - 2, offset) !== ']]') return false;
-    const before = text.slice(0, offset - 2);
-    const openIndex = before.lastIndexOf('[[');
+    const isTripleLink = offset >= 3 && text.slice(offset - 3, offset) === ']]]';
+    const closeToken = isTripleLink ? ']]]' : ']]';
+    const openToken = isTripleLink ? '[[[' : '[[';
+    const noteLinkType = isTripleLink ? 'list' : 'note';
+    if (offset < closeToken.length || text.slice(offset - closeToken.length, offset) !== closeToken) return false;
+    const before = text.slice(0, offset - closeToken.length);
+    const openIndex = before.lastIndexOf(openToken);
     if (openIndex === -1) return false;
-    const rawTitle = before.slice(openIndex + 2);
+    // If we just typed the 2nd closing bracket after a triple opener (`[[[`),
+    // defer conversion until the 3rd bracket is typed so `[[[title]]]` works.
+    if (!isTripleLink && openIndex > 0 && before.charAt(openIndex - 1) === '[') return false;
+    const rawTitle = before.slice(openIndex + openToken.length);
     const title = rawTitle.trim();
     if (!title || title.includes('\n')) return false;
 
@@ -343,6 +350,7 @@ function tryConvertBracketLink(editor, event) {
     const link = document.createElement('a');
     link.className = 'note-link';
     link.setAttribute('data-note-title', title);
+    link.setAttribute('data-note-link-type', noteLinkType);
     link.setAttribute('href', '#');
     link.textContent = title;
 
@@ -454,6 +462,7 @@ async function handleNoteLinkClick(linkEl) {
         return;
     }
     const title = (linkEl.dataset.noteTitle || linkEl.textContent || '').trim();
+    const noteLinkType = (linkEl.dataset.noteLinkType === 'list') ? 'list' : 'note';
     if (!title) return;
     const sourceNoteId = await ensureActiveNoteIdForLink();
     if (!sourceNoteId) return;
@@ -465,13 +474,14 @@ async function handleNoteLinkClick(linkEl) {
             body: JSON.stringify({
                 source_note_id: sourceNoteId,
                 title: title,
+                note_type: noteLinkType,
                 folder_id: notesState.activeFolderId
             })
         });
         if (!res.ok) throw new Error('Failed to resolve link');
         const data = await res.json();
         if (data.status === 'choose') {
-            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId, { folderId: notesState.activeFolderId });
+            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId, { folderId: notesState.activeFolderId, noteType: noteLinkType });
             return;
         }
         if (data.note) {
@@ -491,9 +501,13 @@ async function handleListNoteLinkClick(linkEl) {
         return;
     }
     const title = (linkEl.dataset.noteTitle || linkEl.textContent || '').trim();
+    const noteLinkType = (linkEl.dataset.noteLinkType === 'list') ? 'list' : 'note';
     if (!title) return;
     const sourceNoteId = listState.listId;
-    if (!sourceNoteId) return;
+    if (!sourceNoteId) {
+        showToast('Save this list before linking.', 'warning', 2500);
+        return;
+    }
 
     try {
         const res = await fetch('/api/notes/resolve-link', {
@@ -502,13 +516,15 @@ async function handleListNoteLinkClick(linkEl) {
             body: JSON.stringify({
                 source_note_id: sourceNoteId,
                 title: title,
+                note_type: noteLinkType,
+                defer_create: true,
                 folder_id: listState.folderId
             })
         });
         if (!res.ok) throw new Error('Failed to resolve link');
         const data = await res.json();
         if (data.status === 'choose') {
-            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId, { folderId: listState.folderId });
+            openNoteLinkModal(linkEl, title, data.matches || [], sourceNoteId, { folderId: listState.folderId, noteType: noteLinkType });
             return;
         }
         if (data.note) {
@@ -525,7 +541,9 @@ function applyResolvedNoteLink(linkEl, note) {
     if (!linkEl || !note) return;
     linkEl.dataset.noteId = note.id;
     linkEl.dataset.noteTitle = note.title || linkEl.textContent || '';
+    linkEl.dataset.noteLinkType = note.note_type === 'list' ? 'list' : 'note';
     linkEl.setAttribute('href', `/notes/${note.id}`);
+    linkEl.classList.toggle('list-link', linkEl.dataset.noteLinkType === 'list');
     if (document.getElementById('note-editor')) {
         setNoteDirty(true);
     }
@@ -537,20 +555,24 @@ function openNoteLinkModal(anchor, title, matches, sourceNoteId, options = {}) {
     const titleEl = document.getElementById('note-link-modal-title');
     const subtitleEl = document.getElementById('note-link-modal-subtitle');
     if (!modal || !listEl) return;
+    setupNoteLinkModalControls();
 
+    const noteType = options.noteType === 'list' ? 'list' : 'note';
     noteLinkState = {
         anchor,
         title,
         matches: matches || [],
         sourceNoteId,
         openOnResolve: options.openOnResolve !== false,
-        folderId: options.folderId ?? null
+        folderId: options.folderId ?? null,
+        noteType
     };
     if (titleEl) titleEl.textContent = `Link: ${title}`;
     if (subtitleEl) {
+        const targetLabel = noteType === 'list' ? 'list' : 'note';
         subtitleEl.textContent = (matches && matches.length)
-            ? 'Select an existing note or create a new one.'
-            : 'No exact matches found. Create a new note?';
+            ? `Select an existing ${targetLabel} or create a new one.`
+            : `No exact matches found. Create a new ${targetLabel}?`;
     }
 
     listEl.innerHTML = '';
@@ -578,7 +600,7 @@ function openNoteLinkModal(anchor, title, matches, sourceNoteId, options = {}) {
 function closeNoteLinkModal() {
     const modal = document.getElementById('note-link-modal');
     if (modal) modal.classList.remove('active');
-    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null };
+    noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null, noteType: 'note' };
 }
 
 function setupNoteLinkModalControls() {
@@ -629,6 +651,7 @@ async function relinkNoteFromEditModal() {
     if (!anchor || !textInput) return;
     const title = textInput.value.trim();
     if (!title) return;
+    const noteLinkType = (anchor.dataset.noteLinkType === 'list') ? 'list' : 'note';
     const sourceNoteId = await ensureActiveNoteIdForLink();
     if (!sourceNoteId) return;
 
@@ -639,13 +662,14 @@ async function relinkNoteFromEditModal() {
             body: JSON.stringify({
                 source_note_id: sourceNoteId,
                 title: title,
+                note_type: noteLinkType,
                 folder_id: notesState.activeFolderId
             })
         });
         if (!res.ok) throw new Error('Failed to resolve link');
         const data = await res.json();
         if (data.status === 'choose') {
-            openNoteLinkModal(anchor, title, data.matches || [], sourceNoteId, { openOnResolve: false, folderId: notesState.activeFolderId });
+            openNoteLinkModal(anchor, title, data.matches || [], sourceNoteId, { openOnResolve: false, folderId: notesState.activeFolderId, noteType: noteLinkType });
             return;
         }
         if (data.note) {
@@ -689,12 +713,15 @@ function saveEditNoteLinkModal() {
         anchor.classList.add('external-link');
         anchor.removeAttribute('data-note-id');
         anchor.removeAttribute('data-note-title');
+        anchor.removeAttribute('data-note-link-type');
         anchor.setAttribute('href', url || '#');
         anchor.setAttribute('target', '_blank');
         anchor.setAttribute('rel', 'noopener noreferrer');
     } else {
         anchor.classList.remove('external-link');
         anchor.classList.add('note-link');
+        anchor.dataset.noteLinkType = anchor.dataset.noteLinkType === 'list' ? 'list' : 'note';
+        anchor.classList.toggle('list-link', anchor.dataset.noteLinkType === 'list');
         anchor.setAttribute('href', anchor.dataset.noteId ? `/notes/${anchor.dataset.noteId}` : '#');
         anchor.removeAttribute('target');
         anchor.removeAttribute('rel');
@@ -736,13 +763,15 @@ function setupEditNoteLinkModalControls() {
 async function selectNoteLinkMatch(targetId) {
     const { anchor, sourceNoteId } = noteLinkState;
     if (!anchor || !sourceNoteId || !targetId) return;
+    const noteType = noteLinkState.noteType === 'list' ? 'list' : 'note';
     try {
         const res = await fetch('/api/notes/resolve-link', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 source_note_id: sourceNoteId,
-                target_note_id: targetId
+                target_note_id: targetId,
+                note_type: noteType
             })
         });
         if (!res.ok) throw new Error('Failed to link note');
@@ -763,6 +792,7 @@ async function selectNoteLinkMatch(targetId) {
 async function createNoteFromLinkModal(isListed) {
     const { anchor, title, sourceNoteId } = noteLinkState;
     if (!anchor || !sourceNoteId || !title) return;
+    const noteType = noteLinkState.noteType === 'list' ? 'list' : 'note';
     const folderId = noteLinkState.folderId !== null ? noteLinkState.folderId : notesState.activeFolderId;
     try {
         const res = await fetch('/api/notes/resolve-link', {
@@ -771,6 +801,7 @@ async function createNoteFromLinkModal(isListed) {
             body: JSON.stringify({
                 source_note_id: sourceNoteId,
                 title: title,
+                note_type: noteType,
                 is_listed: isListed,
                 folder_id: folderId
             })

@@ -210,17 +210,17 @@ def bookmarks_page():
 
 
 def planner_page():
-    """Planner module page."""
+    """Planner module was removed; redirect to Notes."""
     if not get_current_user():
         return redirect(url_for('select_user'))
-    return render_template('planner.html', folder_id=None)
+    return redirect('/notes')
 
 
 def planner_folder_page(folder_id):
-    """Planner folder page."""
+    """Planner module was removed; redirect to Notes."""
     if not get_current_user():
         return redirect(url_for('select_user'))
-    return render_template('planner.html', folder_id=folder_id)
+    return redirect('/notes')
 
 
 def feed_page():

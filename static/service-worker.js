@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taskflow-cache-v6';
+const CACHE_NAME = 'taskflow-cache-v7';
 const CORE_ASSETS = [
   '/',
   '/static/style.css',
@@ -14,7 +14,6 @@ const CORE_ASSETS = [
   '/static/notes/bootstrap.js',
   '/static/notes/detail.js',
   '/static/notes/editor.js',
-  '/static/pages/planner-page.js',
   '/static/pages/quick-access-page.js',
   '/static/pages/feed-page.js',
   '/static/pages/bookmarks-page.js',

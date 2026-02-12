@@ -598,6 +598,83 @@ input:-webkit-autofill:focus {
         line-height: 1;
     }
 
+    /* Keep calendar bulk actions module-specific and visible */
+    #calendar-bulk-bar.bulk-actions {
+        width: calc(100vw - 0.5rem) !important;
+        max-width: calc(100vw - 0.5rem) !important;
+        left: 0.25rem !important;
+        right: 0.25rem !important;
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+    }
+
+    #calendar-bulk-bar .bulk-left {
+        margin-right: 0.2rem;
+        flex: 0 0 auto;
+        min-width: max-content;
+        width: auto !important;
+    }
+
+    #calendar-bulk-bar .bulk-buttons {
+        margin-left: 0;
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        min-width: max-content;
+        width: auto !important;
+        display: flex !important;
+        flex: 0 0 auto;
+        justify-content: flex-start !important;
+    }
+
+    #calendar-bulk-bar #calendar-bulk-rollover,
+    #calendar-bulk-bar #calendar-bulk-more-btn,
+    #calendar-bulk-bar #calendar-bulk-delete {
+        display: inline-flex !important;
+    }
+
+    /* Notes list editor bulk bar: keep fully inside viewport */
+    #list-bulk-bar.bulk-actions {
+        position: fixed !important;
+        top: 0.6rem !important;
+        bottom: auto !important;
+        left: 0.5rem !important;
+        right: 0.5rem !important;
+        width: auto !important;
+        max-width: calc(100vw - 1rem) !important;
+        transform: none !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        justify-content: flex-start !important;
+    }
+
+    #list-bulk-bar .bulk-left {
+        margin-right: 0.2rem;
+        min-width: max-content;
+        width: auto;
+    }
+
+    #list-bulk-bar .bulk-buttons {
+        margin-left: 0;
+        min-width: max-content;
+        width: auto;
+        display: flex !important;
+        justify-content: flex-start !important;
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        gap: 0.25rem !important;
+    }
+
+    #list-bulk-bar .bulk-buttons .btn,
+    #list-bulk-bar .bulk-buttons .btn-icon {
+        display: inline-flex !important;
+        flex: 0 0 auto;
+    }
+
     #bulk-count {
         font-size: 0.7rem;
         line-height: 1;

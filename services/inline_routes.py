@@ -1,11 +1,11 @@
 """Compatibility exports for extracted inline route handlers."""
 
-from services.page_routes import index, tasks_page, download_app, notes_page, vault_page, new_note_page, note_editor_page, notes_folder_page, recalls_page, ai_page, transcribe_audio, settings_page, service_worker, calendar_page, quick_access_page, bookmarks_page, planner_page, planner_folder_page, feed_page, list_view
+from services.page_routes import index, tasks_page, download_app, notes_page, vault_page, new_note_page, note_editor_page, notes_folder_page, recalls_page, ai_page, transcribe_audio, settings_page, service_worker, calendar_page, quick_access_page, bookmarks_page, feed_page, list_view
 from services.notes_extra_routes import reorder_notes, note_folders, archive_note_folder, restore_note_folder, move_notes, archive_note, restore_note, note_list_item_duplicates, reorder_note_list_items, share_note, view_shared_note, check_pin_status, set_pin, remove_pin, verify_pin, notes_pin_status, set_notes_pin, unlock_note, unlock_folder
 from services.vault_extra_routes import vault_folder_detail, vault_document_download, vault_document_preview, vault_document_move, vault_search, vault_stats
 from services.recall_extra_routes import handle_recalls, recall_detail, regenerate_recall
 from services.quick_bookmark_extra_routes import handle_quick_access, delete_quick_access, update_quick_access_order, handle_bookmarks, bookmark_detail
-from services.planner_extra_routes import create_planner_folder, update_planner_folder, create_planner_simple_item, update_planner_simple_item, planner_simple_item_to_recall, create_planner_group, update_planner_group, update_planner_multi_item, update_planner_multi_item_order, create_planner_multi_line, update_planner_multi_line, handle_feed, feed_detail, feed_to_recall
+from services.feed_routes import handle_feed, feed_detail, feed_to_recall
 from services.calendar_extra_routes import list_recurring_events, reorder_calendar_events, manual_rollover, send_digest_now, dismiss_reminder
 from services.notification_extra_routes import api_list_notifications, api_mark_notifications_read, api_mark_notification_read, api_notification_settings
 from services.list_search_extra_routes import list_items_in_list, search_entities, ai_chat, move_destinations, list_phases, list_hubs, hub_children, export_list, reorder_items
@@ -28,8 +28,6 @@ __all__ = [
     'calendar_page',
     'quick_access_page',
     'bookmarks_page',
-    'planner_page',
-    'planner_folder_page',
     'feed_page',
     'list_view',
     'reorder_notes',
@@ -65,17 +63,6 @@ __all__ = [
     'handle_recalls',
     'recall_detail',
     'regenerate_recall',
-    'create_planner_folder',
-    'update_planner_folder',
-    'create_planner_simple_item',
-    'update_planner_simple_item',
-    'planner_simple_item_to_recall',
-    'create_planner_group',
-    'update_planner_group',
-    'update_planner_multi_item',
-    'update_planner_multi_item_order',
-    'create_planner_multi_line',
-    'update_planner_multi_line',
     'handle_feed',
     'feed_detail',
     'feed_to_recall',

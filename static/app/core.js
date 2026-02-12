@@ -33,7 +33,7 @@ let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true, activePlannerContext: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null, collapsedSectionIds: new Set(), sectionReorderMode: false };
 let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
@@ -71,6 +71,7 @@ let recallState = {
 };
 let currentTaskFilter = 'all';
 let selectedTagFilters = new Set();
+const TASK_FILTER_STATE_KEY_PREFIX = 'task_filter_state:';
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time', dayViewMode: 'timeline' };
 let calendarSearchState = { query: '', results: [], loading: false, debounceTimer: null, requestToken: 0 };
 const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
@@ -79,7 +80,7 @@ let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
 let datePickerState = { itemId: null };
 let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
-let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null };
+let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null, noteType: 'note' };
 let linkEditState = { anchor: null };
 let suppressLinkClickUntil = 0;
 let linkLongPressTimer = null;
@@ -738,6 +739,21 @@ async function resolveCalendarEventId(ev) {
         if (!linked || !linked.calendar_event_id) return null;
         return { ...ev, ...linked, id: linked.calendar_event_id };
     }
+    if (ev.is_planner_item) {
+        const linked = await ensureLinkedPlannerEvent(ev);
+        if (!linked || !linked.calendar_event_id) return null;
+        return { ...ev, ...linked, id: linked.calendar_event_id };
+    }
+    if (ev.is_note_list_item) {
+        const linked = await ensureLinkedNoteListEvent(ev);
+        if (!linked || !linked.calendar_event_id) return null;
+        return { ...ev, ...linked, id: linked.calendar_event_id };
+    }
+    if (ev.is_feed_item) {
+        const linked = await ensureLinkedFeedEvent(ev);
+        if (!linked || !linked.calendar_event_id) return null;
+        return { ...ev, ...linked, id: linked.calendar_event_id };
+    }
     return ev;
 }
 
@@ -963,6 +979,72 @@ async function ensureLinkedPlannerEvent(ev) {
     return ev;
 }
 
+async function ensureLinkedNoteListEvent(ev) {
+    if (!ev || !ev.is_note_list_item || !ev.note_list_item_id) return null;
+    if (ev.calendar_event_id) return ev;
+    const created = await createCalendarEvent({
+        title: ev.title,
+        note_list_item_id: ev.note_list_item_id
+    });
+    if (!created || !created.id) return null;
+    ev.calendar_event_id = created.id;
+    ev.start_time = created.start_time;
+    ev.end_time = created.end_time;
+    ev.reminder_minutes_before = created.reminder_minutes_before;
+    ev.priority = created.priority || ev.priority || 'medium';
+    ev.rollover_enabled = created.rollover_enabled || false;
+    ev.display_mode = created.display_mode || ev.display_mode || 'both';
+    ev.item_note = created.item_note || ev.item_note || null;
+    if (created.allow_overlap !== null && created.allow_overlap !== undefined) {
+        ev.allow_overlap = created.allow_overlap;
+    } else if (ev.allow_overlap === null || ev.allow_overlap === undefined) {
+        ev.allow_overlap = false;
+    }
+    ev.status = created.status || ev.status || 'not_started';
+    ev.day = created.day || calendarState.selectedDay;
+    return ev;
+}
+
+async function ensureLinkedFeedEvent(ev) {
+    if (!ev || !ev.is_feed_item || !ev.feed_item_id) return null;
+    if (ev.calendar_event_id) return ev;
+    const created = await createCalendarEvent({
+        title: ev.title,
+        do_feed_item_id: ev.feed_item_id
+    });
+    if (!created || !created.id) return null;
+    ev.calendar_event_id = created.id;
+    ev.start_time = created.start_time;
+    ev.end_time = created.end_time;
+    ev.reminder_minutes_before = created.reminder_minutes_before;
+    ev.priority = created.priority || ev.priority || 'medium';
+    ev.rollover_enabled = created.rollover_enabled || false;
+    ev.display_mode = created.display_mode || ev.display_mode || 'both';
+    ev.item_note = created.item_note || ev.item_note || null;
+    if (created.allow_overlap !== null && created.allow_overlap !== undefined) {
+        ev.allow_overlap = created.allow_overlap;
+    } else if (ev.allow_overlap === null || ev.allow_overlap === undefined) {
+        ev.allow_overlap = false;
+    }
+    ev.status = created.status || ev.status || 'not_started';
+    ev.day = created.day || calendarState.selectedDay;
+    return ev;
+}
+
+async function updateLinkedNoteListStatus(ev, status) {
+    try {
+        const linked = await ensureLinkedNoteListEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        await updateCalendarEvent(linked.calendar_event_id, { status }, { skipReload: false, skipMonth: true });
+        linked.status = status;
+        ev.status = status;
+        if (calendarState.monthCursor) await loadCalendarMonth();
+        await scheduleLocalReminders();
+    } catch (e) {
+        console.error('Error updating linked list item status:', e);
+    }
+}
+
 async function unpinPlannerDate(ev) {
     openConfirmModal('Remove this item from this date?', async () => {
         try {
@@ -988,6 +1070,22 @@ async function unpinPlannerDate(ev) {
     });
 }
 
+async function unpinNoteListDate(noteId, noteListItemId) {
+    openConfirmModal('Remove this list item from this date?', async () => {
+        try {
+            await fetch(`/api/notes/${noteId}/list-items/${noteListItemId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scheduled_date: null })
+            });
+            window.location.reload();
+        } catch (e) {
+            console.error('Error unpinning list item date:', e);
+            showToast('Could not unpin list item.', 'error');
+        }
+    });
+}
+
 async function unpinTaskDate(taskId) {
     openConfirmModal('Remove this task from this date?', async () => {
         try {
@@ -1000,6 +1098,22 @@ async function unpinTaskDate(taskId) {
         } catch (e) {
             console.error('Error unpinning task:', e);
             showToast('Could not unpin task.', 'error');
+        }
+    });
+}
+
+async function unpinFeedDate(feedItemId) {
+    openConfirmModal('Remove this feed item from this date?', async () => {
+        try {
+            await fetch(`/api/feed/${feedItemId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scheduled_date: null })
+            });
+            window.location.reload();
+        } catch (e) {
+            console.error('Error unpinning feed item:', e);
+            showToast('Could not unpin feed item.', 'error');
         }
     });
 }
@@ -1360,6 +1474,7 @@ function toggleStatusDropdown(itemId) {
 function initTaskFilters() {
     const menu = document.getElementById('task-filter-menu');
     if (!menu) return;
+    restoreTaskFilterState();
     menu.querySelectorAll('.task-filter-item[data-filter]').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.preventDefault();
@@ -1368,6 +1483,45 @@ function initTaskFilters() {
         });
     });
     setTaskFilter(currentTaskFilter);
+}
+
+function getTaskFilterStateKey() {
+    if (typeof CURRENT_LIST_ID === 'undefined' || CURRENT_LIST_ID === null) return null;
+    return `${TASK_FILTER_STATE_KEY_PREFIX}${CURRENT_LIST_ID}`;
+}
+
+function saveTaskFilterState() {
+    const key = getTaskFilterStateKey();
+    if (!key) return;
+    try {
+        const state = {
+            filter: currentTaskFilter || 'all',
+            tags: Array.from(selectedTagFilters)
+        };
+        sessionStorage.setItem(key, JSON.stringify(state));
+    } catch (e) {
+        // Ignore storage failures (private mode, disabled storage, etc.)
+    }
+}
+
+function restoreTaskFilterState() {
+    const key = getTaskFilterStateKey();
+    if (!key) return;
+    try {
+        const raw = sessionStorage.getItem(key);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        const allowedFilters = new Set(['all', 'not_started', 'in_progress', 'done']);
+        if (parsed && allowedFilters.has(parsed.filter)) {
+            currentTaskFilter = parsed.filter;
+        }
+        if (parsed && Array.isArray(parsed.tags)) {
+            selectedTagFilters = new Set(parsed.tags.map(normalizeTag).filter(Boolean));
+        }
+    } catch (e) {
+        currentTaskFilter = 'all';
+        selectedTagFilters = new Set();
+    }
 }
 
 function hashTagToHue(tag) {
@@ -1402,6 +1556,7 @@ function setTaskFilter(filter) {
     updateTaskFilterLabel(menu);
     renderActiveFilterPills();
     applyTaskFilter();
+    saveTaskFilterState();
 }
 
 function updateTaskFilterLabel(menu) {
@@ -1501,6 +1656,7 @@ function syncTagFilterUI() {
     const menu = document.getElementById('task-filter-menu');
     updateTaskFilterLabel(menu);
     renderActiveFilterPills();
+    saveTaskFilterState();
 }
 
 function itemMatchesTagFilter(item) {
@@ -1629,6 +1785,7 @@ function clearTaskFilters(event) {
     syncTagFilterUI();
     renderActiveFilterPills();
     applyTaskFilter();
+    saveTaskFilterState();
 }
 
 function toggleTaskFilterMenu(event) {
@@ -2260,4 +2417,5 @@ if (document.readyState === 'loading') {
 } else {
     autoInitTasksDashboard();
 }
+
 

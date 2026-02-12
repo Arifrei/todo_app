@@ -54,8 +54,8 @@ function setDayControlsEnabled(enabled) {
     if (quickInput) {
         quickInput.disabled = !enabled;
         quickInput.placeholder = enabled
-            ? "Type your task and press Enter. Use $ # > @ ! * &"
-            : 'Pick a day to open its schedule';
+            ? 'Add item...'
+            : 'Pick a day';
     }
     if (prevBtn) prevBtn.disabled = !enabled;
     if (nextBtn) nextBtn.disabled = !enabled;
@@ -222,6 +222,15 @@ function formatReminderMinutes(minutes) {
     if (total % 1440 === 0) return `${total / 1440}d`;
     if (total % 60 === 0) return `${total / 60}h`;
     return `${total}m`;
+}
+
+function getCalendarNoteListItemUrl(ev) {
+    if (!ev || !ev.note_id) return '/notes';
+    return `/notes/${ev.note_id}`;
+}
+
+function openCalendarNoteListItem(ev) {
+    window.location.href = getCalendarNoteListItemUrl(ev);
 }
 
 function openCalendarMovePrompt(ev) {
@@ -1136,6 +1145,18 @@ function placeTimelineItems(items) {
 
 async function openTimelineItemTimeEditor(ev) {
     if (!ev) return;
+    if (ev.is_feed_item) {
+        const linked = await ensureLinkedFeedEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+        return;
+    }
+    if (ev.is_note_list_item) {
+        const linked = await ensureLinkedNoteListEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+        return;
+    }
     if (ev.is_task_link) {
         const linked = await ensureLinkedTaskEvent(ev);
         if (!linked || !linked.calendar_event_id) return;
@@ -1154,6 +1175,13 @@ async function openTimelineItemTimeEditor(ev) {
 async function toggleCalendarDisplayMode(ev) {
     if (!ev) return;
     const nextMode = getCalendarDisplayMode(ev) === 'timeline_only' ? 'both' : 'timeline_only';
+    if (ev.is_feed_item) {
+        const linked = await ensureLinkedFeedEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        await updateCalendarEvent(linked.calendar_event_id, { display_mode: nextMode });
+        ev.display_mode = nextMode;
+        return;
+    }
     if (ev.is_task_link) {
         const linked = await ensureLinkedTaskEvent(ev);
         if (!linked || !linked.calendar_event_id) return;
@@ -1163,6 +1191,13 @@ async function toggleCalendarDisplayMode(ev) {
     }
     if (ev.is_planner_item) {
         const linked = await ensureLinkedPlannerEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        await updateCalendarEvent(linked.calendar_event_id, { display_mode: nextMode });
+        ev.display_mode = nextMode;
+        return;
+    }
+    if (ev.is_note_list_item) {
+        const linked = await ensureLinkedNoteListEvent(ev);
         if (!linked || !linked.calendar_event_id) return;
         await updateCalendarEvent(linked.calendar_event_id, { display_mode: nextMode });
         ev.display_mode = nextMode;
@@ -1306,7 +1341,9 @@ function renderDayTimelinePanel(allItems) {
         const isTimelineOnly = getCalendarDisplayMode(ev) === 'timeline_only';
         const typeClass = ev.is_event
             ? 'event'
-            : (ev.is_task_link ? 'task-link' : (ev.is_planner_item ? 'planner' : 'task'));
+            : (ev.is_task_link
+                ? 'task-link'
+                : (ev.is_feed_item ? 'feed' : (ev.is_planner_item ? 'planner' : 'task')));
         block.className = `calendar-timeline-block ${typeClass} ${isTimelineOnly ? 'timeline-only' : ''}`;
         const overlapCols = ev.overlap_columns || 1;
         const rawLane = ev.lane || 0;
@@ -1899,6 +1936,434 @@ function renderCalendarEvents() {
 
             row.append(left, titleWrap, actions);
             attachCalendarRowSelection(row, ev);
+            return row;
+        }
+
+        if (ev.is_feed_item) {
+            row.classList.add('feed-link-row');
+            row.dataset.type = 'feed';
+
+            const left = document.createElement('div');
+            left.className = 'row-left';
+            left.innerHTML = '<i class="fa-regular fa-square"></i>';
+
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'calendar-title';
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.value = ev.title;
+            titleInput.readOnly = true;
+            titleInput.setAttribute('aria-label', 'Open feed item');
+            titleWrap.appendChild(titleInput);
+
+            const openUrl = (ev.feed_url || '').trim() || '/feed';
+            const isExternal = /^https?:\/\//i.test(openUrl);
+            const openFeedItem = () => {
+                if (isExternal) {
+                    window.open(openUrl, '_blank', 'noopener,noreferrer');
+                } else {
+                    window.location.href = openUrl;
+                }
+            };
+            titleWrap.addEventListener('click', () => {
+                openFeedItem();
+            });
+            titleInput.addEventListener('click', (e) => {
+                e.preventDefault();
+                openFeedItem();
+            });
+
+            const timeBtn = document.createElement('button');
+            timeBtn.type = 'button';
+            timeBtn.className = 'calendar-time-inline';
+            const timeLabel = formatTimeRange(ev);
+            timeBtn.innerHTML = timeLabel
+                ? `<i class="fa-regular fa-clock"></i><span>${timeLabel}</span>`
+                : `<i class="fa-regular fa-clock"></i>`;
+            if (!timeLabel) {
+                timeBtn.classList.add('no-time');
+                timeBtn.setAttribute('data-label', 'Add time');
+            }
+            timeBtn.title = timeLabel || 'Add time';
+            timeBtn.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedFeedEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+            };
+            titleWrap.appendChild(timeBtn);
+
+            const meta = document.createElement('div');
+            meta.className = 'calendar-meta-lite';
+            const sourceChip = document.createElement('a');
+            sourceChip.className = 'meta-chip';
+            sourceChip.href = openUrl;
+            if (isExternal) {
+                sourceChip.target = '_blank';
+                sourceChip.rel = 'noopener noreferrer';
+            }
+            const rawState = (ev.feed_state || 'feed').replace(/[_-]+/g, ' ').trim();
+            const stateLabel = rawState ? rawState.charAt(0).toUpperCase() + rawState.slice(1) : 'Feed';
+            sourceChip.textContent = stateLabel;
+            sourceChip.title = `From EverFeed (${stateLabel})`;
+            meta.append(sourceChip);
+            titleWrap.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'calendar-actions-row';
+            const noteChips = document.createElement('div');
+            noteChips.className = 'calendar-note-chips';
+            appendCalendarItemNoteChip(noteChips, ev);
+            const priorityDot = document.createElement('button');
+            priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
+            priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
+            priorityDot.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedFeedEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openPriorityMenu(priorityDot, linked.priority || 'medium', async (val) => {
+                    try {
+                        await updateCalendarEvent(linked.calendar_event_id, { priority: val });
+                        linked.priority = val;
+                        ev.priority = val;
+                        renderCalendarEvents();
+                    } catch (err) {
+                        console.error('Failed to update priority', err);
+                    }
+                });
+            };
+
+            const overflowMenuContainer = document.createElement('div');
+            overflowMenuContainer.className = 'calendar-overflow-menu';
+            const overflowBtn = document.createElement('button');
+            overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+            overflowBtn.title = 'More options';
+            overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+            overflowBtn.style.display = 'inline-flex';
+            overflowBtn.style.width = '28px';
+            overflowBtn.style.height = '28px';
+
+            const overflowDropdown = document.createElement('div');
+            overflowDropdown.className = 'calendar-item-dropdown';
+
+            const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
+            const reminderMenuItem = document.createElement('button');
+            reminderMenuItem.className = 'calendar-item-menu-option';
+            reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${formatReminderMinutes(ev.reminder_minutes_before)})` : 'Set Reminder'}`;
+            reminderMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedFeedEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openReminderEditor({ ...linked, id: linked.calendar_event_id });
+            };
+
+            const rolloverMenuItem = document.createElement('button');
+            rolloverMenuItem.className = 'calendar-item-menu-option';
+            rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+            rolloverMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedFeedEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                const next = !linked.rollover_enabled;
+                try {
+                    await updateCalendarEvent(linked.calendar_event_id, { rollover_enabled: next });
+                    linked.rollover_enabled = next;
+                    ev.rollover_enabled = next;
+                } catch (err) {
+                    console.error('Failed to toggle rollover', err);
+                }
+            };
+
+            const allowOverlapMenuItem = document.createElement('button');
+            allowOverlapMenuItem.className = 'calendar-item-menu-option';
+            const overlapLabel = ev.allow_overlap ? 'Allow' : 'Disallow';
+            allowOverlapMenuItem.innerHTML = `<i class="fa-solid fa-layer-group ${ev.allow_overlap ? 'active-icon' : ''}"></i> ${overlapLabel} Overlap`;
+            allowOverlapMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedFeedEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                const next = !linked.allow_overlap;
+                try {
+                    await updateCalendarEvent(linked.calendar_event_id, { allow_overlap: next });
+                    linked.allow_overlap = next;
+                    ev.allow_overlap = next;
+                } catch (err) {
+                    console.error('Failed to toggle allow_overlap', err);
+                }
+            };
+
+            const openBtn = document.createElement('a');
+            openBtn.className = 'calendar-item-menu-option';
+            openBtn.href = openUrl;
+            if (isExternal) {
+                openBtn.target = '_blank';
+                openBtn.rel = 'noopener noreferrer';
+            }
+            openBtn.innerHTML = '<i class="fa-solid fa-up-right-from-square"></i> Open source';
+
+            const unpinBtn = document.createElement('button');
+            unpinBtn.className = 'calendar-item-menu-option';
+            unpinBtn.innerHTML = '<i class="fa-solid fa-thumbtack"></i> Unpin from day';
+            unpinBtn.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                unpinFeedDate(ev.feed_item_id);
+            };
+
+            const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
+            overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, openBtn, unpinBtn);
+            overflowMenuContainer.append(overflowBtn);
+            document.body.appendChild(overflowDropdown);
+
+            const positionDropdown = () => {
+                const rect = overflowBtn.getBoundingClientRect();
+                const dropdownWidth = overflowDropdown.offsetWidth || 200;
+                const dropdownHeight = overflowDropdown.offsetHeight || 120;
+                const screenWidth = window.innerWidth;
+                const screenHeight = window.innerHeight;
+                const padding = 8;
+                overflowDropdown.style.position = 'fixed';
+                let topPos = rect.bottom + 8;
+                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
+                    topPos = rect.top - dropdownHeight - 8;
+                }
+                const maxTop = screenHeight - dropdownHeight - padding;
+                const minTop = padding;
+                topPos = Math.max(minTop, Math.min(topPos, maxTop));
+                let leftPos = rect.right - dropdownWidth;
+                if (leftPos < padding) leftPos = padding;
+                if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
+                overflowDropdown.style.top = `${topPos}px`;
+                overflowDropdown.style.left = `${leftPos}px`;
+            };
+
+            overflowBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
+                overflowDropdown.classList.toggle('active');
+                positionDropdown();
+            });
+
+            window.addEventListener('scroll', () => {
+                if (overflowDropdown.classList.contains('active')) positionDropdown();
+            }, { passive: true });
+
+            if (noteChips.childNodes.length) actions.append(noteChips);
+            actions.append(priorityDot, overflowMenuContainer);
+
+            row.append(left, titleWrap, actions);
+            return row;
+        }
+
+        if (ev.is_note_list_item) {
+            row.classList.add('note-list-row');
+            row.dataset.type = 'note-list';
+
+            const left = document.createElement('div');
+            left.className = 'row-left';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = ev.status === 'done';
+            checkbox.onchange = async () => {
+                await updateLinkedNoteListStatus(ev, checkbox.checked ? 'done' : 'not_started');
+            };
+            left.appendChild(checkbox);
+
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'calendar-title task-link-title';
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.value = ev.title;
+            titleInput.readOnly = true;
+            titleInput.setAttribute('aria-label', 'Open list item');
+            titleWrap.appendChild(titleInput);
+
+            const openUrl = getCalendarNoteListItemUrl(ev);
+            titleWrap.addEventListener('click', () => {
+                openCalendarNoteListItem(ev);
+            });
+            titleInput.addEventListener('click', (e) => {
+                e.preventDefault();
+                openCalendarNoteListItem(ev);
+            });
+
+            const timeBtn = document.createElement('button');
+            timeBtn.type = 'button';
+            timeBtn.className = 'calendar-time-inline';
+            const timeLabel = formatTimeRange(ev);
+            timeBtn.innerHTML = timeLabel
+                ? `<i class="fa-regular fa-clock"></i><span>${timeLabel}</span>`
+                : `<i class="fa-regular fa-clock"></i>`;
+            if (!timeLabel) {
+                timeBtn.classList.add('no-time');
+                timeBtn.setAttribute('data-label', 'Add time');
+            }
+            timeBtn.title = timeLabel || 'Add time';
+            timeBtn.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedNoteListEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openCalendarTimeModal({ ...linked, id: linked.calendar_event_id });
+            };
+            titleWrap.appendChild(timeBtn);
+
+            const meta = document.createElement('div');
+            meta.className = 'calendar-meta-lite';
+            const sourceChip = document.createElement('a');
+            sourceChip.className = 'meta-chip note';
+            sourceChip.href = openUrl;
+            sourceChip.textContent = ev.note_title || 'Notes list';
+            sourceChip.title = `From ${ev.note_title || 'Notes list'}`;
+            meta.append(sourceChip);
+            titleWrap.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.className = 'calendar-actions-row';
+
+            const noteChips = document.createElement('div');
+            noteChips.className = 'calendar-note-chips';
+            appendCalendarItemNoteChip(noteChips, ev);
+
+            const priorityDot = document.createElement('button');
+            priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
+            priorityDot.title = `Priority: ${(ev.priority || 'medium')}`;
+            priorityDot.onclick = async (e) => {
+                e.stopPropagation();
+                const linked = await ensureLinkedNoteListEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openPriorityMenu(priorityDot, linked.priority || 'medium', async (val) => {
+                    try {
+                        await updateCalendarEvent(linked.calendar_event_id, { priority: val });
+                        linked.priority = val;
+                        ev.priority = val;
+                        renderCalendarEvents();
+                    } catch (err) {
+                        console.error('Failed to update priority', err);
+                    }
+                });
+            };
+
+            const overflowMenuContainer = document.createElement('div');
+            overflowMenuContainer.className = 'calendar-overflow-menu';
+            const overflowBtn = document.createElement('button');
+            overflowBtn.className = 'calendar-icon-btn overflow-trigger';
+            overflowBtn.title = 'More options';
+            overflowBtn.innerHTML = '<i class="fa-solid fa-ellipsis-vertical"></i>';
+            overflowBtn.style.display = 'inline-flex';
+            overflowBtn.style.width = '28px';
+            overflowBtn.style.height = '28px';
+
+            const overflowDropdown = document.createElement('div');
+            overflowDropdown.className = 'calendar-item-dropdown';
+
+            const reminderActive = ev.reminder_minutes_before !== null && ev.reminder_minutes_before !== undefined;
+            const reminderMenuItem = document.createElement('button');
+            reminderMenuItem.className = 'calendar-item-menu-option';
+            reminderMenuItem.innerHTML = `<i class="fa-solid fa-bell${reminderActive ? '' : '-slash'} ${reminderActive ? 'active-icon' : ''}"></i> ${reminderActive ? `Reminder (${formatReminderMinutes(ev.reminder_minutes_before)})` : 'Set Reminder'}`;
+            reminderMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedNoteListEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                openReminderEditor({ ...linked, id: linked.calendar_event_id });
+            };
+
+            const rolloverMenuItem = document.createElement('button');
+            rolloverMenuItem.className = 'calendar-item-menu-option';
+            rolloverMenuItem.innerHTML = `<i class="fa-solid fa-rotate ${ev.rollover_enabled ? 'active-icon' : ''}"></i> ${ev.rollover_enabled ? 'Disable' : 'Enable'} Rollover`;
+            rolloverMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedNoteListEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                const next = !linked.rollover_enabled;
+                try {
+                    await updateCalendarEvent(linked.calendar_event_id, { rollover_enabled: next });
+                    linked.rollover_enabled = next;
+                    ev.rollover_enabled = next;
+                } catch (err) {
+                    console.error('Failed to toggle rollover', err);
+                }
+            };
+
+            const allowOverlapMenuItem = document.createElement('button');
+            allowOverlapMenuItem.className = 'calendar-item-menu-option';
+            const overlapLabel = ev.allow_overlap ? 'Allow' : 'Disallow';
+            allowOverlapMenuItem.innerHTML = `<i class="fa-solid fa-layer-group ${ev.allow_overlap ? 'active-icon' : ''}"></i> ${overlapLabel} Overlap`;
+            allowOverlapMenuItem.onclick = async (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                const linked = await ensureLinkedNoteListEvent(ev);
+                if (!linked || !linked.calendar_event_id) return;
+                const next = !linked.allow_overlap;
+                try {
+                    await updateCalendarEvent(linked.calendar_event_id, { allow_overlap: next });
+                    linked.allow_overlap = next;
+                    ev.allow_overlap = next;
+                } catch (err) {
+                    console.error('Failed to toggle allow_overlap', err);
+                }
+            };
+
+            const openBtn = document.createElement('a');
+            openBtn.className = 'calendar-item-menu-option';
+            openBtn.href = openUrl;
+            openBtn.innerHTML = '<i class="fa-solid fa-up-right-from-square"></i> Open list item';
+
+            const unpinBtn = document.createElement('button');
+            unpinBtn.className = 'calendar-item-menu-option';
+            unpinBtn.innerHTML = '<i class="fa-solid fa-thumbtack"></i> Unpin from day';
+            unpinBtn.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                unpinNoteListDate(ev.note_id, ev.note_list_item_id);
+            };
+
+            const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
+            overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, openBtn, unpinBtn);
+            overflowMenuContainer.append(overflowBtn);
+            document.body.appendChild(overflowDropdown);
+
+            const positionDropdown = () => {
+                const rect = overflowBtn.getBoundingClientRect();
+                const dropdownWidth = overflowDropdown.offsetWidth || 200;
+                const dropdownHeight = overflowDropdown.offsetHeight || 120;
+                const screenWidth = window.innerWidth;
+                const screenHeight = window.innerHeight;
+                const padding = 8;
+                overflowDropdown.style.position = 'fixed';
+                let topPos = rect.bottom + 8;
+                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
+                    topPos = rect.top - dropdownHeight - 8;
+                }
+                const maxTop = screenHeight - dropdownHeight - padding;
+                const minTop = padding;
+                topPos = Math.max(minTop, Math.min(topPos, maxTop));
+                let leftPos = rect.right - dropdownWidth;
+                if (leftPos < padding) leftPos = padding;
+                if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
+                overflowDropdown.style.top = `${topPos}px`;
+                overflowDropdown.style.left = `${leftPos}px`;
+            };
+
+            overflowBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
+                overflowDropdown.classList.toggle('active');
+                positionDropdown();
+            });
+
+            window.addEventListener('scroll', () => {
+                if (overflowDropdown.classList.contains('active')) positionDropdown();
+            }, { passive: true });
+
+            if (noteChips.childNodes.length) actions.append(noteChips);
+            actions.append(priorityDot, overflowMenuContainer);
+
+            row.append(left, titleWrap, actions);
             return row;
         }
 
@@ -2805,7 +3270,7 @@ function handleCalendarTouchEnd(e, ev) {
 }
 
 function attachCalendarRowSelection(row, ev) {
-    if (!row || ev.is_phase || ev.is_group) return;
+    if (!row || ev.is_phase || ev.is_group || ev.is_note_list_item) return;
     row.classList.add('selectable');
     if (calendarSelection.ids.has(calendarSelectionKey(ev.id))) {
         row.classList.add('selected');
@@ -2943,6 +3408,10 @@ function enableCalendarDragAndDrop(container) {
     const typeKey = (row) => `${row.dataset.type || 'task'}|${row.dataset.groupId || ''}`;
 
     rows.forEach(row => {
+        if ((row.dataset.type || '') === 'note-list' || (row.dataset.type || '') === 'feed') {
+            row.draggable = false;
+            return;
+        }
         row.draggable = true;
         row.addEventListener('dragstart', (e) => {
             if (calendarSelection.ids.size) {

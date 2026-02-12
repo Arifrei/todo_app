@@ -183,6 +183,7 @@ def resolve_note_link():
     func = a.func
     get_current_user = a.get_current_user
     jsonify = a.jsonify
+    normalize_note_type = a.normalize_note_type
     parse_bool = a.parse_bool
     request = a.request
     """Resolve or create a linked note from a note editor."""
@@ -193,6 +194,8 @@ def resolve_note_link():
     source_note_id = data.get('source_note_id')
     title = (data.get('title') or '').strip()
     target_note_id = data.get('target_note_id')
+    note_type = normalize_note_type(data.get('note_type') or 'note')
+    defer_create = parse_bool(data.get('defer_create'), False)
     is_listed = parse_bool(data.get('is_listed'), True)
     folder_id_value = data.get('folder_id')
     folder_id_value = int(folder_id_value) if folder_id_value and str(folder_id_value).isdigit() else None
@@ -209,6 +212,8 @@ def resolve_note_link():
         target = Note.query.filter_by(id=int(target_note_id), user_id=user.id).first()
         if not target:
             return jsonify({'error': 'Target note not found'}), 404
+        if target.note_type != note_type:
+            return jsonify({'error': f'Target is not a {note_type}'}), 400
         existing = NoteLink.query.filter_by(source_note_id=source_note.id, target_note_id=target.id).first()
         if not existing:
             db.session.add(NoteLink(source_note_id=source_note.id, target_note_id=target.id))
@@ -220,6 +225,7 @@ def resolve_note_link():
 
     matches = Note.query.filter(
         Note.user_id == user.id,
+        Note.note_type == note_type,
         func.lower(Note.title) == title.lower()
     ).order_by(Note.updated_at.desc()).all()
     if len(matches) > 1:
@@ -228,11 +234,14 @@ def resolve_note_link():
                 'id': note.id,
                 'title': note.title,
                 'is_listed': bool(note.is_listed),
+                'note_type': note.note_type,
                 'updated_at': note.updated_at.isoformat() if note.updated_at else None
             }
             for note in matches
         ]
         return jsonify({'status': 'choose', 'title': title, 'matches': payload})
+    if len(matches) == 0 and defer_create:
+        return jsonify({'status': 'choose', 'title': title, 'matches': []})
     if len(matches) == 1:
         target = matches[0]
         existing = NoteLink.query.filter_by(source_note_id=source_note.id, target_note_id=target.id).first()
@@ -248,7 +257,7 @@ def resolve_note_link():
         content='',
         user_id=user.id,
         folder_id=folder_id_value,
-        note_type='note',
+        note_type=note_type,
         checkbox_mode=False,
         is_listed=is_listed
     )
@@ -608,6 +617,7 @@ def note_list_items(note_id):
     db = a.db
     get_current_user = a.get_current_user
     jsonify = a.jsonify
+    parse_day_value = a.parse_day_value
     pytz = a.pytz
     request = a.request
     user = get_current_user()
@@ -630,8 +640,10 @@ def note_list_items(note_id):
     if not text:
         return jsonify({'error': 'Item text required'}), 400
     note_text = (data.get('note') or '').strip() or None
+    inner_note = (data.get('inner_note') or '').strip() or None
     link_text = (data.get('link_text') or '').strip() or None
     link_url = (data.get('link_url') or '').strip() or None
+    scheduled_date = parse_day_value(data.get('scheduled_date')) if 'scheduled_date' in data else None
     checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
 
     insert_index = data.get('insert_index')
@@ -659,8 +671,10 @@ def note_list_items(note_id):
         note_id=note.id,
         text=text,
         note=note_text,
+        inner_note=inner_note,
         link_text=link_text,
         link_url=link_url,
+        scheduled_date=scheduled_date,
         checked=checked,
         order_index=order_index
     )
@@ -678,6 +692,7 @@ def note_list_item_detail(note_id, item_id):
     db = a.db
     get_current_user = a.get_current_user
     jsonify = a.jsonify
+    parse_day_value = a.parse_day_value
     pytz = a.pytz
     request = a.request
     user = get_current_user()
@@ -708,10 +723,14 @@ def note_list_item_detail(note_id, item_id):
         item.text = text
     if 'note' in data:
         item.note = (data.get('note') or '').strip() or None
+    if 'inner_note' in data:
+        item.inner_note = (data.get('inner_note') or '').strip() or None
     if 'link_text' in data:
         item.link_text = (data.get('link_text') or '').strip() or None
     if 'link_url' in data:
         item.link_url = (data.get('link_url') or '').strip() or None
+    if 'scheduled_date' in data:
+        item.scheduled_date = parse_day_value(data.get('scheduled_date'))
     if 'checked' in data:
         item.checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
     if 'insert_index' in data:

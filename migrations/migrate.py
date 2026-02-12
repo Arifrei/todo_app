@@ -201,8 +201,10 @@ def ensure_note_list_item_table(cur):
                 note_id INTEGER NOT NULL,
                 text VARCHAR(300) NOT NULL,
                 note TEXT,
+                inner_note TEXT,
                 link_text VARCHAR(200),
                 link_url VARCHAR(500),
+                scheduled_date DATE,
                 checked BOOLEAN DEFAULT 0,
                 order_index INTEGER DEFAULT 0
             )
@@ -213,8 +215,10 @@ def ensure_note_list_item_table(cur):
     add_column(cur, "note_list_item", "note_id", "INTEGER")
     add_column(cur, "note_list_item", "text", "VARCHAR(300) NOT NULL DEFAULT ''")
     add_column(cur, "note_list_item", "note", "TEXT")
+    add_column(cur, "note_list_item", "inner_note", "TEXT")
     add_column(cur, "note_list_item", "link_text", "VARCHAR(200)")
     add_column(cur, "note_list_item", "link_url", "VARCHAR(500)")
+    add_column(cur, "note_list_item", "scheduled_date", "DATE")
     add_column(cur, "note_list_item", "checked", "BOOLEAN DEFAULT 0")
     add_column(cur, "note_list_item", "order_index", "INTEGER DEFAULT 0")
 
@@ -299,6 +303,8 @@ def ensure_calendar_event_table(cur):
                 planner_simple_item_id INTEGER,
                 planner_multi_item_id INTEGER,
                 planner_multi_line_id INTEGER,
+                note_list_item_id INTEGER,
+                do_feed_item_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -327,6 +333,8 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "planner_simple_item_id", "INTEGER")
     add_column(cur, "calendar_event", "planner_multi_item_id", "INTEGER")
     add_column(cur, "calendar_event", "planner_multi_line_id", "INTEGER")
+    add_column(cur, "calendar_event", "note_list_item_id", "INTEGER")
+    add_column(cur, "calendar_event", "do_feed_item_id", "INTEGER")
     add_column(cur, "calendar_event", "item_note", "TEXT")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
@@ -486,6 +494,7 @@ def ensure_do_feed_table(cur):
                 url VARCHAR(600) NOT NULL,
                 description TEXT,
                 state VARCHAR(40) NOT NULL DEFAULT 'free',
+                scheduled_date DATE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -498,8 +507,40 @@ def ensure_do_feed_table(cur):
     add_column(cur, "do_feed_item", "url", "VARCHAR(600) NOT NULL DEFAULT ''")
     add_column(cur, "do_feed_item", "description", "TEXT")
     add_column(cur, "do_feed_item", "state", "VARCHAR(40) NOT NULL DEFAULT 'free'")
+    add_column(cur, "do_feed_item", "scheduled_date", "DATE")
     add_column(cur, "do_feed_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "do_feed_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
+
+def backfill_do_feed_scheduled_date_from_planner_bridge(cur):
+    """Migrate temporary Planner bridge dates into do_feed_item.scheduled_date."""
+    if not table_exists(cur, "do_feed_item"):
+        return
+    if not table_exists(cur, "planner_simple_item"):
+        return
+    cur.execute(
+        """
+        UPDATE do_feed_item
+        SET scheduled_date = (
+            SELECT psi.scheduled_date
+            FROM planner_simple_item psi
+            WHERE psi.value = ('everfeed://item/' || do_feed_item.id)
+              AND psi.scheduled_date IS NOT NULL
+            ORDER BY psi.updated_at DESC, psi.id DESC
+            LIMIT 1
+        )
+        WHERE scheduled_date IS NULL
+        """
+    )
+    cur.execute("DELETE FROM planner_simple_item WHERE value LIKE 'everfeed://item/%'")
+    if table_exists(cur, "planner_folder"):
+        cur.execute(
+            """
+            DELETE FROM planner_folder
+            WHERE name = '__EverFeedDateBridge__'
+              AND folder_type = 'simple'
+            """
+        )
 
 
 def ensure_planner_folder_table(cur):
@@ -876,6 +917,7 @@ def main():
         ensure_planner_group_table(cur)
         ensure_planner_multi_item_table(cur)
         ensure_planner_multi_line_table(cur)
+        backfill_do_feed_scheduled_date_from_planner_bridge(cur)
         ensure_embedding_table(cur)
         ensure_notification_tables(cur)
         ensure_job_lock_table(cur)

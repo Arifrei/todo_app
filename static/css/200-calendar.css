@@ -8,6 +8,10 @@
     transform: none;
 }
 
+#calendar-month-card {
+    cursor: default;
+}
+
 .calendar-month.is-hidden {
     display: none;
 }
@@ -168,6 +172,29 @@
 .calendar-month-cell.selected {
     border: 2px solid var(--primary-color);
     box-shadow: 0 10px 28px rgba(59,130,246,0.12);
+}
+
+@media (hover: none) and (pointer: coarse) {
+    #calendar-month-card {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    #calendar-month-card:hover,
+    #calendar-month-card:active,
+    #calendar-month-card:focus-within {
+        transform: none;
+        box-shadow: var(--shadow-sm);
+        border-color: var(--border-color);
+    }
+
+    .calendar-month-cell {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .calendar-month-cell:active {
+        border-color: rgba(59,130,246,0.45);
+        box-shadow: 0 8px 20px rgba(59,130,246,0.16);
+    }
 }
 
 .calendar-month-cell-header {
@@ -771,7 +798,7 @@
 }
 
 .calendar-quick-add {
-    margin-bottom: 1rem;
+    margin-bottom: 0;
     overflow: visible;
 }
 
@@ -805,6 +832,14 @@
     position: relative;
     flex: 1;
     overflow: visible;
+}
+
+#calendar-quick-input {
+    line-height: 1.35;
+    min-height: calc(1.35em + 1.75rem);
+    max-height: calc((1.35em * 2) + 1.75rem);
+    resize: none;
+    overflow-y: hidden;
 }
 
 .calendar-quick-add.is-collapsed .quick-add-input-wrapper,
@@ -959,6 +994,7 @@ section.card.calendar-board,
     padding: 1rem;
     overflow: visible !important;
     contain: none !important;
+    cursor: default;
 }
 
 /* Ensure calendar page doesn't clip */
@@ -1342,6 +1378,31 @@ section.card.calendar-board,
     border-color: rgba(59,130,246,0.15);
     border-left-color: rgba(16, 185, 129, 0.5);
     transform: translateY(-1px);
+}
+
+@media (hover: none) and (pointer: coarse) {
+    #calendar-day-view .card {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    #calendar-day-view .card:hover,
+    #calendar-day-view .card:active,
+    #calendar-day-view .card:focus-within {
+        transform: none;
+        box-shadow: var(--shadow-sm);
+        border-color: var(--border-color);
+    }
+
+    .calendar-row {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .calendar-row:active {
+        box-shadow: 0 4px 14px rgba(59,130,246,0.16);
+        border-color: rgba(59,130,246,0.22);
+        border-left-color: rgba(16, 185, 129, 0.65);
+        transform: translateY(-1px);
+    }
 }
 
 .calendar-row.dragging {
@@ -1779,6 +1840,14 @@ section.card.calendar-board,
 }
 
 .calendar-row.planner-link-row .calendar-meta-lite {
+    display: flex;
+}
+
+.calendar-row.note-list-row .calendar-meta-lite {
+    display: flex;
+}
+
+.calendar-row.feed-link-row .calendar-meta-lite {
     display: flex;
 }
 
@@ -2446,7 +2515,6 @@ button.meta-chip {
     #calendar-quick-input {
         font-size: 0.95rem;
         padding: 0.5rem;
-        min-height: 50px;
     }
 
     .quick-hint {

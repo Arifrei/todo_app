@@ -640,7 +640,6 @@ body {
 .module-icon.recalls { background: linear-gradient(135deg, #2563eb, #10b981); }
 .module-icon.bookmarks { background: linear-gradient(135deg, #f59e0b, #ef4444); }
 .module-icon.feed { background: linear-gradient(135deg, #22c55e, #f97316); }
-.module-icon.planner { background: linear-gradient(135deg, #0ea5e9, #22c55e); }
 .module-icon.quick-access { background: linear-gradient(135deg, #f59e0b, #eab308); }
 .module-icon.ai { background: linear-gradient(135deg, #10b981, #14b8a6); }
 .module-icon.settings { background: linear-gradient(135deg, #4b5563, #111827); }

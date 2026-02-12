@@ -308,8 +308,10 @@ class NoteListItem(db.Model):
     note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
     text = db.Column(db.String(300), nullable=False)
     note = db.Column(db.Text, nullable=True)
+    inner_note = db.Column(db.Text, nullable=True)
     link_text = db.Column(db.String(200), nullable=True)
     link_url = db.Column(db.String(500), nullable=True)
+    scheduled_date = db.Column(db.Date, nullable=True)
     checked = db.Column(db.Boolean, default=False)
     order_index = db.Column(db.Integer, default=0)
 
@@ -319,8 +321,10 @@ class NoteListItem(db.Model):
             'note_id': self.note_id,
             'text': self.text,
             'note': self.note,
+            'inner_note': self.inner_note,
             'link_text': self.link_text,
             'link_url': self.link_url,
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
             'checked': bool(self.checked),
             'order_index': self.order_index or 0,
         }
@@ -424,6 +428,8 @@ class CalendarEvent(db.Model):
     planner_simple_item_id = db.Column(db.Integer, db.ForeignKey('planner_simple_item.id'), nullable=True)
     planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=True)
     planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id'), nullable=True)
+    note_list_item_id = db.Column(db.Integer, db.ForeignKey('note_list_item.id'), nullable=True)
+    do_feed_item_id = db.Column(db.Integer, db.ForeignKey('do_feed_item.id'), nullable=True)
     recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
     item_note = db.Column(db.Text, nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
@@ -460,6 +466,8 @@ class CalendarEvent(db.Model):
             'planner_simple_item_id': self.planner_simple_item_id,
             'planner_multi_item_id': self.planner_multi_item_id,
             'planner_multi_line_id': self.planner_multi_line_id,
+            'note_list_item_id': self.note_list_item_id,
+            'do_feed_item_id': self.do_feed_item_id,
             'item_note': self.item_note,
             'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
         }
@@ -607,6 +615,7 @@ class DoFeedItem(db.Model):
     url = db.Column(db.String(600), nullable=False)
     description = db.Column(db.Text, nullable=True)
     state = db.Column(db.String(40), nullable=False, default='free')
+    scheduled_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -618,6 +627,7 @@ class DoFeedItem(db.Model):
             'url': self.url,
             'description': self.description,
             'state': self.state,
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

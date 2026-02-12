@@ -146,8 +146,13 @@ function openFeedUrl(id) {
 
 function handleFeedAction(event, action, id) {
     event.stopPropagation();
+    closeFeedSimpleMenus();
     if (action === 'open') {
         openFeedUrl(id);
+    } else if (action === 'copy') {
+        copyFeedUrl(id);
+    } else if (action === 'date') {
+        openFeedDatePrompt(id);
     } else if (action === 'done') {
         confirmDeleteFeed(id);
     } else if (action === 'edit') {
@@ -155,6 +160,149 @@ function handleFeedAction(event, action, id) {
     } else if (action === 'recall') {
         convertFeedToRecall(id);
     }
+}
+
+async function copyFeedUrl(id) {
+    const item = feedState.items.find(i => i.id === id);
+    const value = item ? (item.url || '').trim() : '';
+    if (!value) {
+        showToast('Nothing to copy', 'warning');
+        return;
+    }
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+        } else {
+            const temp = document.createElement('textarea');
+            temp.value = value;
+            temp.setAttribute('readonly', 'readonly');
+            temp.style.position = 'absolute';
+            temp.style.left = '-9999px';
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            temp.remove();
+        }
+        showToast('Copied', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not copy', 'error');
+    }
+}
+
+function parseFeedDateValue(dateStr) {
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+    const [year, month, day] = dateStr.split('-').map(Number);
+    if (!year || !month || !day) return null;
+    const parsed = new Date(year, month - 1, day);
+    if (
+        parsed.getFullYear() !== year ||
+        parsed.getMonth() !== month - 1 ||
+        parsed.getDate() !== day
+    ) {
+        return null;
+    }
+    return parsed;
+}
+
+function isFeedDateToday(dateStr) {
+    const d = parseFeedDateValue(dateStr);
+    if (!d) return false;
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+}
+
+function isFeedDatePast(dateStr) {
+    const d = parseFeedDateValue(dateStr);
+    if (!d) return false;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return d < todayStart;
+}
+
+function formatFeedScheduledDate(dateStr) {
+    const d = parseFeedDateValue(dateStr);
+    if (!d) return dateStr;
+    const now = new Date();
+    const includeYear = d.getFullYear() !== now.getFullYear();
+    return d.toLocaleDateString(undefined, includeYear
+        ? { month: 'short', day: 'numeric', year: 'numeric' }
+        : { month: 'short', day: 'numeric' });
+}
+
+async function openFeedDatePrompt(id) {
+    const item = feedState.items.find(i => i.id === id);
+    if (!item) return;
+    const current = item.scheduled_date || '';
+    const raw = window.prompt('Set date (YYYY-MM-DD). Leave blank to clear.', current);
+    if (raw === null) return;
+    const value = raw.trim();
+    if (value && !parseFeedDateValue(value)) {
+        showToast('Use date format YYYY-MM-DD', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/feed/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scheduled_date: value || null })
+        });
+        if (!res.ok) throw new Error('Date update failed');
+        const updated = await res.json();
+        const idx = feedState.items.findIndex(i => i.id === id);
+        if (idx !== -1) feedState.items[idx] = updated;
+        renderFeedGrid();
+        showToast(value ? 'Date set' : 'Date cleared', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update date', 'error');
+    }
+}
+
+function toggleFeedSimpleMenu(event, id) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById(`feed-simple-menu-${id}`);
+    if (!menu) return;
+    const isOpen = menu.classList.contains('open');
+    closeFeedSimpleMenus();
+    if (!isOpen) {
+        menu.classList.add('open');
+        positionFeedSimpleMenu(menu);
+    }
+}
+
+function closeFeedSimpleMenus() {
+    document.querySelectorAll('.feed-simple-menu.open').forEach((menu) => {
+        menu.classList.remove('open');
+        menu.style.transform = '';
+    });
+}
+
+function positionFeedSimpleMenu(menu) {
+    if (!menu) return;
+    const page = document.querySelector('.feed-page');
+    if (!page) return;
+    const pageRect = page.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const margin = 8;
+    const minLeft = pageRect.left + margin;
+    const maxRight = pageRect.right - margin;
+
+    let shiftX = 0;
+    if (menuRect.left < minLeft) {
+        shiftX = minLeft - menuRect.left;
+    } else if (menuRect.right > maxRight) {
+        shiftX = maxRight - menuRect.right;
+    }
+    menu.style.transform = shiftX ? `translateX(${Math.round(shiftX)}px)` : '';
+}
+
+function repositionOpenFeedSimpleMenus() {
+    document.querySelectorAll('.feed-simple-menu.open').forEach((menu) => {
+        positionFeedSimpleMenu(menu);
+    });
 }
 
 function startEditFeed(id) {
@@ -174,12 +322,14 @@ async function saveEditFeed(event, id) {
     const titleInput = document.getElementById(`feed-edit-title-${id}`);
     const urlInput = document.getElementById(`feed-edit-url-${id}`);
     const descInput = document.getElementById(`feed-edit-desc-${id}`);
+    const stateSelect = document.getElementById(`feed-edit-state-${id}`);
 
     if (!titleInput || !urlInput) return;
 
     const title = titleInput.value.trim();
     const url = urlInput.value.trim();
     const description = descInput ? descInput.value.trim() : '';
+    const state = normalizeState(stateSelect ? stateSelect.value : '') || 'free';
 
     if (!title || !url) {
         showToast('Title and URL are required', 'error');
@@ -190,7 +340,7 @@ async function saveEditFeed(event, id) {
         const res = await fetch(`/api/feed/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, url, description })
+            body: JSON.stringify({ title, url, description, state })
         });
         if (!res.ok) throw new Error('Update failed');
         const updated = await res.json();
@@ -229,6 +379,17 @@ function renderFeedGrid() {
     filtered.forEach((item) => {
         const isExpanded = feedState.expandedId === item.id;
         const isEditing = feedState.editingId === item.id;
+        const state = normalizeState(item.state);
+        const stateLabel = formatStateLabel(state);
+        const stateChipHtml = stateLabel
+            ? `
+                <div class="feed-card-state-row">
+                    <span class="feed-card-state feed-card-state-corner" data-state="${escapeHtml(state)}">${escapeHtml(stateLabel)}</span>
+                </div>
+            `
+            : '';
+        const cell = document.createElement('div');
+        cell.className = 'feed-grid-cell';
         const card = document.createElement('div');
         card.className = `feed-card ${isExpanded ? 'expanded' : ''} ${isEditing ? 'editing' : ''}`;
 
@@ -237,6 +398,9 @@ function renderFeedGrid() {
         }
 
         if (isEditing) {
+            const editStateOptionsHtml = getOrderedStates()
+                .map((s) => `<option value="${escapeHtml(s)}" ${s === state ? 'selected' : ''}>${escapeHtml(formatStateLabel(s))}</option>`)
+                .join('');
             card.innerHTML = `
                 <div class="feed-card-content">
                     <div class="feed-edit-form">
@@ -246,6 +410,8 @@ function renderFeedGrid() {
                         <input type="text" id="feed-edit-url-${item.id}" class="feed-edit-input" value="${escapeHtml(item.url)}" placeholder="URL">
                         <label for="feed-edit-desc-${item.id}" class="feed-edit-label">Description (optional)</label>
                         <textarea id="feed-edit-desc-${item.id}" class="feed-edit-textarea" placeholder="Description (optional)">${escapeHtml(item.description || '')}</textarea>
+                        <label for="feed-edit-state-${item.id}" class="feed-edit-label">Tag</label>
+                        <select id="feed-edit-state-${item.id}" class="feed-edit-input">${editStateOptionsHtml}</select>
                     </div>
                 </div>
                 <div class="feed-card-actions">
@@ -254,44 +420,66 @@ function renderFeedGrid() {
                 </div>
             `;
         } else {
-            const descriptionHtml = item.description
+            const descriptionHtml = isExpanded && item.description
                 ? `<div class="feed-card-details">${escapeHtml(item.description)}</div>`
                 : '';
-
-            const expandedBtns = isExpanded
-                ? `<div class="feed-card-actions-right">
-                       <button class="feed-edit-btn" type="button" onclick="handleFeedAction(event, 'edit', ${item.id})" title="Edit" aria-label="Edit feed item">
-                           <i class="fa-solid fa-pen"></i>
-                       </button>
-                       <button class="feed-recall-btn" type="button" onclick="handleFeedAction(event, 'recall', ${item.id})" title="Move to Recalls" aria-label="Move feed item to recalls">
-                           <i class="fa-solid fa-inbox"></i>
-                       </button>
-                       <button class="feed-done-btn" type="button" onclick="handleFeedAction(event, 'done', ${item.id})">Done</button>
-                   </div>`
+            const dateStr = item.scheduled_date;
+            const dateClass = dateStr
+                ? (isFeedDatePast(dateStr) ? 'past' : (isFeedDateToday(dateStr) ? 'today' : ''))
                 : '';
 
             card.innerHTML = `
                 <div class="feed-card-content">
                     <div class="feed-card-header">
                         <div class="feed-card-title">${escapeHtml(item.title)}</div>
-                        <div class="feed-card-meta">
-                            <span class="feed-card-state" data-state="${escapeHtml(normalizeState(item.state))}">
-                                ${escapeHtml(formatStateLabel(normalizeState(item.state)))}
-                            </span>
-                        </div>
+                        ${dateStr ? `<div class="feed-date-badge ${dateClass}"><i class="fa-regular fa-calendar"></i> ${formatFeedScheduledDate(dateStr)}</div>` : ''}
                     </div>
                     ${descriptionHtml}
                 </div>
-                <div class="feed-card-actions">
-                    <button class="feed-open-btn" type="button" onclick="handleFeedAction(event, 'open', ${item.id})" title="Open link" aria-label="Open feed link">
-                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                    </button>
-                    ${expandedBtns}
+                <div class="feed-card-actions ${isExpanded ? 'expanded' : ''}">
+                    <div class="feed-card-actions-left">
+                        <button class="feed-action-btn feed-action-primary" type="button" onclick="handleFeedAction(event, 'open', ${item.id})" title="Open link" aria-label="Open feed link">
+                            <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            <span>Open</span>
+                        </button>
+                        ${isExpanded ? `
+                            <div class="dropdown feed-simple-dropdown">
+                                <button class="feed-action-btn" type="button" onclick="toggleFeedSimpleMenu(event, ${item.id})" aria-label="More actions" title="More actions">
+                                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                                    <span>More</span>
+                                </button>
+                                <div class="dropdown-menu feed-simple-menu" id="feed-simple-menu-${item.id}">
+                                    <button class="dropdown-item" type="button" onclick="handleFeedAction(event, 'copy', ${item.id})">
+                                        <i class="fa-solid fa-copy"></i> Copy
+                                    </button>
+                                    <button class="dropdown-item" type="button" onclick="handleFeedAction(event, 'date', ${item.id})">
+                                        <i class="fa-regular fa-calendar"></i> Date
+                                    </button>
+                                    <button class="dropdown-item" type="button" onclick="handleFeedAction(event, 'edit', ${item.id})">
+                                        <i class="fa-solid fa-pen"></i> Edit
+                                    </button>
+                                    <button class="dropdown-item" type="button" onclick="handleFeedAction(event, 'recall', ${item.id})">
+                                        <i class="fa-solid fa-inbox"></i> Move to Recalls
+                                    </button>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                    ${isExpanded ? `
+                        <button class="feed-action-btn feed-action-danger" type="button" onclick="handleFeedAction(event, 'done', ${item.id})" title="Mark done">
+                            <i class="fa-solid fa-check"></i>
+                            <span>Done</span>
+                        </button>
+                    ` : ''}
+                    <div class="feed-card-actions-right">
+                        ${stateChipHtml}
+                    </div>
                 </div>
             `;
         }
 
-        grid.appendChild(card);
+        cell.appendChild(card);
+        grid.appendChild(cell);
     });
 }
 
@@ -488,9 +676,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dropdown && !dropdown.contains(e.target)) {
             closeFilterDropdown();
         }
+        const clickTarget = e.target && e.target.nodeType === Node.TEXT_NODE
+            ? e.target.parentElement
+            : e.target;
+        if (!clickTarget || !clickTarget.closest('.feed-simple-dropdown')) {
+            closeFeedSimpleMenus();
+        }
     });
+    window.addEventListener('resize', repositionOpenFeedSimpleMenus);
 
     renderStateChips();
     renderFilterDropdown();
     loadFeedItems();
 });
+
+

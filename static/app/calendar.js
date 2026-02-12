@@ -2,6 +2,21 @@ function updateDynamicHint(text) {
     // No dynamic hint updates - keep it simple
 }
 
+function resizeDayQuickInput(inputEl) {
+    if (!inputEl) return;
+    const styles = window.getComputedStyle(inputEl);
+    const lineHeight = parseFloat(styles.lineHeight) || 20;
+    const paddingTop = parseFloat(styles.paddingTop) || 0;
+    const paddingBottom = parseFloat(styles.paddingBottom) || 0;
+    const border = inputEl.offsetHeight - inputEl.clientHeight;
+    const maxHeight = Math.ceil((lineHeight * 2) + paddingTop + paddingBottom + border);
+
+    inputEl.style.height = 'auto';
+    const nextHeight = Math.min(inputEl.scrollHeight, maxHeight);
+    inputEl.style.height = `${nextHeight}px`;
+    inputEl.style.overflowY = inputEl.scrollHeight > maxHeight ? 'auto' : 'hidden';
+}
+
 let priorityMenuEl = null;
 const calendarDebugLog = (...args) => {
     if (window.DEBUG_CALENDAR === true) console.log(...args);
@@ -107,11 +122,13 @@ async function handleCalendarQuickAdd() {
     if (!parsed) return;
     const restoreInput = () => {
         input.value = rawValue;
+        resizeDayQuickInput(input);
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
     };
     const clearInput = () => {
         input.value = '';
+        resizeDayQuickInput(input);
         input.focus();
     };
 
@@ -759,7 +776,7 @@ async function scheduleLocalReminders() {
         calendarState.events.forEach((ev) => {
             if (ev.status === 'done' || ev.status === 'canceled') return;
             if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
-            const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
+            const reminderId = ev.calendar_event_id || ev.id;
             cancelIds.add(reminderId);
         });
         for (const id of cancelIds) {
@@ -775,7 +792,7 @@ async function scheduleLocalReminders() {
 
             const target = new Date(`${calendarState.selectedDay}T${ev.start_time}`);
             const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
-            const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
+            const reminderId = ev.calendar_event_id || ev.id;
 
             if (reminderAt.getTime() > now.getTime()) {
                 const body = ev.start_time ? `${formatTimeRange(ev)} - ${ev.title}` : ev.title;
@@ -800,7 +817,7 @@ async function scheduleLocalReminders() {
             const reminderAt = new Date(target.getTime() - ev.reminder_minutes_before * 60000);
             const delay = reminderAt.getTime() - now.getTime();
             if (delay > 0) {
-                const reminderId = (ev.is_task_link && ev.calendar_event_id) ? ev.calendar_event_id : ev.id;
+                const reminderId = ev.calendar_event_id || ev.id;
                 calendarReminderTimers[reminderId] = setTimeout(() => {
                     triggerLocalNotification(ev);
                 }, delay);
@@ -1433,6 +1450,9 @@ function initCalendarPage() {
     }
 
     if (quickInput) {
+        resizeDayQuickInput(quickInput);
+        quickInput.addEventListener('focus', () => resizeDayQuickInput(quickInput));
+
         quickInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -1469,6 +1489,7 @@ function initCalendarPage() {
 
         // Auto-trigger suggestions for # and > with continuous filtering
         quickInput.addEventListener('input', () => {
+            resizeDayQuickInput(quickInput);
             const text = quickInput.value;
             const cursorPos = quickInput.selectionStart;
             const beforeCursor = text.substring(0, cursorPos);

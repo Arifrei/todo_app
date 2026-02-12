@@ -143,25 +143,6 @@
             </div>
         </header>
 
-        <section class="calendar-quick-add card" id="calendar-day-quick-add">
-            <div class="calendar-input-row">
-                <div class="calendar-quick-title">Quick add</div>
-                <div class="quick-add-input-wrapper">
-                    <textarea id="calendar-quick-input" class="form-control" rows="2" placeholder="Pick a day, then add entries" disabled aria-label="Day quick add input"></textarea>
-                    <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
-                </div>
-                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help" aria-label="Show syntax help" aria-controls="calendar-autocomplete" aria-expanded="false">
-                    <i class="fa-solid fa-circle-question"></i>
-                </button>
-                <button class="btn-icon calendar-quick-toggle" id="calendar-quick-toggle" aria-label="Minimize quick add" title="Minimize quick add" aria-controls="calendar-day-quick-add" aria-expanded="true">
-                    <i class="fa-solid fa-chevron-up"></i>
-                </button>
-            </div>
-            <div class="quick-hint" id="calendar-syntax-hint">
-                Start typing... Tap <i class="fa-solid fa-circle-question"></i> or press <kbd>Ctrl+Space</kbd> for syntax help
-            </div>
-        </section>
-
         <section class="calendar-board card">
             <div id="calendar-bulk-bar" class="bulk-actions u-hidden">
                 <div class="bulk-left">
@@ -214,6 +195,22 @@
                     </div>
                 </div>
                 <div id="calendar-events" class="calendar-events"></div>
+            </div>
+        </section>
+
+        <section class="calendar-quick-add card" id="calendar-day-quick-add">
+            <div class="calendar-input-row">
+                <div class="calendar-quick-title">Quick add</div>
+                <div class="quick-add-input-wrapper">
+                    <textarea id="calendar-quick-input" class="form-control" rows="1" placeholder="Pick a day, then add entries" disabled aria-label="Day quick add input"></textarea>
+                    <div id="calendar-autocomplete" class="calendar-autocomplete is-hidden"></div>
+                </div>
+                <button class="btn-icon calendar-help-btn" id="calendar-help-btn" title="Show syntax help" aria-label="Show syntax help" aria-controls="calendar-autocomplete" aria-expanded="false">
+                    <i class="fa-solid fa-circle-question"></i>
+                </button>
+                <button class="btn-icon calendar-quick-toggle" id="calendar-quick-toggle" aria-label="Minimize quick add" title="Minimize quick add" aria-controls="calendar-day-quick-add" aria-expanded="true">
+                    <i class="fa-solid fa-chevron-up"></i>
+                </button>
             </div>
         </section>
     </section>

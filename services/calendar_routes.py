@@ -96,10 +96,9 @@ def calendar_events():
     ALLOWED_STATUSES = a.ALLOWED_STATUSES
     CalendarEvent = a.CalendarEvent
     ENTITY_CALENDAR = a.ENTITY_CALENDAR
-    PlannerFolder = a.PlannerFolder
-    PlannerMultiItem = a.PlannerMultiItem
-    PlannerMultiLine = a.PlannerMultiLine
-    PlannerSimpleItem = a.PlannerSimpleItem
+    DoFeedItem = a.DoFeedItem
+    Note = a.Note
+    NoteListItem = a.NoteListItem
     TodoItem = a.TodoItem
     TodoList = a.TodoList
     _ensure_recurring_instances = a._ensure_recurring_instances
@@ -150,30 +149,26 @@ def calendar_events():
         ).order_by(CalendarEvent.day.asc(), CalendarEvent.order_index.asc()).all()
 
         linked_event_map = {}
-        linked_planner_simple_map = {}
-        linked_planner_multi_map = {}
-        linked_planner_line_map = {}
+        linked_note_list_map = {}
+        linked_feed_map = {}
         phase_map_by_day = {}
         for ev in events:
             day_key = ev.day.isoformat()
             if ev.todo_item_id:
                 linked_event_map.setdefault(day_key, {})[ev.todo_item_id] = ev
                 continue
-            if ev.planner_simple_item_id:
-                linked_planner_simple_map.setdefault(day_key, {})[ev.planner_simple_item_id] = ev
+            if ev.note_list_item_id:
+                linked_note_list_map.setdefault(day_key, {})[ev.note_list_item_id] = ev
                 continue
-            if ev.planner_multi_item_id:
-                linked_planner_multi_map.setdefault(day_key, {})[ev.planner_multi_item_id] = ev
-                continue
-            if ev.planner_multi_line_id:
-                linked_planner_line_map.setdefault(day_key, {})[ev.planner_multi_line_id] = ev
+            if ev.do_feed_item_id:
+                linked_feed_map.setdefault(day_key, {})[ev.do_feed_item_id] = ev
                 continue
             if ev.is_phase:
                 phase_map_by_day.setdefault(day_key, {})[ev.id] = ev.title
 
         by_day = {}
         for ev in events:
-            if ev.todo_item_id or ev.planner_simple_item_id or ev.planner_multi_item_id or ev.planner_multi_line_id:
+            if ev.todo_item_id or ev.note_list_item_id or ev.do_feed_item_id:
                 continue
             day_key = ev.day.isoformat()
             data = ev.to_dict()
@@ -211,27 +206,32 @@ def calendar_events():
                 'order_index': 100000 + idx
             })
 
-        # Include scheduled planner items
-        planner_idx = 0
-        simple_items = PlannerSimpleItem.query.filter(
-            PlannerSimpleItem.user_id == user.id,
-            PlannerSimpleItem.scheduled_date >= start_day,
-            PlannerSimpleItem.scheduled_date <= end_day
+        # Include scheduled notes list items
+        note_list_idx = 0
+        scheduled_note_items = db.session.query(NoteListItem, Note).join(
+            Note, NoteListItem.note_id == Note.id
+        ).filter(
+            Note.user_id == user.id,
+            Note.archived_at.is_(None),
+            Note.note_type == 'list',
+            NoteListItem.scheduled_date >= start_day,
+            NoteListItem.scheduled_date <= end_day
+        ).order_by(
+            NoteListItem.scheduled_date.asc(),
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
         ).all()
-        for item in simple_items:
+        for item, note in scheduled_note_items:
             day_key = item.scheduled_date.isoformat()
-            folder = db.session.get(PlannerFolder, item.folder_id)
-            linked_event = linked_planner_simple_map.get(day_key, {}).get(item.id)
+            linked_event = linked_note_list_map.get(day_key, {}).get(item.id)
             by_day.setdefault(day_key, []).append({
-                'id': -200000 - planner_idx,
-                'title': item.title,
-                'status': 'not_started',
-                'is_planner_item': True,
-                'planner_type': 'simple',
-                'planner_item_id': item.id,
-                'planner_folder_id': item.folder_id,
-                'planner_folder_name': folder.name if folder else '',
-                'planner_value': item.value,
+                'id': -300000 - note_list_idx,
+                'title': item.text,
+                'status': linked_event.status if linked_event else ('done' if item.checked else 'not_started'),
+                'is_note_list_item': True,
+                'note_list_item_id': item.id,
+                'note_id': note.id,
+                'note_title': note.title or '',
                 'calendar_event_id': linked_event.id if linked_event else None,
                 'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
@@ -239,31 +239,35 @@ def calendar_events():
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
                 'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
+                'day': day_key,
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
-                'day': day_key,
-                'order_index': linked_event.order_index if linked_event else 200000 + planner_idx
+                'order_index': linked_event.order_index if linked_event else 300000 + note_list_idx
             })
-            planner_idx += 1
+            note_list_idx += 1
 
-        multi_items = PlannerMultiItem.query.filter(
-            PlannerMultiItem.user_id == user.id,
-            PlannerMultiItem.scheduled_date >= start_day,
-            PlannerMultiItem.scheduled_date <= end_day
+        # Include scheduled feed items
+        feed_idx = 0
+        scheduled_feed_items = DoFeedItem.query.filter(
+            DoFeedItem.user_id == user.id,
+            DoFeedItem.scheduled_date >= start_day,
+            DoFeedItem.scheduled_date <= end_day
+        ).order_by(
+            DoFeedItem.scheduled_date.asc(),
+            DoFeedItem.updated_at.desc(),
+            DoFeedItem.id.asc()
         ).all()
-        for item in multi_items:
+        for item in scheduled_feed_items:
             day_key = item.scheduled_date.isoformat()
-            folder = db.session.get(PlannerFolder, item.folder_id)
-            linked_event = linked_planner_multi_map.get(day_key, {}).get(item.id)
+            linked_event = linked_feed_map.get(day_key, {}).get(item.id)
             by_day.setdefault(day_key, []).append({
-                'id': -200000 - planner_idx,
+                'id': -200000 - feed_idx,
                 'title': item.title,
-                'status': 'not_started',
-                'is_planner_item': True,
-                'planner_type': 'group',
-                'planner_item_id': item.id,
-                'planner_folder_id': item.folder_id,
-                'planner_folder_name': folder.name if folder else '',
+                'status': linked_event.status if linked_event else 'not_started',
+                'is_feed_item': True,
+                'feed_item_id': item.id,
+                'feed_url': item.url,
+                'feed_state': item.state,
                 'calendar_event_id': linked_event.id if linked_event else None,
                 'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
@@ -271,47 +275,12 @@ def calendar_events():
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
                 'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
+                'day': day_key,
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
-                'day': day_key,
-                'order_index': linked_event.order_index if linked_event else 200000 + planner_idx
+                'order_index': linked_event.order_index if linked_event else 200000 + feed_idx
             })
-            planner_idx += 1
-
-        multi_lines = PlannerMultiLine.query.filter(
-            PlannerMultiLine.user_id == user.id,
-            PlannerMultiLine.scheduled_date >= start_day,
-            PlannerMultiLine.scheduled_date <= end_day
-        ).all()
-        for line in multi_lines:
-            day_key = line.scheduled_date.isoformat()
-            parent_item = db.session.get(PlannerMultiItem, line.item_id)
-            folder = db.session.get(PlannerFolder, parent_item.folder_id) if parent_item else None
-            linked_event = linked_planner_line_map.get(day_key, {}).get(line.id)
-            by_day.setdefault(day_key, []).append({
-                'id': -200000 - planner_idx,
-                'title': line.value,
-                'status': 'not_started',
-                'is_planner_item': True,
-                'planner_type': 'line',
-                'planner_line_id': line.id,
-                'planner_item_id': line.item_id,
-                'planner_item_title': parent_item.title if parent_item else '',
-                'planner_folder_id': parent_item.folder_id if parent_item else None,
-                'planner_folder_name': folder.name if folder else '',
-                'calendar_event_id': linked_event.id if linked_event else None,
-                'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
-                'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
-                'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
-                'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
-                'allow_overlap': linked_event.allow_overlap if linked_event else False,
-                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
-                'priority': linked_event.priority if linked_event else 'medium',
-                'item_note': linked_event.item_note if linked_event else None,
-                'day': day_key,
-                'order_index': linked_event.order_index if linked_event else 200000 + planner_idx
-            })
-            planner_idx += 1
+            feed_idx += 1
 
         return jsonify({
             'start': start_day.isoformat(),
@@ -330,21 +299,17 @@ def calendar_events():
         ).all()
         payload = []
         linked_event_map = {}
-        linked_planner_simple_map = {}
-        linked_planner_multi_map = {}
-        linked_planner_line_map = {}
+        linked_note_list_map = {}
+        linked_feed_map = {}
         for ev in events:
             if ev.todo_item_id:
                 linked_event_map[ev.todo_item_id] = ev
                 continue
-            if ev.planner_simple_item_id:
-                linked_planner_simple_map[ev.planner_simple_item_id] = ev
+            if ev.note_list_item_id:
+                linked_note_list_map[ev.note_list_item_id] = ev
                 continue
-            if ev.planner_multi_item_id:
-                linked_planner_multi_map[ev.planner_multi_item_id] = ev
-                continue
-            if ev.planner_multi_line_id:
-                linked_planner_line_map[ev.planner_multi_line_id] = ev
+            if ev.do_feed_item_id:
+                linked_feed_map[ev.do_feed_item_id] = ev
                 continue
             data = ev.to_dict()
             if ev.phase_id:
@@ -381,22 +346,29 @@ def calendar_events():
                 'order_index': 100000 + idx
             })
 
-        # Include scheduled planner items for this day
-        planner_idx = 0
-        simple_items = PlannerSimpleItem.query.filter_by(user_id=user.id, scheduled_date=day_obj).all()
-        for item in simple_items:
-            folder = db.session.get(PlannerFolder, item.folder_id)
-            linked_event = linked_planner_simple_map.get(item.id)
+        # Include scheduled notes list items for this day
+        note_list_items = db.session.query(NoteListItem, Note).join(
+            Note, NoteListItem.note_id == Note.id
+        ).filter(
+            Note.user_id == user.id,
+            Note.archived_at.is_(None),
+            Note.note_type == 'list',
+            NoteListItem.scheduled_date == day_obj
+        ).order_by(
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
+        ).all()
+        for idx, pair in enumerate(note_list_items):
+            item, note = pair
+            linked_event = linked_note_list_map.get(item.id)
             payload.append({
-                'id': -200000 - planner_idx,
-                'title': item.title,
-                'status': 'not_started',
-                'is_planner_item': True,
-                'planner_type': 'simple',
-                'planner_item_id': item.id,
-                'planner_folder_id': item.folder_id,
-                'planner_folder_name': folder.name if folder else '',
-                'planner_value': item.value,
+                'id': -300000 - idx,
+                'title': item.text,
+                'status': linked_event.status if linked_event else ('done' if item.checked else 'not_started'),
+                'is_note_list_item': True,
+                'note_list_item_id': item.id,
+                'note_id': note.id,
+                'note_title': note.title or '',
                 'calendar_event_id': linked_event.id if linked_event else None,
                 'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
@@ -404,26 +376,30 @@ def calendar_events():
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
                 'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
+                'day': day_obj.isoformat(),
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
-                'day': day_obj.isoformat(),
-                'order_index': linked_event.order_index if linked_event else 200000 + planner_idx
+                'order_index': linked_event.order_index if linked_event else 300000 + idx
             })
-            planner_idx += 1
 
-        multi_items = PlannerMultiItem.query.filter_by(user_id=user.id, scheduled_date=day_obj).all()
-        for item in multi_items:
-            folder = db.session.get(PlannerFolder, item.folder_id)
-            linked_event = linked_planner_multi_map.get(item.id)
+        # Include scheduled feed items for this day
+        feed_items = DoFeedItem.query.filter(
+            DoFeedItem.user_id == user.id,
+            DoFeedItem.scheduled_date == day_obj
+        ).order_by(
+            DoFeedItem.updated_at.desc(),
+            DoFeedItem.id.asc()
+        ).all()
+        for idx, item in enumerate(feed_items):
+            linked_event = linked_feed_map.get(item.id)
             payload.append({
-                'id': -200000 - planner_idx,
+                'id': -200000 - idx,
                 'title': item.title,
-                'status': 'not_started',
-                'is_planner_item': True,
-                'planner_type': 'group',
-                'planner_item_id': item.id,
-                'planner_folder_id': item.folder_id,
-                'planner_folder_name': folder.name if folder else '',
+                'status': linked_event.status if linked_event else 'not_started',
+                'is_feed_item': True,
+                'feed_item_id': item.id,
+                'feed_url': item.url,
+                'feed_state': item.state,
                 'calendar_event_id': linked_event.id if linked_event else None,
                 'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
                 'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
@@ -431,42 +407,11 @@ def calendar_events():
                 'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
                 'allow_overlap': linked_event.allow_overlap if linked_event else False,
                 'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
+                'day': day_obj.isoformat(),
                 'priority': linked_event.priority if linked_event else 'medium',
                 'item_note': linked_event.item_note if linked_event else None,
-                'day': day_obj.isoformat(),
-                'order_index': linked_event.order_index if linked_event else 200000 + planner_idx
+                'order_index': linked_event.order_index if linked_event else 200000 + idx
             })
-            planner_idx += 1
-
-        multi_lines = PlannerMultiLine.query.filter_by(user_id=user.id, scheduled_date=day_obj).all()
-        for line in multi_lines:
-            parent_item = db.session.get(PlannerMultiItem, line.item_id)
-            folder = db.session.get(PlannerFolder, parent_item.folder_id) if parent_item else None
-            linked_event = linked_planner_line_map.get(line.id)
-            payload.append({
-                'id': -200000 - planner_idx,
-                'title': line.value,
-                'status': 'not_started',
-                'is_planner_item': True,
-                'planner_type': 'line',
-                'planner_line_id': line.id,
-                'planner_item_id': line.item_id,
-                'planner_item_title': parent_item.title if parent_item else '',
-                'planner_folder_id': parent_item.folder_id if parent_item else None,
-                'planner_folder_name': folder.name if folder else '',
-                'calendar_event_id': linked_event.id if linked_event else None,
-                'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
-                'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
-                'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
-                'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
-                'allow_overlap': linked_event.allow_overlap if linked_event else False,
-                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
-                'priority': linked_event.priority if linked_event else 'medium',
-                'item_note': linked_event.item_note if linked_event else None,
-                'day': day_obj.isoformat(),
-                'order_index': linked_event.order_index if linked_event else 200000 + planner_idx
-            })
-            planner_idx += 1
 
         return jsonify(payload)
 
@@ -485,61 +430,50 @@ def calendar_events():
         if not linked_item:
             return jsonify({'error': 'Task not found'}), 404
 
-    # Handle planner item links
-    planner_simple_item_id = data.get('planner_simple_item_id')
-    planner_multi_item_id = data.get('planner_multi_item_id')
-    planner_multi_line_id = data.get('planner_multi_line_id')
-    linked_planner_simple = None
-    linked_planner_multi = None
-    linked_planner_line = None
+    note_list_item_id = data.get('note_list_item_id')
+    linked_note_list_item = None
+    do_feed_item_id = data.get('do_feed_item_id')
+    linked_feed_item = None
 
-    if planner_simple_item_id is not None:
+    if any(data.get(key) is not None for key in ('planner_simple_item_id', 'planner_multi_item_id', 'planner_multi_line_id')):
+        return jsonify({'error': 'Planner module has been removed'}), 410
+
+    if note_list_item_id is not None:
         try:
-            planner_simple_item_id_int = int(planner_simple_item_id)
+            note_list_item_id_int = int(note_list_item_id)
         except (TypeError, ValueError):
-            return jsonify({'error': 'Invalid planner_simple_item_id'}), 400
-        linked_planner_simple = PlannerSimpleItem.query.filter_by(
-            id=planner_simple_item_id_int,
-            user_id=user.id
+            return jsonify({'error': 'Invalid note_list_item_id'}), 400
+        linked_note_pair = db.session.query(NoteListItem, Note).join(
+            Note, NoteListItem.note_id == Note.id
+        ).filter(
+            NoteListItem.id == note_list_item_id_int,
+            Note.user_id == user.id,
+            Note.archived_at.is_(None),
+            Note.note_type == 'list'
         ).first()
-        if not linked_planner_simple:
-            return jsonify({'error': 'Planner simple item not found'}), 404
+        if not linked_note_pair:
+            return jsonify({'error': 'List item not found'}), 404
+        linked_note_list_item, _ = linked_note_pair
 
-    if planner_multi_item_id is not None:
+    if do_feed_item_id is not None:
         try:
-            planner_multi_item_id_int = int(planner_multi_item_id)
+            do_feed_item_id_int = int(do_feed_item_id)
         except (TypeError, ValueError):
-            return jsonify({'error': 'Invalid planner_multi_item_id'}), 400
-        linked_planner_multi = PlannerMultiItem.query.filter_by(
-            id=planner_multi_item_id_int,
-            user_id=user.id
+            return jsonify({'error': 'Invalid do_feed_item_id'}), 400
+        linked_feed_item = DoFeedItem.query.filter(
+            DoFeedItem.id == do_feed_item_id_int,
+            DoFeedItem.user_id == user.id
         ).first()
-        if not linked_planner_multi:
-            return jsonify({'error': 'Planner multi item not found'}), 404
-
-    if planner_multi_line_id is not None:
-        try:
-            planner_multi_line_id_int = int(planner_multi_line_id)
-        except (TypeError, ValueError):
-            return jsonify({'error': 'Invalid planner_multi_line_id'}), 400
-        linked_planner_line = PlannerMultiLine.query.filter_by(
-            id=planner_multi_line_id_int,
-            user_id=user.id
-        ).first()
-        if not linked_planner_line:
-            return jsonify({'error': 'Planner line not found'}), 404
-
-    has_planner_link = linked_planner_simple or linked_planner_multi or linked_planner_line
+        if not linked_feed_item:
+            return jsonify({'error': 'Feed item not found'}), 404
 
     title = (data.get('title') or '').strip()
     if not title and linked_item:
         title = linked_item.content
-    if not title and linked_planner_simple:
-        title = linked_planner_simple.title
-    if not title and linked_planner_multi:
-        title = linked_planner_multi.title
-    if not title and linked_planner_line:
-        title = linked_planner_line.value
+    if not title and linked_note_list_item:
+        title = linked_note_list_item.text
+    if not title and linked_feed_item:
+        title = linked_feed_item.title
     if not title:
         return jsonify({'error': 'Title is required'}), 400
 
@@ -550,7 +484,7 @@ def calendar_events():
     is_phase = bool(data.get('is_phase'))
     is_event = bool(data.get('is_event'))
     is_group = bool(data.get('is_group'))
-    if linked_item or has_planner_link:
+    if linked_item or linked_note_list_item or linked_feed_item:
         is_phase = False
         is_event = False
         is_group = False
@@ -615,28 +549,19 @@ def calendar_events():
         if existing:
             return jsonify(existing.to_dict()), 200
 
-    if linked_planner_simple:
+    if linked_note_list_item:
         existing = CalendarEvent.query.filter_by(
             user_id=user.id,
-            planner_simple_item_id=linked_planner_simple.id,
+            note_list_item_id=linked_note_list_item.id,
             day=day_obj
         ).first()
         if existing:
             return jsonify(existing.to_dict()), 200
 
-    if linked_planner_multi:
+    if linked_feed_item:
         existing = CalendarEvent.query.filter_by(
             user_id=user.id,
-            planner_multi_item_id=linked_planner_multi.id,
-            day=day_obj
-        ).first()
-        if existing:
-            return jsonify(existing.to_dict()), 200
-
-    if linked_planner_line:
-        existing = CalendarEvent.query.filter_by(
-            user_id=user.id,
-            planner_multi_line_id=linked_planner_line.id,
+            do_feed_item_id=linked_feed_item.id,
             day=day_obj
         ).first()
         if existing:
@@ -700,9 +625,8 @@ def calendar_events():
         reminder_minutes_before=reminder_minutes if not is_phase and not is_group else None,
         rollover_enabled=bool(data.get('rollover_enabled', default_rollover) if not is_group else False),
         todo_item_id=linked_item.id if linked_item else None,
-        planner_simple_item_id=linked_planner_simple.id if linked_planner_simple else None,
-        planner_multi_item_id=linked_planner_multi.id if linked_planner_multi else None,
-        planner_multi_line_id=linked_planner_line.id if linked_planner_line else None,
+        note_list_item_id=linked_note_list_item.id if linked_note_list_item else None,
+        do_feed_item_id=linked_feed_item.id if linked_feed_item else None,
         item_note=item_note,
         order_index=_next_calendar_order(day_obj, user.id)
     )

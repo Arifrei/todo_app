@@ -27,6 +27,9 @@
             <button class="btn btn-primary" id="list-save-btn">
                 <i class="fa-solid fa-floppy-disk"></i> Save
             </button>
+            <button class="btn btn-secondary u-hidden" id="list-section-reorder-done-btn" type="button">
+                <i class="fa-solid fa-check"></i> Done
+            </button>
             <div class="dropdown notes-actions-dropdown">
                 <button class="btn btn-ghost btn-icon-only" id="list-actions-toggle" aria-label="More actions" title="More actions" aria-controls="list-actions-menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis-vertical"></i>
@@ -35,20 +38,20 @@
                     <button class="dropdown-item" id="list-select-toggle" type="button" aria-pressed="false">
                         <i class="fa-solid fa-check-square"></i> Select
                     </button>
-                    <button class="dropdown-item" id="list-duplicates-btn">
-                        <i class="fa-solid fa-clone"></i> Find duplicates
-                    </button>
                     <button class="dropdown-item" id="list-search-toggle" type="button" aria-controls="list-search" aria-expanded="false">
                         <i class="fa-solid fa-magnifying-glass"></i> Search list
-                    </button>
-                    <button class="dropdown-item" id="list-share-btn">
-                        <i class="fa-solid fa-share-nodes"></i> Share
                     </button>
                     <button class="dropdown-item" id="list-protect-btn">
                         <i class="fa-solid fa-lock"></i> <span>Protect</span>
                     </button>
-                    <button class="dropdown-item" id="list-visibility-btn">
-                        <i class="fa-solid fa-eye-slash"></i> <span>Hide from notes list</span>
+                    <button class="dropdown-item" id="list-share-btn">
+                        <i class="fa-solid fa-share-nodes"></i> Share
+                    </button>
+                    <button class="dropdown-item" id="list-duplicates-btn">
+                        <i class="fa-solid fa-clone"></i> Find duplicates
+                    </button>
+                    <button class="dropdown-item" id="list-section-reorder-toggle" type="button" aria-pressed="false">
+                        <i class="fa-solid fa-grip-lines"></i> Reorder sections
                     </button>
                     <button class="dropdown-item" id="list-archive-btn">
                         <i class="fa-solid fa-box-archive"></i> <span>Archive</span>
@@ -131,6 +134,46 @@
             <div class="modal-actions">
                 <button class="btn btn-danger" id="list-duplicates-delete-selected-btn">Delete selected</button>
                 <button class="btn" id="list-duplicates-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="list-item-note-modal" role="dialog" aria-modal="true" aria-labelledby="list-item-note-title">
+        <div class="modal-content list-item-note-modal-content" tabindex="-1">
+            <h2 id="list-item-note-title">Inner Note</h2>
+            <p id="list-item-note-subtitle" class="u-muted-modal-msg">Add details for this list item.</p>
+            <div class="list-item-note-toolbar" id="list-item-note-toolbar">
+                <button class="note-tool" type="button" data-list-note-command="bold" title="Bold (Ctrl/Cmd+B)" aria-label="Bold"><i class="fa-solid fa-bold"></i></button>
+                <button class="note-tool" type="button" data-list-note-command="italic" title="Italic (Ctrl/Cmd+I)" aria-label="Italic"><i class="fa-solid fa-italic"></i></button>
+                <button class="note-tool" type="button" data-list-note-command="strike" title="Strikethrough" aria-label="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
+                <span class="note-tool-divider"></span>
+                <button class="note-tool" type="button" data-list-note-command="bullet" title="Bullet list" aria-label="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
+                <button class="note-tool" type="button" data-list-note-command="number" title="Numbered list" aria-label="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
+                <button class="note-tool" type="button" data-list-note-command="quote" title="Quote block" aria-label="Quote block"><i class="fa-solid fa-quote-left"></i></button>
+            </div>
+            <div class="form-group">
+                <textarea id="list-item-note-input" class="form-control list-item-note-input" rows="8" placeholder="Type note details..."></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="list-item-note-clear-btn">Clear</button>
+                <button class="btn" id="list-item-note-cancel-btn">Cancel</button>
+                <button class="btn btn-primary" id="list-item-note-save-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="list-item-date-modal" role="dialog" aria-modal="true" aria-labelledby="list-item-date-title">
+        <div class="modal-content list-item-date-modal-content" tabindex="-1">
+            <h2 id="list-item-date-title">Item Date</h2>
+            <p id="list-item-date-subtitle" class="u-muted-modal-msg">Set when this item is due or expected.</p>
+            <div class="form-group">
+                <label for="list-item-date-input">Date</label>
+                <input type="date" id="list-item-date-input" class="form-control">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="list-item-date-clear-btn">Clear</button>
+                <button class="btn" id="list-item-date-cancel-btn">Cancel</button>
+                <button class="btn btn-primary" id="list-item-date-save-btn">Save</button>
             </div>
         </div>
     </div>

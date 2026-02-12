@@ -23,6 +23,8 @@ function initListEditorPage() {
     const actionsToggle = document.getElementById('list-actions-toggle');
     const actionsMenu = document.getElementById('list-actions-menu');
     const duplicatesBtn = document.getElementById('list-duplicates-btn');
+    const sectionReorderToggleBtn = document.getElementById('list-section-reorder-toggle');
+    const sectionReorderDoneBtn = document.getElementById('list-section-reorder-done-btn');
     const searchToggleBtn = document.getElementById('list-search-toggle');
     const stack = document.getElementById('list-pill-stack');
     const selectToggle = document.getElementById('list-select-toggle');
@@ -42,6 +44,17 @@ function initListEditorPage() {
     const duplicatesModal = document.getElementById('list-duplicates-modal');
     const duplicatesCloseBtn = document.getElementById('list-duplicates-close-btn');
     const duplicatesDeleteSelectedBtn = document.getElementById('list-duplicates-delete-selected-btn');
+    const itemNoteModal = document.getElementById('list-item-note-modal');
+    const itemNoteToolbar = document.getElementById('list-item-note-toolbar');
+    const itemNoteInput = document.getElementById('list-item-note-input');
+    const itemNoteSaveBtn = document.getElementById('list-item-note-save-btn');
+    const itemNoteCancelBtn = document.getElementById('list-item-note-cancel-btn');
+    const itemNoteClearBtn = document.getElementById('list-item-note-clear-btn');
+    const itemDateModal = document.getElementById('list-item-date-modal');
+    const itemDateInput = document.getElementById('list-item-date-input');
+    const itemDateSaveBtn = document.getElementById('list-item-date-save-btn');
+    const itemDateCancelBtn = document.getElementById('list-item-date-cancel-btn');
+    const itemDateClearBtn = document.getElementById('list-item-date-clear-btn');
 
     if (saveBtn) saveBtn.addEventListener('click', () => saveListMetadata({ closeAfter: true }));
     if (cancelBtn) cancelBtn.addEventListener('click', async () => { await cancelListMetadataChanges(); });
@@ -53,12 +66,17 @@ function initListEditorPage() {
     if (backBtn) backBtn.addEventListener('click', () => handleListBack());
     if (notesBtn) notesBtn.addEventListener('click', () => handleListExit());
     if (duplicatesBtn) duplicatesBtn.addEventListener('click', () => openListDuplicatesModal());
+    if (sectionReorderToggleBtn) sectionReorderToggleBtn.addEventListener('click', () => toggleListSectionReorderMode());
+    if (sectionReorderDoneBtn) sectionReorderDoneBtn.addEventListener('click', () => setListSectionReorderMode(false));
     if (searchToggleBtn) {
         searchToggleBtn.addEventListener('click', () => {
             if (!searchBar) return;
             const nextOpen = searchBar.style.display === 'none' || searchBar.style.display === '';
             searchBar.style.display = nextOpen ? 'flex' : 'none';
             searchToggleBtn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+            if (nextOpen && listState.sectionReorderMode) {
+                setListSectionReorderMode(false);
+            }
             if (nextOpen && searchInput) {
                 searchInput.focus();
                 searchInput.select();
@@ -139,13 +157,52 @@ function initListEditorPage() {
                 bulkMoreToggle.setAttribute('aria-expanded', 'false');
             }
         });
+        const repositionOpenBulkMenu = () => {
+            if (!bulkMoreMenu.classList.contains('open')) return;
+            positionBulkMenu(bulkMoreMenu, bulkMoreToggle);
+        };
+        window.addEventListener('resize', repositionOpenBulkMenu, { passive: true });
+        window.addEventListener('scroll', repositionOpenBulkMenu, { passive: true });
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', repositionOpenBulkMenu, { passive: true });
+            window.visualViewport.addEventListener('scroll', repositionOpenBulkMenu, { passive: true });
+        }
+    }
+    const repositionOpenListItemMenu = () => {
+        if (!activeListItemMenu || !activeListItemMenuAnchor) return;
+        if (!document.body.contains(activeListItemMenu) || !document.body.contains(activeListItemMenuAnchor)) return;
+        positionListItemMenu(activeListItemMenu, activeListItemMenuAnchor);
+    };
+    window.addEventListener('resize', repositionOpenListItemMenu, { passive: true });
+    window.addEventListener('scroll', repositionOpenListItemMenu, { passive: true });
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', repositionOpenListItemMenu, { passive: true });
+        window.visualViewport.addEventListener('scroll', repositionOpenListItemMenu, { passive: true });
     }
     if (sectionSaveBtn) sectionSaveBtn.addEventListener('click', () => submitListSectionModal());
     if (sectionCancelBtn) sectionCancelBtn.addEventListener('click', () => closeListSectionModal());
     if (duplicatesCloseBtn) duplicatesCloseBtn.addEventListener('click', () => closeListDuplicatesModal());
     if (duplicatesDeleteSelectedBtn) duplicatesDeleteSelectedBtn.addEventListener('click', () => deleteSelectedDuplicateItems());
+    if (itemNoteSaveBtn) itemNoteSaveBtn.addEventListener('click', () => saveListItemInnerNote());
+    if (itemNoteCancelBtn) itemNoteCancelBtn.addEventListener('click', () => closeListItemNoteModal());
+    if (itemNoteClearBtn) itemNoteClearBtn.addEventListener('click', () => clearListItemInnerNote());
+    if (itemDateSaveBtn) itemDateSaveBtn.addEventListener('click', () => saveListItemScheduledDate());
+    if (itemDateCancelBtn) itemDateCancelBtn.addEventListener('click', () => closeListItemDateModal());
+    if (itemDateClearBtn) itemDateClearBtn.addEventListener('click', () => clearListItemScheduledDate());
+    if (itemNoteToolbar) {
+        itemNoteToolbar.querySelectorAll('[data-list-note-command]').forEach((btn) => {
+            btn.addEventListener('mousedown', (e) => e.preventDefault());
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                applyListInnerNoteCommand(btn.dataset.listNoteCommand);
+            });
+        });
+    }
     if (searchInput) {
         searchInput.addEventListener('input', () => {
+            if ((searchInput.value || '').trim() && listState.sectionReorderMode) {
+                setListSectionReorderMode(false);
+            }
             listSearchState.query = (searchInput.value || '').trim();
             renderListItems();
         });
@@ -193,10 +250,56 @@ function initListEditorPage() {
             if (e.target === duplicatesModal) closeListDuplicatesModal();
         });
     }
+    if (itemNoteModal) {
+        itemNoteModal.addEventListener('click', (e) => {
+            if (e.target === itemNoteModal) closeListItemNoteModal();
+        });
+    }
+    if (itemDateModal) {
+        itemDateModal.addEventListener('click', (e) => {
+            if (e.target === itemDateModal) closeListItemDateModal();
+        });
+    }
+    if (itemNoteInput) {
+        itemNoteInput.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+                const key = e.key.toLowerCase();
+                if (key === 'b') {
+                    e.preventDefault();
+                    applyListInnerNoteCommand('bold');
+                    return;
+                }
+                if (key === 'i') {
+                    e.preventDefault();
+                    applyListInnerNoteCommand('italic');
+                    return;
+                }
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                saveListItemInnerNote();
+            }
+        });
+    }
+    if (itemDateInput) {
+        itemDateInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveListItemScheduledDate();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                closeListItemDateModal();
+            }
+        });
+    }
+    document.addEventListener('keydown', handleListEditorModalKeydown);
 
     // Check PIN status
     checkPinStatus();
     checkNotesPinStatus();
+    if (typeof window.setupNoteLinkModalControls === 'function') {
+        window.setupNoteLinkModalControls();
+    }
     if (actionsToggle && actionsMenu) {
         actionsToggle.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -223,6 +326,7 @@ function initListEditorPage() {
                 showReadOnlyToast();
                 return;
             }
+            if (listState.sectionReorderMode) return;
             if (isListSelectionActive()) return;
             if (e.target.closest('.list-pill')) return;
             if (e.target.closest('.list-pill-input')) return;
@@ -289,6 +393,7 @@ function initListEditorPage() {
     });
 
     updateListSelectionUI();
+    updateListSectionReorderUI();
     loadListForEditor(listId);
 }
 
@@ -298,14 +403,19 @@ function setListEditorReadOnly(isReadOnly) {
     const saveBtn = document.getElementById('list-save-btn');
     const cancelBtn = document.getElementById('list-cancel-btn');
     const selectToggle = document.getElementById('list-select-toggle');
+    const sectionReorderToggleBtn = document.getElementById('list-section-reorder-toggle');
+    const sectionReorderDoneBtn = document.getElementById('list-section-reorder-done-btn');
     const bulkBar = document.getElementById('list-bulk-bar');
     if (titleInput) titleInput.disabled = isReadOnly;
     if (checkboxToggle) checkboxToggle.disabled = isReadOnly;
     if (saveBtn) saveBtn.disabled = isReadOnly;
     if (cancelBtn) cancelBtn.disabled = isReadOnly || !hasListSessionChanges();
     if (selectToggle) selectToggle.disabled = isReadOnly;
+    if (sectionReorderToggleBtn) sectionReorderToggleBtn.disabled = isReadOnly;
+    if (sectionReorderDoneBtn) sectionReorderDoneBtn.disabled = isReadOnly;
     if (bulkBar && isReadOnly) bulkBar.classList.remove('active');
     if (isReadOnly) setListSelectionMode(false);
+    if (isReadOnly) setListSectionReorderMode(false);
 }
 
 function handleListEditorOutsideClick(e) {
@@ -406,6 +516,9 @@ async function loadListForEditor(listId) {
         listState.isArchived = !!list.is_archived;
         listState.isListed = !!list.is_listed;
         listState.folderId = list.folder_id || null;
+        listState.collapsedSectionIds = new Set();
+        listState.sectionReorderMode = false;
+        restoreCollapsedListSections();
         listState.activeSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode
@@ -430,6 +543,7 @@ async function loadListForEditor(listId) {
         updateArchiveButton(!!list.is_archived);
         updateListVisibilityButton(listState.isListed);
         setListVisibilityButtonEnabled(shouldAllowListVisibilityToggle(list));
+        updateListSectionReorderUI();
         setListEditorReadOnly(!!list.is_archived);
     } catch (err) {
         console.error('Error loading list:', err);
@@ -629,6 +743,7 @@ function buildListShareText(items, checkboxMode) {
         const linkLabel = (item.link_text || '').trim();
         const linkUrl = (item.link_url || '').trim();
         const noteValue = (item.note || '').trim();
+        const dateValue = normalizeListDateValue(item.scheduled_date);
         let line = textValue;
 
         if (linkLabel) {
@@ -643,6 +758,11 @@ function buildListShareText(items, checkboxMode) {
 
         if (noteValue) {
             line = line ? `${line} - ${noteValue}` : noteValue;
+        }
+
+        if (dateValue) {
+            const label = formatListScheduledDate(dateValue) || dateValue;
+            line = line ? `${line} [${label}]` : `[${label}]`;
         }
 
         if (!line) return '';
@@ -693,6 +813,418 @@ async function shareCurrentList() {
 }
 
 const LIST_SECTION_PREFIX = '[[section]]';
+const SECTION_DRAG_CLICK_SUPPRESS_MS = 250;
+const SECTION_DRAG_AUTOSCROLL_EDGE_PX = 72;
+const SECTION_DRAG_AUTOSCROLL_STEP_PX = 20;
+let listSectionReorderState = {
+    dragSectionId: null,
+    overSectionId: null,
+    dropPosition: null,
+    suppressClicksUntil: 0,
+    dragPreviewEl: null
+};
+let listItemNoteModalState = { itemId: null };
+let listItemDateModalState = { itemId: null };
+let activeListItemMenuAnchor = null;
+
+function ensureCollapsedSectionSet() {
+    if (!(listState.collapsedSectionIds instanceof Set)) {
+        listState.collapsedSectionIds = new Set();
+    }
+    return listState.collapsedSectionIds;
+}
+
+function getListCollapsedSectionsKey() {
+    if (!listState.listId) return '';
+    return `notes_list_collapsed_sections_${listState.listId}`;
+}
+
+function persistCollapsedListSections() {
+    const key = getListCollapsedSectionsKey();
+    if (!key) return;
+    try {
+        const values = Array.from(ensureCollapsedSectionSet());
+        sessionStorage.setItem(key, JSON.stringify(values));
+    } catch (err) {
+        console.warn('Could not persist collapsed sections:', err);
+    }
+}
+
+function restoreCollapsedListSections() {
+    const key = getListCollapsedSectionsKey();
+    listState.collapsedSectionIds = new Set();
+    if (!key) return;
+    try {
+        const raw = sessionStorage.getItem(key);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return;
+        listState.collapsedSectionIds = new Set(
+            parsed
+                .map(value => parseInt(value, 10))
+                .filter(value => Number.isFinite(value) && value > 0)
+        );
+    } catch (err) {
+        console.warn('Could not restore collapsed sections:', err);
+        listState.collapsedSectionIds = new Set();
+    }
+}
+
+function cleanCollapsedListSections(sectionIds) {
+    const validIds = new Set(sectionIds || []);
+    const collapsed = ensureCollapsedSectionSet();
+    let changed = false;
+    for (const id of Array.from(collapsed)) {
+        if (!validIds.has(id)) {
+            collapsed.delete(id);
+            changed = true;
+        }
+    }
+    if (changed) persistCollapsedListSections();
+}
+
+function toggleListSectionCollapsed(sectionId) {
+    if (!sectionId || listSearchState.query) return;
+    const collapsed = ensureCollapsedSectionSet();
+    if (collapsed.has(sectionId)) {
+        collapsed.delete(sectionId);
+    } else {
+        collapsed.add(sectionId);
+    }
+    persistCollapsedListSections();
+    renderListItems();
+}
+
+function getListSectionItemCount(sectionId, sortedItems) {
+    const items = sortedItems || getSortedListItems();
+    const sectionIndex = items.findIndex(item => item.id === sectionId);
+    if (sectionIndex === -1) return 0;
+    let count = 0;
+    for (let i = sectionIndex + 1; i < items.length; i += 1) {
+        if (isListSectionItem(items[i])) break;
+        count += 1;
+    }
+    return count;
+}
+
+function getListItemById(itemId) {
+    if (!itemId) return null;
+    return (listState.items || []).find(item => item.id === itemId) || null;
+}
+
+function normalizeListDateValue(raw) {
+    const str = String(raw || '').trim();
+    if (!str) return null;
+    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return null;
+    return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function getListDateOnly(raw) {
+    const value = normalizeListDateValue(raw);
+    if (!value) return null;
+    const date = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return null;
+    date.setHours(0, 0, 0, 0);
+    return date;
+}
+
+function isListDatePast(raw) {
+    const date = getListDateOnly(raw);
+    if (!date) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return date.getTime() < today.getTime();
+}
+
+function isListDateToday(raw) {
+    const date = getListDateOnly(raw);
+    if (!date) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return date.getTime() === today.getTime();
+}
+
+function formatListScheduledDate(raw) {
+    const date = getListDateOnly(raw);
+    if (!date) return '';
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    if (date.getTime() === today.getTime()) return 'Today';
+    if (date.getTime() === tomorrow.getTime()) return 'Tomorrow';
+
+    const diffDays = Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays > 0 && diffDays <= 7) {
+        return date.toLocaleDateString('en-US', { weekday: 'long' });
+    }
+    return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
+    });
+}
+
+function closeListItemNoteModal() {
+    const modal = document.getElementById('list-item-note-modal');
+    if (modal) modal.classList.remove('active');
+    listItemNoteModalState.itemId = null;
+}
+
+function openListItemNoteModal(itemId) {
+    const item = getListItemById(itemId);
+    const modal = document.getElementById('list-item-note-modal');
+    const toolbar = document.getElementById('list-item-note-toolbar');
+    const titleEl = document.getElementById('list-item-note-title');
+    const subtitleEl = document.getElementById('list-item-note-subtitle');
+    const input = document.getElementById('list-item-note-input');
+    const saveBtn = document.getElementById('list-item-note-save-btn');
+    const clearBtn = document.getElementById('list-item-note-clear-btn');
+    if (!item || !modal || !titleEl || !subtitleEl || !input) return;
+
+    listItemNoteModalState.itemId = itemId;
+    const title = (item.text || '').trim() || 'Untitled item';
+    titleEl.textContent = 'Inner Note';
+    subtitleEl.textContent = title;
+    input.value = item.inner_note || '';
+    const isReadOnly = !!listState.isArchived;
+    input.readOnly = isReadOnly;
+    if (saveBtn) saveBtn.disabled = isReadOnly;
+    if (clearBtn) clearBtn.disabled = isReadOnly;
+    if (toolbar) {
+        toolbar.querySelectorAll('[data-list-note-command]').forEach((btn) => {
+            btn.disabled = isReadOnly;
+        });
+    }
+    modal.classList.add('active');
+    setTimeout(() => {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }, 0);
+}
+
+async function saveListItemInnerNote() {
+    const itemId = listItemNoteModalState.itemId;
+    const input = document.getElementById('list-item-note-input');
+    if (!itemId || !input) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const noteValue = (input.value || '').trim() || null;
+    try {
+        await updateListItem(itemId, { inner_note: noteValue }, { refresh: true });
+        closeListItemNoteModal();
+        showToast('Inner note saved', 'success', 1400);
+    } catch (err) {
+        console.error('Save inner note failed:', err);
+        showToast('Could not save inner note', 'error');
+    }
+}
+
+async function clearListItemInnerNote() {
+    const itemId = listItemNoteModalState.itemId;
+    if (!itemId) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    try {
+        await updateListItem(itemId, { inner_note: null }, { refresh: true });
+        closeListItemNoteModal();
+        showToast('Inner note cleared', 'success', 1400);
+    } catch (err) {
+        console.error('Clear inner note failed:', err);
+        showToast('Could not clear inner note', 'error');
+    }
+}
+
+function applyListInnerNoteCommand(command) {
+    const input = document.getElementById('list-item-note-input');
+    if (!input || input.readOnly || listState.isArchived) return;
+    input.focus();
+    if (command === 'bold') {
+        wrapListInnerNoteSelection('**');
+        return;
+    }
+    if (command === 'italic') {
+        wrapListInnerNoteSelection('*');
+        return;
+    }
+    if (command === 'strike') {
+        wrapListInnerNoteSelection('~~');
+        return;
+    }
+    if (command === 'bullet') {
+        toggleListInnerNoteLinePrefix('bullet');
+        return;
+    }
+    if (command === 'number') {
+        toggleListInnerNoteLinePrefix('number');
+        return;
+    }
+    if (command === 'quote') {
+        toggleListInnerNoteLinePrefix('quote');
+    }
+}
+
+function wrapListInnerNoteSelection(marker) {
+    const input = document.getElementById('list-item-note-input');
+    if (!input) return;
+    const value = input.value || '';
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    const selected = value.slice(start, end);
+    const wrappedPrefix = `${marker}`;
+    const wrappedSuffix = `${marker}`;
+
+    if (selected) {
+        const hasWrap = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2;
+        const replacement = hasWrap
+            ? selected.slice(marker.length, selected.length - marker.length)
+            : `${wrappedPrefix}${selected}${wrappedSuffix}`;
+        input.value = `${value.slice(0, start)}${replacement}${value.slice(end)}`;
+        const nextStart = start;
+        const nextEnd = start + replacement.length;
+        input.setSelectionRange(nextStart, nextEnd);
+        return;
+    }
+
+    const insertion = `${wrappedPrefix}${wrappedSuffix}`;
+    input.value = `${value.slice(0, start)}${insertion}${value.slice(end)}`;
+    const cursor = start + marker.length;
+    input.setSelectionRange(cursor, cursor);
+}
+
+function toggleListInnerNoteLinePrefix(mode) {
+    const input = document.getElementById('list-item-note-input');
+    if (!input) return;
+    const value = input.value || '';
+    const selStart = input.selectionStart ?? 0;
+    const selEnd = input.selectionEnd ?? 0;
+
+    const blockStart = value.lastIndexOf('\n', Math.max(selStart - 1, 0));
+    const start = blockStart === -1 ? 0 : blockStart + 1;
+    const blockEndIndex = value.indexOf('\n', selEnd);
+    const end = blockEndIndex === -1 ? value.length : blockEndIndex;
+    const block = value.slice(start, end);
+    const lines = block.split('\n');
+    const nonEmpty = lines.filter(line => line.trim() !== '');
+    if (!nonEmpty.length) return;
+
+    let nextLines = lines.slice();
+    if (mode === 'bullet') {
+        const allBulleted = nonEmpty.every(line => /^\s*[-*]\s+/.test(line));
+        nextLines = lines.map((line) => {
+            if (!line.trim()) return line;
+            if (allBulleted) return line.replace(/^(\s*)[-*]\s+/, '$1');
+            return line.replace(/^(\s*)/, '$1- ');
+        });
+    } else if (mode === 'number') {
+        const allNumbered = nonEmpty.every(line => /^\s*\d+\.\s+/.test(line));
+        if (allNumbered) {
+            nextLines = lines.map((line) => line.replace(/^(\s*)\d+\.\s+/, '$1'));
+        } else {
+            let index = 1;
+            nextLines = lines.map((line) => {
+                if (!line.trim()) return line;
+                const leading = (line.match(/^(\s*)/) || [''])[0];
+                const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, '$1').trimStart();
+                const numbered = `${leading}${index}. ${stripped}`;
+                index += 1;
+                return numbered;
+            });
+        }
+    } else if (mode === 'quote') {
+        const allQuoted = nonEmpty.every(line => /^\s*>\s+/.test(line));
+        nextLines = lines.map((line) => {
+            if (!line.trim()) return line;
+            if (allQuoted) return line.replace(/^(\s*)>\s+/, '$1');
+            return line.replace(/^(\s*)/, '$1> ');
+        });
+    }
+
+    const replacement = nextLines.join('\n');
+    input.value = `${value.slice(0, start)}${replacement}${value.slice(end)}`;
+    input.setSelectionRange(start, start + replacement.length);
+}
+
+function closeListItemDateModal() {
+    const modal = document.getElementById('list-item-date-modal');
+    if (modal) modal.classList.remove('active');
+    listItemDateModalState.itemId = null;
+}
+
+function openListItemDateModal(itemId) {
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const item = getListItemById(itemId);
+    const modal = document.getElementById('list-item-date-modal');
+    const subtitleEl = document.getElementById('list-item-date-subtitle');
+    const input = document.getElementById('list-item-date-input');
+    if (!item || !modal || !subtitleEl || !input) return;
+
+    listItemDateModalState.itemId = itemId;
+    subtitleEl.textContent = (item.text || '').trim() || 'Untitled item';
+    input.value = normalizeListDateValue(item.scheduled_date) || '';
+    modal.classList.add('active');
+    setTimeout(() => input.focus(), 0);
+}
+
+async function saveListItemScheduledDate() {
+    const itemId = listItemDateModalState.itemId;
+    const input = document.getElementById('list-item-date-input');
+    if (!itemId || !input) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const dateValue = (input.value || '').trim();
+    try {
+        await updateListItem(itemId, { scheduled_date: dateValue || null }, { refresh: true });
+        closeListItemDateModal();
+        showToast('Date saved', 'success', 1400);
+    } catch (err) {
+        console.error('Save item date failed:', err);
+        showToast('Could not save date', 'error');
+    }
+}
+
+async function clearListItemScheduledDate() {
+    const itemId = listItemDateModalState.itemId;
+    if (!itemId) return;
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    try {
+        await updateListItem(itemId, { scheduled_date: null }, { refresh: true });
+        closeListItemDateModal();
+        showToast('Date cleared', 'success', 1400);
+    } catch (err) {
+        console.error('Clear item date failed:', err);
+        showToast('Could not clear date', 'error');
+    }
+}
+
+function handleListEditorModalKeydown(event) {
+    if (event.key !== 'Escape') return;
+    const noteModal = document.getElementById('list-item-note-modal');
+    if (noteModal && noteModal.classList.contains('active')) {
+        event.preventDefault();
+        closeListItemNoteModal();
+        return;
+    }
+    const dateModal = document.getElementById('list-item-date-modal');
+    if (dateModal && dateModal.classList.contains('active')) {
+        event.preventDefault();
+        closeListItemDateModal();
+    }
+}
 
 function isListSectionItem(item) {
     const textValue = (item?.text || '').trim();
@@ -719,8 +1251,317 @@ function getSortedListItems() {
     });
 }
 
+function getSectionBlocksWithPrefix() {
+    const sorted = getSortedListItems();
+    const firstSectionIndex = sorted.findIndex(isListSectionItem);
+    const prefixIds = firstSectionIndex === -1
+        ? sorted.map(item => item.id)
+        : sorted.slice(0, firstSectionIndex).map(item => item.id);
+    if (firstSectionIndex === -1) {
+        return { prefixIds, blocks: [] };
+    }
+
+    const blocks = [];
+    let idx = firstSectionIndex;
+    while (idx < sorted.length) {
+        const item = sorted[idx];
+        if (!isListSectionItem(item)) {
+            idx += 1;
+            continue;
+        }
+        const blockIds = [item.id];
+        idx += 1;
+        while (idx < sorted.length && !isListSectionItem(sorted[idx])) {
+            blockIds.push(sorted[idx].id);
+            idx += 1;
+        }
+        blocks.push({
+            sectionId: item.id,
+            itemIds: blockIds
+        });
+    }
+    return { prefixIds, blocks };
+}
+
+function clearSectionDropIndicators() {
+    document.querySelectorAll('.list-section.section-drop-before, .list-section.section-drop-after, .list-section.section-dragging')
+        .forEach(el => {
+            el.classList.remove('section-drop-before', 'section-drop-after', 'section-dragging');
+            el.removeAttribute('data-drop-position');
+        });
+}
+
+function clearSectionDropTargets() {
+    document.querySelectorAll('.list-section.section-drop-before, .list-section.section-drop-after')
+        .forEach(el => {
+            el.classList.remove('section-drop-before', 'section-drop-after');
+            el.removeAttribute('data-drop-position');
+        });
+}
+
+function markSectionDropTarget(sectionId, dropPosition) {
+    clearSectionDropTargets();
+    const target = document.querySelector(`.list-section[data-section-id="${sectionId}"]`);
+    if (!target) return;
+    target.setAttribute('data-drop-position', dropPosition === 'after' ? 'after' : 'before');
+    if (dropPosition === 'after') {
+        target.classList.add('section-drop-after');
+    } else {
+        target.classList.add('section-drop-before');
+    }
+}
+
+function clearSectionDragPreview() {
+    const previewEl = listSectionReorderState.dragPreviewEl;
+    if (previewEl && previewEl.parentNode) {
+        previewEl.parentNode.removeChild(previewEl);
+    }
+    listSectionReorderState.dragPreviewEl = null;
+}
+
+function resetSectionDragState() {
+    listSectionReorderState.dragSectionId = null;
+    listSectionReorderState.overSectionId = null;
+    listSectionReorderState.dropPosition = null;
+    listSectionReorderState.suppressClicksUntil = Date.now() + SECTION_DRAG_CLICK_SUPPRESS_MS;
+    clearSectionDropIndicators();
+    clearSectionDragPreview();
+    document.body.classList.remove('list-section-dragging');
+}
+
+function autoScrollWhileSectionDragging(clientY) {
+    if (!Number.isFinite(clientY)) return;
+    const viewportTop = (window.visualViewport && window.visualViewport.offsetTop) || 0;
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight || 0;
+    const viewportBottom = viewportTop + viewportHeight;
+    if (viewportHeight > 0) {
+        if (clientY < viewportTop + SECTION_DRAG_AUTOSCROLL_EDGE_PX) {
+            window.scrollBy(0, -SECTION_DRAG_AUTOSCROLL_STEP_PX);
+        } else if (clientY > viewportBottom - SECTION_DRAG_AUTOSCROLL_EDGE_PX) {
+            window.scrollBy(0, SECTION_DRAG_AUTOSCROLL_STEP_PX);
+        }
+    }
+    const surface = document.getElementById('list-editor-surface');
+    if (!surface) return;
+    const rect = surface.getBoundingClientRect();
+    if (!rect.height) return;
+    const edge = Math.min(SECTION_DRAG_AUTOSCROLL_EDGE_PX, Math.max(28, rect.height * 0.2));
+    if (clientY < rect.top + edge) {
+        surface.scrollTop -= SECTION_DRAG_AUTOSCROLL_STEP_PX;
+    } else if (clientY > rect.bottom - edge) {
+        surface.scrollTop += SECTION_DRAG_AUTOSCROLL_STEP_PX;
+    }
+}
+
+async function reorderSectionBlocks(sourceSectionId, targetSectionId, dropPosition = 'before') {
+    if (!sourceSectionId || !targetSectionId || sourceSectionId === targetSectionId) return false;
+    const { prefixIds, blocks } = getSectionBlocksWithPrefix();
+    if (!blocks.length) return false;
+
+    const sourceIndex = blocks.findIndex(block => block.sectionId === sourceSectionId);
+    const targetIndex = blocks.findIndex(block => block.sectionId === targetSectionId);
+    if (sourceIndex === -1 || targetIndex === -1) return false;
+
+    const nextBlocks = blocks.slice();
+    const [sourceBlock] = nextBlocks.splice(sourceIndex, 1);
+    let insertIndex = targetIndex;
+    if (sourceIndex < targetIndex) insertIndex -= 1;
+    if (dropPosition === 'after') insertIndex += 1;
+    if (insertIndex < 0) insertIndex = 0;
+    if (insertIndex > nextBlocks.length) insertIndex = nextBlocks.length;
+    nextBlocks.splice(insertIndex, 0, sourceBlock);
+
+    const orderIds = [
+        ...prefixIds,
+        ...nextBlocks.flatMap(block => block.itemIds)
+    ];
+    await reorderListItems(orderIds);
+    await loadListItems();
+    return true;
+}
+
+function handleSectionDragStart(event) {
+    if (!listState.sectionReorderMode || listState.isArchived || isListSelectionActive()) {
+        event.preventDefault();
+        return;
+    }
+    const dragSource = event.currentTarget;
+    const sectionId = parseInt(dragSource.dataset.sectionId || '', 10);
+    if (!sectionId) {
+        event.preventDefault();
+        return;
+    }
+    clearSectionDragPreview();
+    listSectionReorderState.dragSectionId = sectionId;
+    listSectionReorderState.overSectionId = null;
+    listSectionReorderState.dropPosition = null;
+    listSectionReorderState.suppressClicksUntil = Date.now() + SECTION_DRAG_CLICK_SUPPRESS_MS;
+    const sectionEl = dragSource.closest('.list-section');
+    if (sectionEl) {
+        sectionEl.classList.add('section-dragging');
+    }
+    document.body.classList.add('list-section-dragging');
+    if (event.dataTransfer) {
+        const sectionTitle = dragSource.dataset.sectionTitle || 'Section';
+        const preview = document.createElement('div');
+        preview.className = 'list-section-drag-preview';
+        preview.textContent = sectionTitle;
+        preview.style.position = 'fixed';
+        preview.style.top = '-9999px';
+        preview.style.left = '-9999px';
+        preview.style.pointerEvents = 'none';
+        document.body.appendChild(preview);
+        listSectionReorderState.dragPreviewEl = preview;
+        try {
+            event.dataTransfer.setDragImage(preview, 18, 12);
+        } catch (_) {
+            // Some environments ignore custom drag images.
+        }
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(sectionId));
+    }
+}
+
+function handleSectionDragOver(event) {
+    if (!listState.sectionReorderMode) return;
+    const sourceId = listSectionReorderState.dragSectionId;
+    if (!sourceId) return;
+    autoScrollWhileSectionDragging(event.clientY);
+    const target = event.currentTarget;
+    const targetId = parseInt(target.dataset.sectionId || '', 10);
+    if (!targetId || targetId === sourceId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+
+    const rect = target.getBoundingClientRect();
+    const midpoint = rect.top + (rect.height / 2);
+    const dropPosition = event.clientY >= midpoint ? 'after' : 'before';
+    if (
+        targetId !== listSectionReorderState.overSectionId ||
+        dropPosition !== listSectionReorderState.dropPosition
+    ) {
+        listSectionReorderState.overSectionId = targetId;
+        listSectionReorderState.dropPosition = dropPosition;
+        markSectionDropTarget(targetId, dropPosition);
+    }
+}
+
+function handleSectionDragLeave(event) {
+    if (!listState.sectionReorderMode) return;
+    const sourceId = listSectionReorderState.dragSectionId;
+    if (!sourceId) return;
+    const target = event.currentTarget;
+    const related = event.relatedTarget;
+    if (related && target.contains(related)) return;
+    const targetId = parseInt(target.dataset.sectionId || '', 10);
+    if (!targetId) return;
+    if (targetId === listSectionReorderState.overSectionId) {
+        listSectionReorderState.overSectionId = null;
+        listSectionReorderState.dropPosition = null;
+        clearSectionDropTargets();
+        const sourceSection = document.querySelector(`.list-section[data-section-id="${sourceId}"]`);
+        if (sourceSection) sourceSection.classList.add('section-dragging');
+    }
+}
+
+async function handleSectionDrop(event) {
+    if (!listState.sectionReorderMode) return;
+    const sourceId = listSectionReorderState.dragSectionId;
+    const target = event.currentTarget;
+    const targetId = parseInt(target.dataset.sectionId || '', 10);
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    event.preventDefault();
+    const dropPosition = listSectionReorderState.dropPosition || 'before';
+    try {
+        await reorderSectionBlocks(sourceId, targetId, dropPosition);
+        showToast('Section moved', 'success', 1200);
+    } catch (err) {
+        console.error('Section reorder failed:', err);
+        showToast('Could not reorder section', 'error');
+    } finally {
+        resetSectionDragState();
+    }
+}
+
+function handleSectionDragEnd() {
+    resetSectionDragState();
+}
+
 function isListSelectionActive() {
     return !!listSelectionState.active;
+}
+
+function getListSectionCount() {
+    return (listState.items || []).filter(isListSectionItem).length;
+}
+
+function updateListSectionReorderUI() {
+    const page = document.getElementById('list-editor-page');
+    const sectionCount = getListSectionCount();
+    const hasSearch = !!(listSearchState.query || '').trim();
+    const canStart = !listState.isArchived && !hasSearch && !isListSelectionActive() && sectionCount > 1;
+    if (listState.sectionReorderMode && !canStart) {
+        listState.sectionReorderMode = false;
+        resetSectionDragState();
+    }
+    if (page) page.classList.toggle('list-section-reorder-mode', !!listState.sectionReorderMode);
+
+    const toggleBtn = document.getElementById('list-section-reorder-toggle');
+    const doneBtn = document.getElementById('list-section-reorder-done-btn');
+
+    if (toggleBtn) {
+        const active = !!listState.sectionReorderMode;
+        toggleBtn.classList.toggle('active', active);
+        toggleBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        toggleBtn.disabled = !active && !canStart;
+        toggleBtn.innerHTML = active
+            ? '<i class="fa-solid fa-check"></i> Done reordering'
+            : '<i class="fa-solid fa-grip-lines"></i> Reorder sections';
+    }
+
+    if (doneBtn) {
+        doneBtn.classList.toggle('u-hidden', !listState.sectionReorderMode);
+    }
+}
+
+function setListSectionReorderMode(active) {
+    const next = !!active;
+    if (next === !!listState.sectionReorderMode) {
+        updateListSectionReorderUI();
+        return;
+    }
+    if (next) {
+        if (listState.isArchived) {
+            showReadOnlyToast();
+            return;
+        }
+        if ((listSearchState.query || '').trim()) {
+            showToast('Clear search before reordering sections.', 'warning', 2200);
+            return;
+        }
+        if (getListSectionCount() < 2) {
+            showToast('Add at least two sections to reorder.', 'info', 2200);
+            return;
+        }
+        if (isListSelectionActive()) {
+            listSelectionState.active = false;
+            clearListSelection();
+            updateListSelectionUI();
+        }
+        listState.insertionIndex = null;
+        listState.editingItemId = null;
+        listState.expandedItemId = null;
+    } else {
+        resetSectionDragState();
+    }
+
+    listState.sectionReorderMode = next;
+    updateListSectionReorderUI();
+    renderListItems();
+}
+
+function toggleListSectionReorderMode() {
+    setListSectionReorderMode(!listState.sectionReorderMode);
 }
 
 function clearListSelection() {
@@ -728,12 +1569,17 @@ function clearListSelection() {
 }
 
 function setListSelectionMode(active) {
+    if (active && listState.sectionReorderMode) {
+        listState.sectionReorderMode = false;
+        resetSectionDragState();
+    }
     listSelectionState.active = !!active;
     clearListSelection();
     listState.insertionIndex = null;
     listState.editingItemId = null;
     listState.expandedItemId = null;
     updateListSelectionUI();
+    updateListSectionReorderUI();
     renderListItems();
 }
 
@@ -755,6 +1601,7 @@ function updateListSelectionUI() {
             : '<i class="fa-solid fa-check-square"></i> Select';
     }
     updateListBulkBar();
+    updateListSectionReorderUI();
 }
 
 function toggleListItemSelection(itemId) {
@@ -827,6 +1674,7 @@ function closeListItemMenu() {
         activeListItemMenu.remove();
         activeListItemMenu = null;
     }
+    activeListItemMenuAnchor = null;
 }
 
 function showListItemActions(pill) {
@@ -845,20 +1693,43 @@ function clearListItemActions() {
 }
 
 function positionListItemMenu(menu, anchor) {
+    const viewportWidth = Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    if (viewportWidth > 0) {
+        menu.style.maxWidth = `${Math.max(180, viewportWidth - 16)}px`;
+    }
+    if (viewportHeight > 0) {
+        menu.style.maxHeight = `${Math.max(140, viewportHeight - 16)}px`;
+    }
+    menu.style.overflowY = 'auto';
+
     const rect = anchor.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
     const padding = 8;
+    const usableWidth = Math.max(0, viewportWidth - (padding * 2));
+    const usableHeight = Math.max(0, viewportHeight - (padding * 2));
+    const menuWidth = Math.min(menuRect.width, usableWidth || menuRect.width);
+    const menuHeight = Math.min(menuRect.height, usableHeight || menuRect.height);
+
     let topPos = rect.bottom + padding;
-    if (window.innerHeight - rect.bottom < menuRect.height + padding && rect.top > menuRect.height + padding) {
-        topPos = rect.top - menuRect.height - padding;
+    if (topPos + menuHeight > viewportHeight - padding) {
+        topPos = rect.top - menuHeight - padding;
     }
-    let leftPos = rect.right - menuRect.width;
+    if (topPos < padding) topPos = padding;
+
+    let leftPos = rect.right - menuWidth;
     if (leftPos < padding) leftPos = padding;
-    if (leftPos + menuRect.width > window.innerWidth - padding) {
-        leftPos = window.innerWidth - menuRect.width - padding;
+    if (leftPos + menuWidth > viewportWidth - padding) {
+        leftPos = viewportWidth - menuWidth - padding;
     }
+    if (leftPos < padding) leftPos = padding;
+
     menu.style.top = `${topPos}px`;
     menu.style.left = `${leftPos}px`;
+    menu.style.right = '';
+    menu.style.bottom = '';
+    nudgeFixedMenuIntoViewport(menu, padding);
+    window.requestAnimationFrame(() => nudgeFixedMenuIntoViewport(menu, padding));
 }
 
 function getListSectionOptions() {
@@ -1052,6 +1923,7 @@ function openListItemMoveMenu(itemId, anchor) {
     document.body.appendChild(menu);
     positionListItemMenu(menu, anchor);
     activeListItemMenu = menu;
+    activeListItemMenuAnchor = anchor;
 }
 
 async function moveListItemsToSection(itemIds, sectionId) {
@@ -1127,23 +1999,76 @@ function openListBulkMoveMenu(anchor) {
     document.body.appendChild(menu);
     positionListItemMenu(menu, anchor);
     activeListItemMenu = menu;
+    activeListItemMenuAnchor = anchor;
 }
 
 function positionBulkMenu(menu, button) {
+    const viewportWidth = Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    if (viewportWidth > 0) {
+        menu.style.maxWidth = `${Math.max(180, viewportWidth - 16)}px`;
+    }
+    if (viewportHeight > 0) {
+        menu.style.maxHeight = `${Math.max(140, viewportHeight - 16)}px`;
+    }
+    menu.style.overflowY = 'auto';
+
     const rect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
     const padding = 8;
+    const usableWidth = Math.max(0, viewportWidth - (padding * 2));
+    const usableHeight = Math.max(0, viewportHeight - (padding * 2));
+    const menuWidth = Math.min(menuRect.width, usableWidth || menuRect.width);
+    const menuHeight = Math.min(menuRect.height, usableHeight || menuRect.height);
+
     let topPos = rect.bottom + padding;
-    if (window.innerHeight - rect.bottom < menuRect.height + padding && rect.top > menuRect.height + padding) {
-        topPos = rect.top - menuRect.height - padding;
+    if (topPos + menuHeight > viewportHeight - padding) {
+        topPos = rect.top - menuHeight - padding;
     }
-    let leftPos = rect.right - menuRect.width;
+    if (topPos < padding) topPos = padding;
+
+    let leftPos = rect.right - menuWidth;
     if (leftPos < padding) leftPos = padding;
-    if (leftPos + menuRect.width > window.innerWidth - padding) {
-        leftPos = window.innerWidth - menuRect.width - padding;
+    if (leftPos + menuWidth > viewportWidth - padding) {
+        leftPos = viewportWidth - menuWidth - padding;
     }
+    if (leftPos < padding) leftPos = padding;
+
     menu.style.top = `${topPos}px`;
     menu.style.left = `${leftPos}px`;
+    menu.style.right = '';
+    menu.style.bottom = '';
+    nudgeFixedMenuIntoViewport(menu, padding);
+    window.requestAnimationFrame(() => nudgeFixedMenuIntoViewport(menu, padding));
+}
+
+function nudgeFixedMenuIntoViewport(menu, padding = 8) {
+    if (!menu) return;
+    const rect = menu.getBoundingClientRect();
+    const viewportWidth = Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    if (!viewportWidth || !viewportHeight) return;
+
+    let leftPos = parseFloat(menu.style.left);
+    let topPos = parseFloat(menu.style.top);
+    if (!Number.isFinite(leftPos)) leftPos = rect.left;
+    if (!Number.isFinite(topPos)) topPos = rect.top;
+
+    if (rect.right > viewportWidth - padding) {
+        leftPos -= (rect.right - (viewportWidth - padding));
+    }
+    if (rect.left < padding) {
+        leftPos += (padding - rect.left);
+    }
+    if (rect.bottom > viewportHeight - padding) {
+        topPos -= (rect.bottom - (viewportHeight - padding));
+    }
+    if (rect.top < padding) {
+        topPos += (padding - rect.top);
+    }
+
+    menu.style.left = `${Math.max(padding, Math.round(leftPos))}px`;
+    menu.style.top = `${Math.max(padding, Math.round(topPos))}px`;
 }
 
 function createSectionFromSelection() {
@@ -1210,6 +2135,8 @@ function renderListItems() {
     const items = getSortedListItems();
     const searchQuery = (listSearchState.query || '').trim();
     const searchLower = searchQuery.toLowerCase();
+    const sectionIdsOrdered = items.filter(isListSectionItem).map(entry => entry.id);
+    cleanCollapsedListSections(sectionIdsOrdered);
     stack.innerHTML = '';
     const hasSections = items.some(isListSectionItem);
     let activeSectionBody = null;
@@ -1224,7 +2151,17 @@ function renderListItems() {
         const textValue = (item.text || '').toLowerCase();
         const linkLabel = (item.link_text || '').toLowerCase();
         const noteValue = (item.note || '').toLowerCase();
-        return textValue.includes(searchLower) || linkLabel.includes(searchLower) || noteValue.includes(searchLower);
+        const innerNoteValue = (item.inner_note || '').toLowerCase();
+        const scheduledValue = (normalizeListDateValue(item.scheduled_date) || '').toLowerCase();
+        const scheduledLabel = (formatListScheduledDate(item.scheduled_date) || '').toLowerCase();
+        return (
+            textValue.includes(searchLower) ||
+            linkLabel.includes(searchLower) ||
+            noteValue.includes(searchLower) ||
+            innerNoteValue.includes(searchLower) ||
+            scheduledValue.includes(searchLower) ||
+            scheduledLabel.includes(searchLower)
+        );
     };
 
     let sectionMatches = null;
@@ -1270,7 +2207,9 @@ function renderListItems() {
             section.className = 'list-section';
             const title = getListSectionTitle(item);
             const isEditing = listState.editingItemId === item.id;
-            if (title && !isEditing) {
+            const isCollapsed = !searchLower && ensureCollapsedSectionSet().has(item.id);
+            if (isCollapsed && !isEditing) section.classList.add('collapsed');
+            if (!isEditing) {
                 section.classList.add('has-title');
             } else {
                 section.classList.add('no-title');
@@ -1289,20 +2228,96 @@ function renderListItems() {
             } else {
                 const header = document.createElement('div');
                 header.className = 'list-section-header';
+                section.dataset.sectionId = String(item.id);
+                header.dataset.sectionId = String(item.id);
+                const sectionCount = sectionIdsOrdered.length;
+                const canEditSection = !listState.isArchived && !searchLower && !isListSelectionActive() && !listState.sectionReorderMode;
+                const canReorder = !listState.isArchived && !searchLower && !isListSelectionActive() && listState.sectionReorderMode && sectionCount > 1;
+                const sectionTitle = title || 'Untitled section';
+                const sectionItemCount = getListSectionItemCount(item.id, items);
+
+                const main = document.createElement('div');
+                main.className = 'list-section-header-main';
+
+                const toggleBtn = document.createElement('button');
+                toggleBtn.type = 'button';
+                toggleBtn.className = 'list-section-toggle';
+                toggleBtn.title = isCollapsed ? 'Expand section' : 'Collapse section';
+                toggleBtn.innerHTML = `<i class="fa-solid ${isCollapsed ? 'fa-chevron-right' : 'fa-chevron-down'}"></i>`;
+                toggleBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (listState.sectionReorderMode) return;
+                    if (Date.now() < listSectionReorderState.suppressClicksUntil) return;
+                    toggleListSectionCollapsed(item.id);
+                });
+                main.appendChild(toggleBtn);
+
+                const titleEl = document.createElement('span');
+                titleEl.className = 'list-section-header-title';
                 if (title) {
-                    appendHighlightedText(header, title, listSearchState.query);
+                    appendHighlightedText(titleEl, title, listState.isArchived ? '' : listSearchState.query);
                 } else {
-                    header.classList.add('empty');
+                    titleEl.textContent = sectionTitle;
                 }
+                main.appendChild(titleEl);
+
+                if (isCollapsed) {
+                    const summary = document.createElement('span');
+                    summary.className = 'list-section-summary';
+                    summary.textContent = `${sectionItemCount} item${sectionItemCount === 1 ? '' : 's'}`;
+                    main.appendChild(summary);
+                }
+
+                header.appendChild(main);
+
+                const actions = document.createElement('div');
+                actions.className = 'list-section-reorder-actions';
+
+                if (canEditSection) {
+                    const editBtn = document.createElement('button');
+                    editBtn.type = 'button';
+                    editBtn.className = 'list-section-reorder-btn';
+                    editBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
+                    editBtn.title = 'Rename section';
+                    editBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        listState.editingItemId = item.id;
+                        listState.insertionIndex = null;
+                        renderListItems();
+                    });
+                    actions.appendChild(editBtn);
+                }
+
+                if (canReorder) {
+                    section.classList.add('reorder-active');
+                    section.classList.add('reorder-target');
+                    section.addEventListener('dragover', handleSectionDragOver);
+                    section.addEventListener('dragleave', handleSectionDragLeave);
+                    section.addEventListener('drop', handleSectionDrop);
+                    const dragHandle = document.createElement('button');
+                    dragHandle.type = 'button';
+                    dragHandle.className = 'list-section-drag-handle';
+                    dragHandle.dataset.sectionId = String(item.id);
+                    dragHandle.dataset.sectionTitle = sectionTitle;
+                    dragHandle.setAttribute('draggable', 'true');
+                    dragHandle.title = `Drag to reorder section "${sectionTitle}"`;
+                    dragHandle.innerHTML = '<i class="fa-solid fa-grip-lines"></i><span>Drag</span>';
+                    dragHandle.addEventListener('click', (e) => e.stopPropagation());
+                    dragHandle.addEventListener('dragstart', handleSectionDragStart);
+                    dragHandle.addEventListener('dragend', handleSectionDragEnd);
+                    actions.appendChild(dragHandle);
+                }
+
+                if (actions.children.length) {
+                    header.appendChild(actions);
+                }
+
                 header.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    if (listState.isArchived) {
-                        showReadOnlyToast();
-                        return;
-                    }
-                    listState.editingItemId = item.id;
-                    listState.insertionIndex = null;
-                    renderListItems();
+                    if (listState.sectionReorderMode) return;
+                    if (Date.now() < listSectionReorderState.suppressClicksUntil) return;
+                    if (isListSelectionActive()) return;
+                    toggleListSectionCollapsed(item.id);
                 });
                 section.appendChild(header);
             }
@@ -1406,7 +2421,8 @@ function createListGap(insertIndex) {
     return gap;
 }
 
-const LIST_NOTE_LINK_PATTERN = /\[\[([^\]\n]+)\]\]|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
+const LIST_NOTE_LINK_PATTERN = /\[\[\[([^\]\n]+)\]\]\]|\[\[([^\]\n]+)\]\]|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
+const LIST_NOTE_INLINE_FORMAT_PATTERN = /(\*\*([^*\n]+)\*\*|__([^_\n]+)__|\*([^*\n]+)\*|_([^_\n]+)_|~~([^~\n]+)~~|`([^`\n]+)`)/g;
 
 function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1439,12 +2455,45 @@ function appendHighlightedText(target, text, query) {
     }
 }
 
-function appendListNoteTextWithLinks(target, text) {
-    const lines = String(text || '').split('\n');
-    lines.forEach((line, lineIndex) => {
-        if (lineIndex > 0) target.appendChild(document.createElement('br'));
-        appendListNoteLineWithLinks(target, line);
-    });
+function appendFormattedInlineText(target, text) {
+    const raw = String(text || '');
+    if (!raw) return;
+    LIST_NOTE_INLINE_FORMAT_PATTERN.lastIndex = 0;
+    let lastIndex = 0;
+    for (const match of raw.matchAll(LIST_NOTE_INLINE_FORMAT_PATTERN)) {
+        const matchIndex = match.index ?? 0;
+        if (matchIndex > lastIndex) {
+            appendHighlightedText(target, raw.slice(lastIndex, matchIndex), listSearchState.query);
+        }
+
+        let tag = null;
+        let content = '';
+        if (match[2] || match[3]) {
+            tag = 'strong';
+            content = match[2] || match[3] || '';
+        } else if (match[4] || match[5]) {
+            tag = 'em';
+            content = match[4] || match[5] || '';
+        } else if (match[6]) {
+            tag = 's';
+            content = match[6];
+        } else if (match[7]) {
+            tag = 'code';
+            content = match[7];
+        }
+
+        if (!tag || !content) {
+            appendHighlightedText(target, match[0], listSearchState.query);
+        } else {
+            const el = document.createElement(tag);
+            appendHighlightedText(el, content, listSearchState.query);
+            target.appendChild(el);
+        }
+        lastIndex = matchIndex + match[0].length;
+    }
+    if (lastIndex < raw.length) {
+        appendHighlightedText(target, raw.slice(lastIndex), listSearchState.query);
+    }
 }
 
 function appendListNoteLineWithLinks(target, line) {
@@ -1453,47 +2502,105 @@ function appendListNoteLineWithLinks(target, line) {
     for (const match of line.matchAll(LIST_NOTE_LINK_PATTERN)) {
         const matchIndex = match.index ?? 0;
         if (matchIndex > lastIndex) {
-            appendHighlightedText(target, line.slice(lastIndex, matchIndex), listSearchState.query);
+            appendFormattedInlineText(target, line.slice(lastIndex, matchIndex));
         }
-        if (match[1]) {
-            const title = match[1].trim();
+        if (match[1] || match[2]) {
+            const isListLink = !!match[1];
+            const title = (match[1] || match[2] || '').trim();
             if (title) {
                 const link = document.createElement('a');
                 link.className = 'note-link';
+                if (isListLink) link.classList.add('list-link');
                 link.dataset.noteTitle = title;
+                link.dataset.noteLinkType = isListLink ? 'list' : 'note';
                 link.setAttribute('href', '#');
-                appendHighlightedText(link, title, listSearchState.query);
+                appendFormattedInlineText(link, title);
                 target.appendChild(link);
             } else {
-                appendHighlightedText(target, match[0], listSearchState.query);
+                appendFormattedInlineText(target, match[0]);
             }
-        } else if (match[2] && match[3]) {
-            const label = match[2].trim();
-            const url = match[3].trim();
+        } else if (match[3] && match[4]) {
+            const label = match[3].trim();
+            const url = match[4].trim();
             if (label && url) {
                 const link = document.createElement('a');
                 link.className = 'external-link';
                 link.setAttribute('href', url);
                 link.setAttribute('target', '_blank');
                 link.setAttribute('rel', 'noopener noreferrer');
-                appendHighlightedText(link, label, listSearchState.query);
+                appendFormattedInlineText(link, label);
                 target.appendChild(link);
             } else {
-                appendHighlightedText(target, match[0], listSearchState.query);
+                appendFormattedInlineText(target, match[0]);
             }
         } else {
-            appendHighlightedText(target, match[0], listSearchState.query);
+            appendFormattedInlineText(target, match[0]);
         }
         lastIndex = matchIndex + match[0].length;
     }
     if (lastIndex < line.length) {
-        appendHighlightedText(target, line.slice(lastIndex), listSearchState.query);
+        appendFormattedInlineText(target, line.slice(lastIndex));
+    }
+}
+
+function appendListNoteTextWithLinks(target, text) {
+    const lines = String(text || '').split('\n');
+    let index = 0;
+    while (index < lines.length) {
+        const rawLine = lines[index];
+        if (!rawLine.trim()) {
+            target.appendChild(document.createElement('br'));
+            index += 1;
+            continue;
+        }
+
+        if (/^\s*[-*]\s+/.test(rawLine)) {
+            const ul = document.createElement('ul');
+            while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+                const li = document.createElement('li');
+                appendListNoteLineWithLinks(li, lines[index].replace(/^\s*[-*]\s+/, ''));
+                ul.appendChild(li);
+                index += 1;
+            }
+            target.appendChild(ul);
+            continue;
+        }
+
+        if (/^\s*\d+\.\s+/.test(rawLine)) {
+            const ol = document.createElement('ol');
+            while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+                const li = document.createElement('li');
+                appendListNoteLineWithLinks(li, lines[index].replace(/^\s*\d+\.\s+/, ''));
+                ol.appendChild(li);
+                index += 1;
+            }
+            target.appendChild(ol);
+            continue;
+        }
+
+        if (/^\s*>\s+/.test(rawLine)) {
+            const quote = document.createElement('blockquote');
+            while (index < lines.length && /^\s*>\s+/.test(lines[index])) {
+                if (quote.childNodes.length) quote.appendChild(document.createElement('br'));
+                appendListNoteLineWithLinks(quote, lines[index].replace(/^\s*>\s+/, ''));
+                index += 1;
+            }
+            target.appendChild(quote);
+            continue;
+        }
+
+        const line = document.createElement('div');
+        line.className = 'list-note-line';
+        appendListNoteLineWithLinks(line, rawLine);
+        target.appendChild(line);
+        index += 1;
     }
 }
 
 function createListPill(item) {
     const pill = document.createElement('div');
     const hasNote = !!(item.note && item.note.trim());
+    const hasInnerNote = !!(item.inner_note && item.inner_note.trim());
     const isExpanded = hasNote && listState.expandedItemId === item.id;
     const isSelected = listSelectionState.ids.has(item.id);
     pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}${isSelected ? ' selected' : ''}`;
@@ -1503,6 +2610,7 @@ function createListPill(item) {
     const textValue = (item.text || '').trim();
     const linkLabel = (item.link_text || '').trim();
     const linkUrl = (item.link_url || '').trim();
+    const scheduledDate = normalizeListDateValue(item.scheduled_date);
     const linkSameAsText = linkLabel && textValue && linkLabel === textValue;
     const searchQuery = (listSearchState.query || '').trim();
     const searchLower = searchQuery.toLowerCase();
@@ -1528,7 +2636,7 @@ function createListPill(item) {
 
     if (!linkSameAsText && textValue) {
         const textSpan = document.createElement('span');
-        appendHighlightedText(textSpan, textValue, searchQuery);
+        appendListNoteLineWithLinks(textSpan, textValue);
         content.appendChild(textSpan);
     }
 
@@ -1542,12 +2650,54 @@ function createListPill(item) {
         content.appendChild(link);
     }
 
-    if (hasNote) {
-        const noteBadge = document.createElement('span');
-        noteBadge.className = 'list-note-indicator';
-        noteBadge.title = 'Has note';
-        content.appendChild(noteBadge);
+    if (scheduledDate) {
+        const dateBadge = document.createElement('span');
+        const dateClass = isListDatePast(scheduledDate) ? 'past' : (isListDateToday(scheduledDate) ? 'today' : '');
+        dateBadge.className = `list-date-badge${dateClass ? ` ${dateClass}` : ''}`;
+        dateBadge.innerHTML = '<i class="fa-regular fa-calendar"></i>';
+        const label = document.createElement('span');
+        label.textContent = formatListScheduledDate(scheduledDate);
+        dateBadge.appendChild(label);
+        content.appendChild(dateBadge);
     }
+
+    if (hasNote || hasInnerNote) {
+        const noteBadgeWrap = document.createElement('span');
+        noteBadgeWrap.className = 'list-note-indicators';
+        if (hasNote && hasInnerNote) {
+            noteBadgeWrap.title = 'Has inline + attached notes';
+        } else if (hasNote) {
+            noteBadgeWrap.title = 'Has inline note';
+        } else {
+            noteBadgeWrap.title = 'Has attached note';
+        }
+        if (hasNote) {
+            const inlineDot = document.createElement('span');
+            inlineDot.className = 'list-note-indicator inline';
+            noteBadgeWrap.appendChild(inlineDot);
+        }
+        if (hasInnerNote) {
+            const attachedDot = document.createElement('span');
+            attachedDot.className = 'list-note-indicator attached';
+            noteBadgeWrap.appendChild(attachedDot);
+        }
+        content.appendChild(noteBadgeWrap);
+    }
+
+    content.addEventListener('click', (e) => {
+        if (isListSelectionActive()) return;
+        const noteLink = e.target.closest('a.note-link');
+        const externalLink = e.target.closest('a.external-link');
+        if (!noteLink && !externalLink) return;
+        e.stopPropagation();
+        e.preventDefault();
+        if (externalLink) {
+            const href = externalLink.getAttribute('href') || '';
+            if (href) window.open(href, '_blank', 'noopener,noreferrer');
+            return;
+        }
+        handleListNoteLinkClick(noteLink);
+    });
 
     pill.appendChild(content);
     if (hasNote) {
@@ -1589,6 +2739,26 @@ function createListPill(item) {
         showListItemActions(pill);
         openListItemMoveMenu(item.id, moveBtn);
     });
+    const noteBtn = document.createElement('button');
+    noteBtn.type = 'button';
+    noteBtn.className = `list-pill-action${hasInnerNote ? ' active' : ''}`;
+    noteBtn.title = hasInnerNote ? 'Open inner note' : 'Add inner note';
+    noteBtn.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
+    noteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isListSelectionActive()) return;
+        openListItemNoteModal(item.id);
+    });
+    const dateBtn = document.createElement('button');
+    dateBtn.type = 'button';
+    dateBtn.className = `list-pill-action${scheduledDate ? ' active' : ''}`;
+    dateBtn.title = scheduledDate ? 'Edit date' : 'Attach date';
+    dateBtn.innerHTML = '<i class="fa-regular fa-calendar"></i>';
+    dateBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isListSelectionActive()) return;
+        openListItemDateModal(item.id);
+    });
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'list-pill-action danger';
@@ -1613,6 +2783,8 @@ function createListPill(item) {
         });
     });
     actions.appendChild(moveBtn);
+    actions.appendChild(noteBtn);
+    actions.appendChild(dateBtn);
     actions.appendChild(deleteBtn);
     pill.appendChild(actions);
 
@@ -1621,6 +2793,9 @@ function createListPill(item) {
     let ignoreClick = false;
     const supportsTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
     const longPressMs = 450;
+    const clearTouchActive = () => {
+        pill.classList.remove('touch-active');
+    };
     const clearLongPress = () => {
         if (longPressTimer) {
             clearTimeout(longPressTimer);
@@ -1636,6 +2811,7 @@ function createListPill(item) {
         if (!supportsTouch || isListSelectionActive()) return;
         const touch = e.touches && e.touches[0];
         if (!touch) return;
+        pill.classList.add('touch-active');
         let startX = touch.clientX;
         let startY = touch.clientY;
         longPressTriggered = false;
@@ -1650,6 +2826,7 @@ function createListPill(item) {
             if (!moveTouch) return;
             if (Math.abs(moveTouch.clientX - startX) > 10 || Math.abs(moveTouch.clientY - startY) > 10) {
                 clearLongPress();
+                clearTouchActive();
                 if (touchMoveHandler) {
                     pill.removeEventListener('touchmove', touchMoveHandler);
                     touchMoveHandler = null;
@@ -1660,6 +2837,7 @@ function createListPill(item) {
     };
     const handleTouchEnd = () => {
         if (!supportsTouch || isListSelectionActive()) return;
+        clearTouchActive();
         clearLongPress();
         if (touchMoveHandler) {
             pill.removeEventListener('touchmove', touchMoveHandler);
@@ -1672,6 +2850,7 @@ function createListPill(item) {
     pill.addEventListener('touchcancel', handleTouchEnd);
 
     pill.addEventListener('click', () => {
+        clearTouchActive();
         if (ignoreClick) {
             ignoreClick = false;
             return;
@@ -2016,6 +3195,7 @@ async function loadListItems(options = {}) {
         const res = await fetch(`/api/notes/${listState.listId}/list-items`);
         if (!res.ok) throw new Error('Failed to load items');
         listState.items = await res.json();
+        updateListSectionReorderUI();
         renderListItems();
         if (focusPrimary) {
             const inputs = document.querySelectorAll('.list-pill-input textarea');

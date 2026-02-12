@@ -1,3 +1,110 @@
+let tasksFabExpanded = false;
+let tasksFabSelectedType = null;
+
+function initTasksFab() {
+    const fab = document.getElementById('tasks-fab');
+    const mainBtn = document.getElementById('tasks-fab-main');
+    const options = document.querySelectorAll('#tasks-fab .tasks-fab-option');
+    const input = document.getElementById('tasks-fab-input');
+    const submitBtn = document.getElementById('tasks-fab-submit');
+
+    if (!fab || !mainBtn) return;
+    if (fab.dataset.initialized === '1') return;
+    fab.dataset.initialized = '1';
+
+    const setExpanded = (expanded) => {
+        tasksFabExpanded = expanded;
+        fab.classList.toggle('expanded', expanded);
+        mainBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    };
+
+    mainBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (fab.classList.contains('input-mode')) {
+            closeTasksFab();
+            return;
+        }
+        setExpanded(!tasksFabExpanded);
+    });
+
+    options.forEach((option) => {
+        option.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tasksFabSelectedType = option.dataset.type || 'list';
+            setExpanded(false);
+            fab.classList.add('input-mode');
+            if (input) {
+                input.placeholder = `New ${tasksFabSelectedType} title...`;
+                setTimeout(() => input.focus(), 50);
+            }
+        });
+    });
+
+    if (submitBtn) {
+        submitBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            createListFromFab();
+        });
+    }
+
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                createListFromFab();
+            } else if (e.key === 'Escape') {
+                closeTasksFab();
+            }
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!fab.contains(e.target)) {
+            closeTasksFab();
+        }
+    });
+}
+
+function closeTasksFab() {
+    const fab = document.getElementById('tasks-fab');
+    const mainBtn = document.getElementById('tasks-fab-main');
+    const input = document.getElementById('tasks-fab-input');
+    if (!fab) return;
+
+    tasksFabExpanded = false;
+    tasksFabSelectedType = null;
+    fab.classList.remove('expanded', 'input-mode');
+    if (mainBtn) mainBtn.setAttribute('aria-expanded', 'false');
+    if (input) input.value = '';
+}
+
+async function createListFromFab() {
+    const input = document.getElementById('tasks-fab-input');
+    const title = input ? input.value.trim() : '';
+    if (!title || !tasksFabSelectedType) return;
+
+    try {
+        const res = await fetch('/api/lists', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, type: tasksFabSelectedType })
+        });
+
+        if (!res.ok) {
+            throw new Error('Failed to create list');
+        }
+
+        const newList = await res.json();
+        closeTasksFab();
+        window.location.href = `/list/${newList.id}`;
+    } catch (e) {
+        console.error('Error creating list:', e);
+        if (typeof showToast === 'function') {
+            showToast('Failed to create list. Please try again.', 'error');
+        }
+    }
+}
+
 // --- Bulk Selection ---
 
 // Initialize task selection manager (unified with other modules)
@@ -825,6 +932,11 @@ async function handleDrop(e) {
 }
 
 async function refreshListView() {
+    const preservedFilter = (typeof currentTaskFilter !== 'undefined' && currentTaskFilter) ? currentTaskFilter : 'all';
+    const preservedTags = (typeof selectedTagFilters !== 'undefined' && selectedTagFilters)
+        ? new Set(selectedTagFilters)
+        : new Set();
+
     try {
         const res = await fetch(window.location.href, {
             headers: { 'Accept': 'text/html' }
@@ -833,22 +945,50 @@ async function refreshListView() {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
         const newContainer = doc.getElementById('items-container');
-        document.getElementById('items-container').innerHTML = newContainer.innerHTML;
-        normalizePhaseParents();
-        organizePhaseDoneTasks();
-        organizePhaseBlockedTasks();
-        organizeLightListDoneTasks();
-        initTaskSelectionUI();
-        // Restore selection state after DOM refresh
-        const selectedIds = taskSelection ? taskSelection.getIds() : Array.from(selectedItems);
-        selectedIds.forEach(id => setTaskSelected(id, true, true));
-        updateBulkBar();
-        initDragAndDrop(); // Re-initialize drag and drop on new elements
-        repositionLinkedNoteChips();
-        restorePhaseVisibility();
-        applyTaskFilter();
+        const currentContainer = document.getElementById('items-container');
+        if (!newContainer || !currentContainer) {
+            throw new Error('Items container not found during refresh');
+        }
+
+        currentContainer.innerHTML = newContainer.innerHTML;
+
+        // Re-run list UI setup in isolated blocks so one failure does not skip filter restoration.
+        try { normalizePhaseParents(); } catch (e) { console.error('normalizePhaseParents failed:', e); }
+        try { organizePhaseDoneTasks(); } catch (e) { console.error('organizePhaseDoneTasks failed:', e); }
+        try { organizePhaseBlockedTasks(); } catch (e) { console.error('organizePhaseBlockedTasks failed:', e); }
+        try { organizeLightListDoneTasks(); } catch (e) { console.error('organizeLightListDoneTasks failed:', e); }
+        try {
+            if (typeof initTaskSelectionUI === 'function') initTaskSelectionUI();
+        } catch (e) {
+            console.error('initTaskSelectionUI failed:', e);
+        }
+
+        try {
+            const selectedIds = (typeof taskSelection !== 'undefined' && taskSelection && typeof taskSelection.getIds === 'function')
+                ? taskSelection.getIds()
+                : (typeof selectedItems !== 'undefined' && selectedItems ? Array.from(selectedItems) : []);
+            selectedIds.forEach(id => setTaskSelected(id, true, true));
+            updateBulkBar();
+        } catch (e) {
+            console.error('Selection restore failed:', e);
+        }
+
+        try { initDragAndDrop(); } catch (e) { console.error('initDragAndDrop failed:', e); }
+        try { repositionLinkedNoteChips(); } catch (e) { console.error('repositionLinkedNoteChips failed:', e); }
+        try { restorePhaseVisibility(); } catch (e) { console.error('restorePhaseVisibility failed:', e); }
     } catch (e) {
         console.error('Error refreshing list view:', e);
+    } finally {
+        // Always restore active filters after refresh attempts.
+        try {
+            if (typeof currentTaskFilter !== 'undefined') currentTaskFilter = preservedFilter;
+            if (typeof selectedTagFilters !== 'undefined') selectedTagFilters = new Set(preservedTags);
+            if (typeof syncTagFilterUI === 'function') syncTagFilterUI();
+            if (typeof setTaskFilter === 'function') setTaskFilter(currentTaskFilter);
+            else if (typeof applyTaskFilter === 'function') applyTaskFilter();
+        } catch (filterErr) {
+            console.error('Failed to reapply filters after refresh:', filterErr);
+        }
     }
 }
 
@@ -1654,4 +1794,5 @@ function hideAutocomplete() {
     autocompleteState.visible = false;
     autocompleteState.selectedIndex = 0;
 }
+
 

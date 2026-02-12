@@ -89,8 +89,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'planner', 'feed', 'quick-access', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'planner', 'feed', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
@@ -452,13 +452,11 @@ def bookmarks_page():
 
 @app.route('/planner')
 def planner_page():
-    from services.inline_routes import planner_page as _impl
-    return _impl()
+    return redirect('/notes', code=302)
 
 @app.route('/planner/folder/<int:folder_id>')
 def planner_folder_page(folder_id):
-    from services.inline_routes import planner_folder_page as _impl
-    return _impl(folder_id)
+    return redirect('/notes', code=302)
 
 @app.route('/feed')
 def feed_page():
@@ -731,70 +729,57 @@ def bookmark_detail(item_id):
 
 @app.route('/api/planner', methods=['GET'])
 def get_planner_data():
-    from services.planner_routes import get_planner_data as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 
 @app.route('/api/planner/folders', methods=['POST'])
 def create_planner_folder():
-    from services.inline_routes import create_planner_folder as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/folders/<int:folder_id>', methods=['PUT', 'DELETE'])
 def update_planner_folder(folder_id):
-    from services.inline_routes import update_planner_folder as _impl
-    return _impl(folder_id)
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/simple-items', methods=['POST'])
 def create_planner_simple_item():
-    from services.inline_routes import create_planner_simple_item as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/simple-items/<int:item_id>', methods=['PUT', 'DELETE'])
 def update_planner_simple_item(item_id):
-    from services.inline_routes import update_planner_simple_item as _impl
-    return _impl(item_id)
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/simple-items/<int:item_id>/to-recall', methods=['POST'])
 def planner_simple_item_to_recall(item_id):
-    from services.inline_routes import planner_simple_item_to_recall as _impl
-    return _impl(item_id)
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/groups', methods=['POST'])
 def create_planner_group():
-    from services.inline_routes import create_planner_group as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/groups/<int:group_id>', methods=['PUT', 'DELETE'])
 def update_planner_group(group_id):
-    from services.inline_routes import update_planner_group as _impl
-    return _impl(group_id)
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/multi-items', methods=['POST'])
 def create_planner_multi_item():
-    from services.planner_routes import create_planner_multi_item as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 
 @app.route('/api/planner/multi-items/<int:item_id>', methods=['PUT', 'DELETE'])
 def update_planner_multi_item(item_id):
-    from services.inline_routes import update_planner_multi_item as _impl
-    return _impl(item_id)
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/multi-items/order', methods=['POST'])
 def update_planner_multi_item_order():
-    from services.inline_routes import update_planner_multi_item_order as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/multi-lines', methods=['POST'])
 def create_planner_multi_line():
-    from services.inline_routes import create_planner_multi_line as _impl
-    return _impl()
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/planner/multi-lines/<int:line_id>', methods=['PUT', 'DELETE'])
 def update_planner_multi_line(line_id):
-    from services.inline_routes import update_planner_multi_line as _impl
-    return _impl(line_id)
+    return jsonify({'error': 'Planner module has been removed'}), 410
 
 @app.route('/api/feed', methods=['GET', 'POST'])
 def handle_feed():
