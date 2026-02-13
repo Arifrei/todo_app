@@ -170,6 +170,7 @@ def ensure_note_table(cur):
         # Create index on share_token
         cur.execute("CREATE INDEX IF NOT EXISTS idx_note_share_token ON note(share_token)")
         return
+    add_column(cur, "note", "user_id", "INTEGER", default_sql="(SELECT id FROM user ORDER BY id LIMIT 1)")
     add_column(cur, "note", "todo_item_id", "INTEGER")
     add_column(cur, "note", "calendar_event_id", "INTEGER")
     add_column(cur, "note", "planner_multi_item_id", "INTEGER")
@@ -262,6 +263,7 @@ def ensure_note_folder_table(cur):
         )
         print("[add] note_folder table created")
         return
+    add_column(cur, "note_folder", "user_id", "INTEGER", default_sql="(SELECT id FROM user ORDER BY id LIMIT 1)")
     add_column(cur, "note_folder", "parent_id", "INTEGER")
     add_column(cur, "note_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
@@ -931,3 +933,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

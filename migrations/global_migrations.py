@@ -65,6 +65,7 @@ def ensure_note(cur):
     if not table_exists(cur, "note"):
         print("[warn] note table missing; run baseline migrate.py first")
         return
+    add_column(cur, "note", "user_id", "INTEGER", default_sql="(SELECT id FROM user ORDER BY id LIMIT 1)")
     add_column(cur, "note", "todo_item_id", "INTEGER")
     add_column(cur, "note", "calendar_event_id", "INTEGER")
     add_column(cur, "note", "planner_multi_item_id", "INTEGER")
@@ -117,6 +118,7 @@ def ensure_note_folder(cur):
                 name VARCHAR(120) NOT NULL,
                 order_index INTEGER DEFAULT 0,
                 is_pin_protected BOOLEAN DEFAULT 0 NOT NULL,
+                archived_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -124,6 +126,7 @@ def ensure_note_folder(cur):
         )
         print("[add] note_folder table created")
         return
+    add_column(cur, "note_folder", "user_id", "INTEGER", default_sql="(SELECT id FROM user ORDER BY id LIMIT 1)")
     add_column(cur, "note_folder", "parent_id", "INTEGER")
     add_column(cur, "note_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
@@ -745,3 +748,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+

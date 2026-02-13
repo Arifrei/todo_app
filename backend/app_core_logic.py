@@ -910,7 +910,6 @@ def _rollover_incomplete_events():
     """Clone yesterday's incomplete events with rollover enabled into today."""
     with app.app_context():
         # Acquire distributed lock to prevent concurrent execution across workers
-        import os
         worker_id = os.getpid()
         lock_name = 'calendar_rollover'
 
@@ -1282,7 +1281,6 @@ def _send_daily_email_digest(target_day=None):
         return {'disabled': True}
     with app.app_context():
         # Acquire distributed lock to avoid duplicate sends across workers.
-        import os
         worker_id = os.getpid()
         lock_name = 'daily_email_digest'
         lock_acquired = False
