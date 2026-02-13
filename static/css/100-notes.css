@@ -1279,6 +1279,13 @@
     cursor: default;
 }
 
+
+.list-section-reorder-btn.danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+}
+
 .list-section-drag-handle {
     min-height: 22px;
     border: 1px dashed rgba(59, 130, 246, 0.5);
@@ -1498,9 +1505,14 @@ body.list-section-dragging .list-section-drag-handle {
     pointer-events: auto;
 }
 
-@media (hover: hover) and (pointer: fine) {
-    .list-pill:hover .list-pill-actions,
-    .list-pill:focus-within .list-pill-actions {
+.list-pill:focus-within .list-pill-actions {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* On hybrid devices (touch + mouse/trackpad), allow hover reveal too. */
+@media (hover: hover), (any-hover: hover) {
+    .list-pill:hover .list-pill-actions {
         opacity: 1;
         pointer-events: auto;
     }
@@ -1966,3 +1978,77 @@ body.list-section-dragging .list-section-drag-handle {
     }
 }
 
+
+
+/* Notes list editor mobile: title one-line, note stacked below when expanded/editing */
+@media (max-width: 768px) {
+    .list-pill {
+        padding: 0.55rem 0.8rem;
+        align-items: flex-start;
+    }
+
+    .list-pill.expanded {
+        padding: 0.55rem 0.8rem;
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .list-pill-content {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        white-space: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        text-overflow: clip;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .list-pill-content::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+        display: none;
+    }
+
+    .list-pill-content > span,
+    .list-pill-content > a,
+    .list-pill-content > .list-date-badge,
+    .list-pill-content > .list-note-indicators {
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+
+    .list-pill.expanded .list-pill-note,
+    .list-pill-input textarea,
+    .list-pill-input .list-pill-note-edit {
+        flex: 1 1 100%;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    .list-pill-input .list-pill-note-edit,
+    .list-pill.expanded .list-pill-note {
+        margin-left: 0.55rem;
+        width: calc(100% - 0.55rem);
+    }
+
+    .list-pill-input > textarea:not(.list-pill-note-edit) {
+        white-space: pre;
+        overflow-wrap: normal;
+        word-break: normal;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .list-pill-input > textarea:not(.list-pill-note-edit)::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+        display: none;
+    }
+}

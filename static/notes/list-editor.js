@@ -2114,6 +2114,31 @@ function deleteSelectedListItems() {
     });
 }
 
+function deleteListSection(sectionId) {
+    if (!sectionId) return;
+    const section = getListItemById(sectionId);
+    if (!section || !isListSectionItem(section)) return;
+
+    const title = getListSectionTitle(section) || 'Untitled section';
+    const sectionItemCount = getListSectionItemCount(sectionId);
+    const prompt = sectionItemCount > 0
+        ? `Delete section "${title}"? ${sectionItemCount} item(s) in this section will stay in the list.`
+        : `Delete section "${title}"?`;
+
+    openConfirmModal(prompt, async () => {
+        try {
+            await deleteListItem(sectionId);
+            if (listState.editingItemId === sectionId) listState.editingItemId = null;
+            listState.insertionIndex = null;
+            await loadListItems();
+            showToast('Section deleted', 'success', 1800);
+        } catch (err) {
+            console.error('Delete section failed:', err);
+            showToast('Could not delete section', 'error');
+        }
+    });
+}
+
 document.addEventListener('click', (e) => {
     if (activeListItemMenu && !e.target.closest('.list-item-menu')) {
         closeListItemMenu();
@@ -2286,6 +2311,16 @@ function renderListItems() {
                         renderListItems();
                     });
                     actions.appendChild(editBtn);
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.type = 'button';
+                    deleteBtn.className = 'list-section-reorder-btn danger';
+                    deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                    deleteBtn.title = 'Delete section';
+                    deleteBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteListSection(item.id);
+                    });
+                    actions.appendChild(deleteBtn);
                 }
 
                 if (canReorder) {
@@ -2889,6 +2924,7 @@ function createListInputRow(options) {
     row.className = `list-pill list-pill-input${mode === 'edit' ? ' expanded' : ''}`;
     const input = document.createElement('textarea');
     input.rows = 1;
+    input.wrap = 'off';
     input.value = value || '';
     input.placeholder = placeholder || '';
     let committed = false;
@@ -3357,7 +3393,7 @@ function renderListDuplicates() {
             if (item.section) {
                 const section = document.createElement('span');
                 section.className = 'list-duplicates-item-section';
-                section.textContent = `• ${item.section}`;
+                section.textContent = `\u2022 ${item.section}`;
                 text.appendChild(section);
             }
             main.appendChild(text);
@@ -3506,4 +3542,5 @@ async function ensureListEditorDependencies() {
         await loadListEditorScriptOnce('/static/notes/editor.js', 'editor');
     }
 }
+
 
