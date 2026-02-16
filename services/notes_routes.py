@@ -613,6 +613,7 @@ def note_list_items(note_id):
     import app as a
     Note = a.Note
     NoteListItem = a.NoteListItem
+    _sanitize_note_html = a._sanitize_note_html
     datetime = a.datetime
     db = a.db
     get_current_user = a.get_current_user
@@ -640,7 +641,8 @@ def note_list_items(note_id):
     if not text:
         return jsonify({'error': 'Item text required'}), 400
     note_text = (data.get('note') or '').strip() or None
-    inner_note = (data.get('inner_note') or '').strip() or None
+    raw_inner_note = (data.get('inner_note') or '').strip()
+    inner_note = _sanitize_note_html(raw_inner_note) if raw_inner_note else None
     link_text = (data.get('link_text') or '').strip() or None
     link_url = (data.get('link_url') or '').strip() or None
     scheduled_date = parse_day_value(data.get('scheduled_date')) if 'scheduled_date' in data else None
@@ -687,6 +689,7 @@ def note_list_item_detail(note_id, item_id):
     import app as a
     Note = a.Note
     NoteListItem = a.NoteListItem
+    _sanitize_note_html = a._sanitize_note_html
     _reindex_note_list_items = a._reindex_note_list_items
     datetime = a.datetime
     db = a.db
@@ -724,7 +727,8 @@ def note_list_item_detail(note_id, item_id):
     if 'note' in data:
         item.note = (data.get('note') or '').strip() or None
     if 'inner_note' in data:
-        item.inner_note = (data.get('inner_note') or '').strip() or None
+        raw_inner_note = (data.get('inner_note') or '').strip()
+        item.inner_note = _sanitize_note_html(raw_inner_note) if raw_inner_note else None
     if 'link_text' in data:
         item.link_text = (data.get('link_text') or '').strip() or None
     if 'link_url' in data:

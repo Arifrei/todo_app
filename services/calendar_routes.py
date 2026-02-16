@@ -109,6 +109,7 @@ def calendar_events():
     _schedule_reminder_job = a._schedule_reminder_job
     _task_conflicts_with_event = a._task_conflicts_with_event
     _task_conflicts_with_task = a._task_conflicts_with_task
+    _now_local = a._now_local
     date = a.date
     db = a.db
     get_current_user = a.get_current_user
@@ -126,7 +127,7 @@ def calendar_events():
     if request.method == 'GET' and (request.args.get('start') or request.args.get('end')):
         start_raw = request.args.get('start')
         end_raw = request.args.get('end')
-        start_day = parse_day_value(start_raw) if start_raw else date.today().replace(day=1)
+        start_day = parse_day_value(start_raw) if start_raw else _now_local().date().replace(day=1)
         if not start_day:
             return jsonify({'error': 'Invalid start date'}), 400
         if end_raw:
@@ -289,7 +290,7 @@ def calendar_events():
         })
 
     if request.method == 'GET':
-        day_str = request.args.get('day') or date.today().isoformat()
+        day_str = request.args.get('day') or _now_local().date().isoformat()
         day_obj = parse_day_value(day_str)
         if not day_obj:
             return jsonify({'error': 'Invalid day'}), 400
@@ -477,7 +478,7 @@ def calendar_events():
     if not title:
         return jsonify({'error': 'Title is required'}), 400
 
-    day_obj = parse_day_value(data.get('day') or date.today().isoformat())
+    day_obj = parse_day_value(data.get('day') or _now_local().date().isoformat())
     if not day_obj:
         return jsonify({'error': 'Invalid day'}), 400
 
@@ -647,6 +648,7 @@ def create_recurring_calendar_event():
     RecurringEvent = a.RecurringEvent
     _ensure_recurring_instances = a._ensure_recurring_instances
     _weekday_occurrence_in_month = a._weekday_occurrence_in_month
+    _now_local = a._now_local
     date = a.date
     db = a.db
     get_current_user = a.get_current_user
@@ -664,7 +666,7 @@ def create_recurring_calendar_event():
     if not title:
         return jsonify({'error': 'Title is required'}), 400
 
-    start_day = parse_day_value(data.get('day') or data.get('start_day') or date.today().isoformat())
+    start_day = parse_day_value(data.get('day') or data.get('start_day') or _now_local().date().isoformat())
     if not start_day:
         return jsonify({'error': 'Invalid start day'}), 400
 

@@ -3,6 +3,7 @@ import os
 from datetime import datetime, date, time
 from typing import Any, Dict, List, Optional, Sequence
 
+import pytz
 from flask import current_app
 from .ai_embeddings import embed_text, get_openai_client
 from .background_jobs import start_app_context_job
@@ -1447,8 +1448,13 @@ def run_ai_chat(user_id: int, messages: List[Dict[str, Any]], model: Optional[st
     model_name = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
     # Build message list with system prompt
-    today_iso = date.today().isoformat()
-    timezone = os.environ.get("DEFAULT_TIMEZONE", "UTC")
+    timezone = os.environ.get("DEFAULT_TIMEZONE", "America/New_York")
+    try:
+        tz = pytz.timezone(timezone)
+    except Exception:
+        timezone = "America/New_York"
+        tz = pytz.timezone(timezone)
+    today_iso = datetime.now(tz).date().isoformat()
     convo = [{"role": "system", "content": _build_system_prompt(today_iso, timezone, user_id)}]
     for m in messages:
         role = m.get("role")

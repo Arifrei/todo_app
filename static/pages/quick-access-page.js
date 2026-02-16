@@ -940,6 +940,7 @@ async function saveQuickAccessItem() {
 
     let url = '';
     let referenceId = null;
+    let calendarDateValue = '';
 
     if (type === 'custom') {
         url = document.getElementById('qa-url').value.trim();
@@ -976,35 +977,56 @@ async function saveQuickAccessItem() {
             showToast('Please select a date', 'warning');
             return;
         }
+        calendarDateValue = dateValue;
         url = `/calendar?day=${dateValue}&mode=day`;
     }
 
-    try {
-        const isEdit = !!qaEditingId;
-        const endpoint = isEdit ? `/api/quick-access/${qaEditingId}` : '/api/quick-access';
-        const method = isEdit ? 'PUT' : 'POST';
+    const isEdit = !!qaEditingId;
+    const endpoint = isEdit ? `/api/quick-access/${qaEditingId}` : '/api/quick-access';
+    const method = isEdit ? 'PUT' : 'POST';
+    const payload = {
+        title: title,
+        icon: icon,
+        url: url,
+        item_type: type,
+        reference_id: referenceId
+    };
+    const persistQuickAccess = async () => {
         const response = await fetch(endpoint, {
             method: method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                title: title,
-                icon: icon,
-                url: url,
-                item_type: type,
-                reference_id: referenceId
-            })
+            body: JSON.stringify(payload)
         });
+        if (!response.ok) throw new Error('Failed to save quick access item');
+        closeAddQuickAccessModal();
+        loadQuickAccessItems();
+        showToast(isEdit ? 'Quick access item updated' : 'Quick access item added', 'success');
+    };
 
-        if (response.ok) {
-            closeAddQuickAccessModal();
-            loadQuickAccessItems();
-            showToast(isEdit ? 'Quick access item updated' : 'Quick access item added', 'success');
-        } else {
-            showToast(`Failed to ${isEdit ? 'update' : 'add'} item`, 'error');
-        }
+    if (type === 'calendar' && calendarDateValue && typeof openCalendarMovePreviewModal === 'function') {
+        const movingLabel = title ? `"${title}"` : 'this quick access item';
+        await openCalendarMovePreviewModal({
+            targetDay: calendarDateValue,
+            movingLabel,
+            confirmLabel: isEdit ? 'Update item' : 'Add item',
+            onConfirm: async () => {
+                try {
+                    await persistQuickAccess();
+                } catch (error) {
+                    console.error('Failed to save quick access item:', error);
+                    showToast(`Failed to ${isEdit ? 'update' : 'add'} item`, 'error');
+                    throw error;
+                }
+            }
+        });
+        return;
+    }
+
+    try {
+        await persistQuickAccess();
     } catch (error) {
         console.error('Failed to save quick access item:', error);
-        showToast('Failed to save item', 'error');
+        showToast(`Failed to ${isEdit ? 'update' : 'add'} item`, 'error');
     }
 }
 

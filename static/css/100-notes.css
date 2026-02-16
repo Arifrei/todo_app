@@ -975,6 +975,37 @@
     font-family: inherit;
 }
 
+.note-editor-surface h1,
+.note-editor-surface h2,
+.note-editor-surface h3,
+.note-editor-surface h4,
+.note-editor-surface h5,
+.note-editor-surface h6 {
+    margin: 1rem 0 0.5rem;
+    line-height: 1.3;
+}
+
+.note-editor-surface pre {
+    background: #0f172a0d;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    margin: 0.8rem 0;
+}
+
+.note-editor-surface pre code {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-family: "Consolas", "Monaco", monospace;
+}
+
+.note-editor-surface hr {
+    border: 0;
+    border-top: 1px solid var(--border-color);
+    margin: 1rem 0;
+}
 .note-editor-surface input[type="checkbox"] {
     accent-color: var(--primary-color);
     margin-right: 0.35rem;
@@ -1068,7 +1099,14 @@
 
 .list-item-note-input {
     min-height: 210px;
-    resize: vertical;
+    max-height: 60vh;
+    overflow-y: auto;
+    white-space: normal;
+}
+
+.list-item-note-input[contenteditable="false"] {
+    background: #f8fafc;
+    cursor: not-allowed;
 }
 
 .list-editor-card {

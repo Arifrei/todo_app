@@ -1566,7 +1566,15 @@ function formatNoteDate(dateStr) {
     const hasTz = /[zZ]|[+-]\d{2}:\d{2}$/.test(dateStr);
     const normalized = hasTz ? dateStr : `${dateStr}Z`;
     const date = new Date(normalized);
-    return date.toLocaleString('en-US', { timeZone: USER_TIMEZONE });
+    return date.toLocaleString('en-US', {
+        timeZone: USER_TIMEZONE,
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+    });
 }
 
 async function setActiveNote(noteId, options = {}) {
@@ -1590,15 +1598,19 @@ async function setActiveNote(noteId, options = {}) {
     notesState.activeNoteId = noteId;
     titleInput.value = note.title || '';
     titleInput.placeholder = 'Untitled note';
-    editor.innerHTML = note.content || '';
+    const markdown = window.NoteMarkdown;
+    const renderedContent = markdown && typeof markdown.renderNoteContentForEditor === 'function'
+        ? markdown.renderNoteContentForEditor(note.content || '')
+        : (note.content || '');
+    editor.innerHTML = renderedContent;
     updatedLabel.textContent = `Updated ${formatNoteDate(note.updated_at)}`;
     notesState.activeSnapshot = {
         title: (note.title || '').trim(),
-        content: (note.content || '').trim()
+        content: (renderedContent || '').trim()
     };
     notesState.sessionSnapshot = {
         title: (note.title || '').trim(),
-        content: (note.content || '').trim()
+        content: (renderedContent || '').trim()
     };
     notesState.activeFolderId = note.folder_id || null;
     notesState.checkboxMode = false; // Reset checkbox mode when switching notes
@@ -1787,9 +1799,22 @@ async function saveCurrentNote(options = {}) {
         title = titleInput.placeholder || 'Untitled Note';
     }
 
+    const markdown = window.NoteMarkdown;
+    const currentContent = (editor.innerHTML || '').trim();
+    const normalizedContent = markdown && typeof markdown.normalizeNoteEditorHtml === 'function'
+        ? markdown.normalizeNoteEditorHtml(currentContent)
+        : currentContent;
+    const contentForSave = normalizedContent || currentContent;
+
+    if (contentForSave && contentForSave !== currentContent && !silent && !keepalive) {
+        editor.innerHTML = contentForSave;
+        bindNoteCheckboxes();
+        updateNoteToolbarStates();
+    }
+
     const payload = {
         title: title,
-        content: editor.innerHTML.trim(),
+        content: contentForSave,
         folder_id: notesState.activeFolderId
     };
     const plannerContext = notesState.activePlannerContext || getNotePlannerContext();
@@ -2021,37 +2046,43 @@ async function openShareNoteModal() {
     const note = notesState.notes.find(n => n.id === noteId);
     if (!note) return;
 
-    // Convert HTML content to plain text for sharing
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = note.content || '';
-    const plainText = tempDiv.textContent || tempDiv.innerText || '';
     const title = note.title || 'Untitled Note';
+    const shareText = typeof window.noteHtmlToShareText === 'function'
+        ? window.noteHtmlToShareText(note.content || '')
+        : (() => {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = note.content || '';
+            return tempDiv.textContent || tempDiv.innerText || '';
+        })();
+    const fileName = typeof window.buildShareTxtFileName === 'function'
+        ? window.buildShareTxtFileName(title, 'shared-note')
+        : 'shared-note.txt';
+    const fileText = `${title}\n\n${shareText}`.trim();
 
     // Use universal share function if available
     if (typeof window.universalShare === 'function') {
-        const result = await window.universalShare({ title, text: plainText });
+        const result = await window.universalShare({
+            title,
+            text: shareText,
+            fileName,
+            fileText,
+            allowClipboardFallback: false,
+            allowDownloadFallback: true,
+            preferWebFileShare: true,
+            requireFileShare: true
+        });
         if (result.cancelled) return;
         if (result.success) {
             if (result.method === 'clipboard') {
-                showToast('Note copied to clipboard', 'success', 2000);
+                showToast('Copied for sharing (browser limitation)', 'info', 2400);
+            } else if (result.method === 'download') {
+                showToast('Note file downloaded for sharing', 'success', 2400);
             }
             return;
         }
     }
 
-    // Fallback: Show modal with share options (for desktop or if native share fails)
-    const modal = document.getElementById('share-note-modal');
-    if (!modal) return;
-
-    modal.classList.add('active');
-    setupShareModalControls();
-
-    // Check if note is already shared
-    if (note.is_public && note.share_token) {
-        showShareLink(note.share_token);
-    } else {
-        hideShareLink();
-    }
+    showToast('Sharing is unavailable on this device/browser', 'error', 2600);
 }
 
 function setupShareModalControls() {
@@ -2081,12 +2112,14 @@ function setupShareModalControls() {
             const note = notesState.notes.find(n => n.id === notesState.activeNoteId);
             if (!note) return;
 
-            // Convert HTML to plain text
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = note.content || '';
-            const plainText = tempDiv.textContent || tempDiv.innerText || '';
-
-            const textToCopy = `${note.title || 'Untitled Note'}\n\n${plainText}`;
+            const shareText = typeof window.noteHtmlToShareText === 'function'
+                ? window.noteHtmlToShareText(note.content || '')
+                : (() => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = note.content || '';
+                    return tempDiv.textContent || tempDiv.innerText || '';
+                })();
+            const textToCopy = `${note.title || 'Untitled Note'}\n\n${shareText}`;
 
             try {
                 if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -2122,10 +2155,13 @@ function setupShareModalControls() {
             const note = notesState.notes.find(n => n.id === notesState.activeNoteId);
             if (!note) return;
 
-            // Convert HTML to plain text
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = note.content || '';
-            const plainText = tempDiv.textContent || tempDiv.innerText || '';
+            const plainText = typeof window.noteHtmlToShareText === 'function'
+                ? window.noteHtmlToShareText(note.content || '')
+                : (() => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = note.content || '';
+                    return tempDiv.textContent || tempDiv.innerText || '';
+                })();
 
             const subject = encodeURIComponent(note.title || 'Untitled Note');
             const body = encodeURIComponent(plainText);

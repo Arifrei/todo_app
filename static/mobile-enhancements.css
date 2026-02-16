@@ -38,6 +38,17 @@ textarea,
         min-width: 44px;
     }
 
+    /* Keep task-card overflow button compact to match Started/Done pill height */
+    .task-item:not(.phase) .task-actions-dropdown .btn-icon {
+        min-height: 26px;
+        min-width: 26px;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        margin: 0;
+        font-size: 0.75rem;
+    }
+
     .nav-links a {
         padding: 1rem;
         min-height: 48px;

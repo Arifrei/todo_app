@@ -45,6 +45,21 @@
     <div class="feed-grid" id="feed-grid"></div>
 </div>
 
+<div class="modal" id="feed-date-modal" role="dialog" aria-modal="true" aria-labelledby="feed-date-title">
+    <div class="modal-content" tabindex="-1">
+        <h2 id="feed-date-title">Item Date</h2>
+        <p id="feed-date-subtitle" class="u-muted-modal-msg">Set when to revisit this link.</p>
+        <div class="form-group">
+            <label for="feed-date-input">Date</label>
+            <input type="date" id="feed-date-input" class="form-control">
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="feed-date-clear-btn">Clear</button>
+            <button class="btn" type="button" id="feed-date-cancel-btn">Cancel</button>
+            <button class="btn btn-primary" type="button" id="feed-date-save-btn">Save</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block page_scripts %}

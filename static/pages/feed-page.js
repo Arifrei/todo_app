@@ -232,18 +232,48 @@ function formatFeedScheduledDate(dateStr) {
         : { month: 'short', day: 'numeric' });
 }
 
-async function openFeedDatePrompt(id) {
+let feedDateModalState = { itemId: null, itemTitle: '' };
+
+function closeFeedDateModal() {
+    const modal = document.getElementById('feed-date-modal');
+    if (modal) modal.classList.remove('active');
+    feedDateModalState.itemId = null;
+    feedDateModalState.itemTitle = '';
+}
+
+function openFeedDatePrompt(id) {
     const item = feedState.items.find(i => i.id === id);
-    if (!item) return;
-    const current = item.scheduled_date || '';
-    const raw = window.prompt('Set date (YYYY-MM-DD). Leave blank to clear.', current);
-    if (raw === null) return;
-    const value = raw.trim();
+    const modal = document.getElementById('feed-date-modal');
+    const subtitle = document.getElementById('feed-date-subtitle');
+    const input = document.getElementById('feed-date-input');
+    if (!item || !modal || !input) return;
+
+    feedDateModalState.itemId = id;
+    feedDateModalState.itemTitle = (item.title || '').trim();
+    input.value = item.scheduled_date || '';
+    if (subtitle) {
+        const title = (item.title || '').trim();
+        subtitle.textContent = title
+            ? `Set when to revisit "${title}".`
+            : 'Set when to revisit this link.';
+    }
+    modal.classList.add('active');
+    setTimeout(() => input.focus(), 0);
+}
+
+async function saveFeedDateFromModal(clearDate = false) {
+    const id = feedDateModalState.itemId;
+    const itemTitle = feedDateModalState.itemTitle || '';
+    const input = document.getElementById('feed-date-input');
+    if (!id || !input) return;
+
+    const value = clearDate ? '' : (input.value || '').trim();
     if (value && !parseFeedDateValue(value)) {
         showToast('Use date format YYYY-MM-DD', 'error');
         return;
     }
-    try {
+
+    const persistDate = async () => {
         const res = await fetch(`/api/feed/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -253,8 +283,33 @@ async function openFeedDatePrompt(id) {
         const updated = await res.json();
         const idx = feedState.items.findIndex(i => i.id === id);
         if (idx !== -1) feedState.items[idx] = updated;
+
+        closeFeedDateModal();
         renderFeedGrid();
         showToast(value ? 'Date set' : 'Date cleared', 'success');
+    };
+
+    if (value && typeof openCalendarMovePreviewModal === 'function') {
+        const movingLabel = itemTitle ? `"${itemTitle}"` : 'this feed item';
+        await openCalendarMovePreviewModal({
+            targetDay: value,
+            movingLabel,
+            confirmLabel: 'Save date',
+            onConfirm: async () => {
+                try {
+                    await persistDate();
+                } catch (err) {
+                    console.error(err);
+                    showToast('Could not update date', 'error');
+                    throw err;
+                }
+            }
+        });
+        return;
+    }
+
+    try {
+        await persistDate();
     } catch (err) {
         console.error(err);
         showToast('Could not update date', 'error');
@@ -610,6 +665,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const stateConfirm = document.getElementById('feed-state-confirm');
     const stateCancel = document.getElementById('feed-state-cancel');
     const stateInput = document.getElementById('feed-state-input');
+    const feedDateModal = document.getElementById('feed-date-modal');
+    const feedDateInput = document.getElementById('feed-date-input');
+    const feedDateSaveBtn = document.getElementById('feed-date-save-btn');
+    const feedDateCancelBtn = document.getElementById('feed-date-cancel-btn');
+    const feedDateClearBtn = document.getElementById('feed-date-clear-btn');
 
     function updateAddButtonState(isOpen) {
         if (!addBtn) return;
@@ -662,6 +722,45 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    if (feedDateSaveBtn) {
+        feedDateSaveBtn.addEventListener('click', () => saveFeedDateFromModal(false));
+    }
+
+    if (feedDateCancelBtn) {
+        feedDateCancelBtn.addEventListener('click', () => closeFeedDateModal());
+    }
+
+    if (feedDateClearBtn) {
+        feedDateClearBtn.addEventListener('click', () => saveFeedDateFromModal(true));
+    }
+
+    if (feedDateInput) {
+        feedDateInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveFeedDateFromModal(false);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                closeFeedDateModal();
+            }
+        });
+    }
+
+    if (feedDateModal) {
+        feedDateModal.addEventListener('click', (e) => {
+            if (e.target === feedDateModal) {
+                closeFeedDateModal();
+            }
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (feedDateModal && feedDateModal.classList.contains('active')) {
+            closeFeedDateModal();
+        }
+    });
 
     const filterSelected = document.getElementById('feed-filter-selected');
     if (filterSelected) {

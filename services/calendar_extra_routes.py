@@ -22,8 +22,8 @@ def list_recurring_events():
             'description': r.description,
             'start_day': r.start_day.isoformat() if r.start_day else None,
             'end_day': r.end_day.isoformat() if r.end_day else None,
-            'start_time': r.start_time.strftime('%H:%M') if r.start_time else None,
-            'end_time': r.end_time.strftime('%H:%M') if r.end_time else None,
+            'start_time': r.start_time.strftime('%I:%M %p') if r.start_time else None,
+            'end_time': r.end_time.strftime('%I:%M %p') if r.end_time else None,
             'priority': r.priority,
             'is_event': r.is_event,
             'reminder_minutes_before': r.reminder_minutes_before,
@@ -47,7 +47,7 @@ def reorder_calendar_events():
         return jsonify({'error': 'No user selected'}), 401
     data = request.json or {}
     ids = data.get('ids') or []
-    day_obj = parse_day_value(data.get('day') or date.today().isoformat())
+    day_obj = parse_day_value(data.get('day') or _now_local().date().isoformat())
     if not ids or not isinstance(ids, list):
         return jsonify({'error': 'ids array required'}), 400
     if not day_obj:
@@ -88,7 +88,7 @@ def send_digest_now():
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    day_obj = parse_day_value(request.json.get('day') if request.json else None) or date.today()
+    day_obj = parse_day_value(request.json.get('day') if request.json else None) or _now_local().date()
     stats = _send_daily_email_digest(target_day=day_obj) or {}
     payload = {'status': 'sent', 'day': day_obj.isoformat()}
     payload.update(stats)

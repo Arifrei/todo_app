@@ -1075,38 +1075,77 @@ async function handleNoteMenuShare(noteId) {
     }
 
     if (isListNote) {
-        await shareListContent({
-            title: note.title || 'Untitled List',
-            items: note.items || [],
-            checkboxMode: !!note.checkbox_mode
-        });
+        const title = note.title || 'Untitled List';
+        const shareText = typeof window.buildListShareTextForShare === 'function'
+            ? window.buildListShareTextForShare(note.items || [], !!note.checkbox_mode)
+            : '';
+        const fileName = typeof window.buildShareTxtFileName === 'function'
+            ? window.buildShareTxtFileName(title, 'shared-list')
+            : 'shared-list.txt';
+        const fileText = `${title}\n\n${shareText}`.trim();
+
+        if (typeof window.universalShare === 'function') {
+            const result = await window.universalShare({
+                title,
+                text: shareText,
+                fileName,
+                fileText,
+                allowClipboardFallback: false,
+                allowDownloadFallback: true,
+                preferWebFileShare: true,
+                requireFileShare: true
+            });
+            if (result.cancelled) return;
+            if (result.success) {
+                if (result.method === 'clipboard') {
+                    showToast('List copied to clipboard', 'success', 2000);
+                } else if (result.method === 'download') {
+                    showToast('List file downloaded for sharing', 'success', 2200);
+                }
+                return;
+            }
+        }
+        showToast('Could not share list on this device', 'error', 2200);
         return;
     }
 
-    // Convert HTML content to plain text for sharing
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = note.content || '';
-    const plainText = tempDiv.textContent || tempDiv.innerText || '';
     const title = note.title || 'Untitled Note';
+    const shareText = typeof window.noteHtmlToShareText === 'function'
+        ? window.noteHtmlToShareText(note.content || '')
+        : (() => {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = note.content || '';
+            return tempDiv.textContent || tempDiv.innerText || '';
+        })();
+    const fileName = typeof window.buildShareTxtFileName === 'function'
+        ? window.buildShareTxtFileName(title, 'shared-note')
+        : 'shared-note.txt';
+    const fileText = `${title}\n\n${shareText}`.trim();
 
     // Use universal share function
     if (typeof window.universalShare === 'function') {
-        const result = await window.universalShare({ title, text: plainText });
+        const result = await window.universalShare({
+            title,
+            text: shareText,
+            fileName,
+            fileText,
+            allowClipboardFallback: false,
+            allowDownloadFallback: true,
+            preferWebFileShare: true,
+            requireFileShare: true
+        });
         if (result.cancelled) return;
-        if (result.success && result.method === 'clipboard') {
-            showToast('Note copied to clipboard', 'success', 2000);
+        if (result.success) {
+            if (result.method === 'clipboard') {
+                showToast('Note copied to clipboard', 'success', 2000);
+            } else if (result.method === 'download') {
+                showToast('Note file downloaded for sharing', 'success', 2200);
+            }
+            return;
         }
-        return;
     }
 
-    // Fallback if universalShare not available
-    const shareText = `${title}\n\n${plainText}`.trim();
-    try {
-        await navigator.clipboard.writeText(shareText);
-        showToast('Note copied to clipboard', 'success', 2000);
-    } catch (err) {
-        showToast('Could not share note', 'error', 2000);
-    }
+    showToast('Could not share note on this device', 'error', 2200);
 }
 
 async function handleNoteMenuDuplicate(noteId) {

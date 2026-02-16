@@ -224,6 +224,157 @@ function formatReminderMinutes(minutes) {
     return `${total}m`;
 }
 
+const CALENDAR_MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+function calendarEscapeHtml(text) {
+    if (typeof escapeHtml === 'function') {
+        return escapeHtml(text);
+    }
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeCalendarLinkHref(rawHref) {
+    const href = String(rawHref || '').trim();
+    if (!href) return null;
+    if (/^https?:\/\//i.test(href)) return href;
+    if (/^mailto:/i.test(href)) return href;
+    if (href.startsWith('/')) return href;
+    return null;
+}
+
+function hasCalendarMarkdownLinks(text) {
+    CALENDAR_MARKDOWN_LINK_PATTERN.lastIndex = 0;
+    return CALENDAR_MARKDOWN_LINK_PATTERN.test(String(text || ''));
+}
+
+function renderCalendarLinkedTextHtml(text) {
+    const source = String(text || '');
+    CALENDAR_MARKDOWN_LINK_PATTERN.lastIndex = 0;
+    let html = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = CALENDAR_MARKDOWN_LINK_PATTERN.exec(source)) !== null) {
+        html += calendarEscapeHtml(source.slice(lastIndex, match.index));
+        const label = calendarEscapeHtml((match[1] || '').trim() || match[2] || '');
+        const href = normalizeCalendarLinkHref(match[2]);
+        if (!href) {
+            html += calendarEscapeHtml(match[0]);
+        } else {
+            const external = /^https?:\/\//i.test(href) || /^mailto:/i.test(href);
+            html += `<a class="calendar-inline-link" href="${calendarEscapeHtml(href)}"${external ? ' target="_blank" rel="noopener noreferrer"' : ''}>${label}</a>`;
+        }
+        lastIndex = match.index + match[0].length;
+    }
+    html += calendarEscapeHtml(source.slice(lastIndex));
+    return html;
+}
+
+function setCalendarLinkedText(element, text, options = {}) {
+    if (!element) return;
+    const {
+        stopPropagation = false
+    } = options;
+    element.innerHTML = renderCalendarLinkedTextHtml(text);
+    if (stopPropagation) {
+        element.querySelectorAll('a.calendar-inline-link').forEach((anchor) => {
+            anchor.addEventListener('click', (event) => {
+                event.stopPropagation();
+            });
+        });
+    }
+}
+
+function protectCalendarMarkdownLinks(text) {
+    const matches = [];
+    CALENDAR_MARKDOWN_LINK_PATTERN.lastIndex = 0;
+    const maskedText = String(text || '').replace(CALENDAR_MARKDOWN_LINK_PATTERN, (match) => {
+        const token = `__CAL_LINK_${matches.length}__`;
+        matches.push({ token, match });
+        return token;
+    });
+    return { maskedText, matches };
+}
+
+function restoreCalendarMarkdownLinks(text, matches) {
+    let restored = String(text || '');
+    (matches || []).forEach(({ token, match }) => {
+        restored = restored.split(token).join(match);
+    });
+    return restored;
+}
+
+function appendCalendarEditableTitle(titleWrap, options) {
+    const {
+        getValue,
+        placeholder = '',
+        ariaLabel = 'Edit title',
+        onSave
+    } = options || {};
+    const currentTitle = String((typeof getValue === 'function' ? getValue() : '') || '');
+    if (!hasCalendarMarkdownLinks(currentTitle)) {
+        const titleInput = document.createElement('input');
+        titleInput.type = 'text';
+        titleInput.value = currentTitle;
+        titleInput.placeholder = placeholder;
+        titleInput.setAttribute('aria-label', ariaLabel);
+        titleInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                titleInput.blur();
+            }
+        });
+        titleInput.addEventListener('blur', () => {
+            const latest = String((typeof getValue === 'function' ? getValue() : '') || '');
+            const next = titleInput.value.trim() || latest;
+            if (next !== latest && typeof onSave === 'function') {
+                onSave(next);
+            }
+        });
+        titleWrap.appendChild(titleInput);
+        return;
+    }
+
+    const titleRich = document.createElement('div');
+    titleRich.className = 'calendar-title-rich calendar-title-rich-editable';
+    titleRich.tabIndex = 0;
+    titleRich.setAttribute('role', 'button');
+    titleRich.setAttribute('aria-label', ariaLabel);
+    setCalendarLinkedText(titleRich, currentTitle || placeholder || 'Untitled', { stopPropagation: true });
+
+    const openEditor = () => {
+        const latest = String((typeof getValue === 'function' ? getValue() : '') || '');
+        openCalendarPrompt({
+            title: 'Edit title',
+            message: 'Use [text](https://url) to keep links clickable.',
+            defaultValue: latest,
+            type: 'text',
+            onSubmit: (value) => {
+                const next = String(value || '').trim() || latest;
+                if (next !== latest && typeof onSave === 'function') {
+                    onSave(next);
+                }
+            }
+        });
+    };
+
+    titleRich.addEventListener('dblclick', (event) => {
+        event.stopPropagation();
+        openEditor();
+    });
+    titleRich.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openEditor();
+        }
+    });
+    titleWrap.appendChild(titleRich);
+}
+
 function getCalendarNoteListItemUrl(ev) {
     if (!ev || !ev.note_id) return '/notes';
     return `/notes/${ev.note_id}`;
@@ -231,6 +382,151 @@ function getCalendarNoteListItemUrl(ev) {
 
 function openCalendarNoteListItem(ev) {
     window.location.href = getCalendarNoteListItemUrl(ev);
+}
+
+function buildCalendarMovePreviewMeta(ev) {
+    const meta = [];
+    if (ev && ev.start_time) {
+        const start = formatTimeDisplay(ev.start_time);
+        const end = ev.end_time ? formatTimeDisplay(ev.end_time) : '';
+        meta.push(end ? `${start}-${end}` : start);
+    } else {
+        meta.push('No time');
+    }
+    if (ev && ev.is_phase) {
+        meta.push('Phase');
+    } else if (ev && ev.is_group) {
+        meta.push('Group');
+    } else if (ev && ev.is_event) {
+        meta.push('Event');
+    } else {
+        meta.push('Task');
+    }
+    if (ev && ev.status === 'done') meta.push('Done');
+    if (ev && ev.status === 'canceled') meta.push('Canceled');
+    return meta.join(' - ');
+}
+
+function renderCalendarMovePreviewItems(listEl, events) {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (!Array.isArray(events) || !events.length) {
+        const empty = document.createElement('div');
+        empty.className = 'calendar-move-preview-state';
+        empty.textContent = 'No items are scheduled on this day yet.';
+        listEl.appendChild(empty);
+        return;
+    }
+    events.forEach((ev) => {
+        const row = document.createElement('div');
+        row.className = `calendar-move-preview-item ${ev && ev.status === 'done' ? 'done' : ''} ${ev && ev.status === 'canceled' ? 'canceled' : ''}`;
+
+        const dot = document.createElement('span');
+        dot.className = `calendar-move-preview-dot priority-${(ev && ev.priority) || 'medium'}`;
+        row.appendChild(dot);
+
+        const body = document.createElement('div');
+        body.className = 'calendar-move-preview-body';
+
+        const title = document.createElement('div');
+        title.className = 'calendar-move-preview-title';
+        title.textContent = (ev && ev.title) ? ev.title : 'Untitled';
+        body.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'calendar-move-preview-meta';
+        meta.textContent = buildCalendarMovePreviewMeta(ev);
+        body.appendChild(meta);
+
+        row.appendChild(body);
+        listEl.appendChild(row);
+    });
+}
+
+async function fetchCalendarDayPreviewEvents(dayStr) {
+    if (!dayStr) return [];
+    const response = await fetch(`/api/calendar/events?day=${encodeURIComponent(dayStr)}`);
+    if (response.status === 401) {
+        window.location.href = '/select-user';
+        return [];
+    }
+    if (!response.ok) {
+        throw new Error('Could not load day preview.');
+    }
+    const payload = await response.json();
+    return Array.isArray(payload) ? payload : [];
+}
+
+async function openCalendarMovePreviewModal({ targetDay, movingLabel = '', excludeEventIds = [], onConfirm, confirmLabel = 'Move here' }) {
+    const modal = document.getElementById('calendar-move-preview-modal');
+    const titleEl = document.getElementById('calendar-move-preview-title');
+    const movingEl = document.getElementById('calendar-move-preview-moving');
+    const summaryEl = document.getElementById('calendar-move-preview-summary');
+    const listEl = document.getElementById('calendar-move-preview-list');
+    const confirmBtn = document.getElementById('calendar-move-preview-confirm');
+    const cancelBtn = document.getElementById('calendar-move-preview-cancel');
+
+    if (!modal || !titleEl || !movingEl || !summaryEl || !listEl || !confirmBtn || !cancelBtn) {
+        if (typeof onConfirm === 'function') await onConfirm();
+        return;
+    }
+
+    const initialConfirmText = confirmLabel || confirmBtn.textContent || 'Move here';
+    const close = () => {
+        modal.classList.remove('active');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = initialConfirmText;
+        cancelBtn.onclick = null;
+        confirmBtn.onclick = null;
+        modal.onclick = null;
+    };
+
+    titleEl.textContent = `Move to ${formatCalendarLabel(targetDay)}?`;
+    movingEl.textContent = movingLabel ? `Moving ${movingLabel}.` : 'Review this day before moving.';
+    summaryEl.textContent = 'Loading items for this day...';
+    listEl.innerHTML = '<div class="calendar-move-preview-state">Loading...</div>';
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = initialConfirmText;
+    modal.classList.add('active');
+
+    cancelBtn.onclick = close;
+    modal.onclick = (e) => {
+        if (e.target === modal) close();
+    };
+    confirmBtn.onclick = async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Moving...';
+        try {
+            if (typeof onConfirm === 'function') {
+                await onConfirm();
+            }
+            close();
+        } catch (error) {
+            console.error('Calendar move failed:', error);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = initialConfirmText;
+        }
+    };
+
+    try {
+        const rawEvents = await fetchCalendarDayPreviewEvents(targetDay);
+        const excluded = new Set(
+            (excludeEventIds || [])
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id))
+        );
+        const events = rawEvents.filter((ev) => !excluded.has(Number(ev.id)));
+        renderCalendarMovePreviewItems(listEl, events);
+        summaryEl.textContent = events.length === 1
+            ? '1 item is already scheduled on this day.'
+            : `${events.length} items are already scheduled on this day.`;
+    } catch (error) {
+        console.error('Calendar move preview load failed:', error);
+        summaryEl.textContent = 'Could not load this day preview. You can still continue.';
+        listEl.innerHTML = '<div class="calendar-move-preview-state error">Preview unavailable.</div>';
+    }
+
+    confirmBtn.disabled = false;
 }
 
 function openCalendarMovePrompt(ev) {
@@ -242,13 +538,23 @@ function openCalendarMovePrompt(ev) {
         defaultValue: currentDay,
         onSubmit: async (val) => {
             if (!val) return;
-            if (ev.is_task_link && ev.task_id) {
-                await updateLinkedTaskDueDate(ev.task_id, val);
-                await loadCalendarDay(calendarState.selectedDay);
-                if (calendarState.monthCursor) await loadCalendarMonth();
-                return;
-            }
-            await updateCalendarEvent(ev.id, { day: val }, { skipReload: false, skipMonth: false });
+            const eventId = Number(ev && ev.id);
+            const excludeEventIds = (!ev.is_task_link && Number.isFinite(eventId)) ? [eventId] : [];
+            const movingLabel = ev && ev.title ? `"${ev.title}"` : 'this item';
+            await openCalendarMovePreviewModal({
+                targetDay: val,
+                movingLabel,
+                excludeEventIds,
+                onConfirm: async () => {
+                    if (ev.is_task_link && ev.task_id) {
+                        await updateLinkedTaskDueDate(ev.task_id, val);
+                        await loadCalendarDay(calendarState.selectedDay);
+                        if (calendarState.monthCursor) await loadCalendarMonth();
+                        return;
+                    }
+                    await updateCalendarEvent(ev.id, { day: val }, { skipReload: false, skipMonth: false });
+                }
+            });
         }
     });
 }
@@ -336,11 +642,16 @@ function renderCalendarMonth() {
         previews.forEach(ev => {
             const row = document.createElement('div');
             row.className = `calendar-month-event ${ev.is_phase ? 'phase' : ''} ${ev.status === 'done' ? 'done' : ''} ${ev.status === 'canceled' ? 'canceled' : ''}`;
-            const time = ev.start_time ? ev.start_time.slice(0, 5) + (ev.end_time ? `-${ev.end_time.slice(0, 5)}` : '') : '';
+            const time = ev.start_time ? formatTimeDisplay(ev.start_time) + (ev.end_time ? `-${formatTimeDisplay(ev.end_time)}` : '') : '';
             row.innerHTML = `
                 <span class="dot priority-${ev.priority || 'medium'}"></span>
                 <span class="title">${time ? time + ' · ' : ''}${ev.title || ''}</span>
             `;
+            const titleEl = row.querySelector('.title');
+            if (titleEl) {
+                const timePrefix = time ? `${calendarEscapeHtml(time)} &middot; ` : '';
+                titleEl.innerHTML = `${timePrefix}${renderCalendarLinkedTextHtml(ev.title || '')}`;
+            }
             eventsWrap.appendChild(row);
         });
         if (eventsForDay.length > previews.length) {
@@ -1032,7 +1343,7 @@ async function saveRecurringModal() {
         payload.interval_unit = unitEl ? unitEl.value : 'days';
     }
 
-    try {
+    const persistRecurring = async () => {
         const url = isEdit ? `/api/calendar/recurring/${editId}` : '/api/calendar/recurring';
         const method = isEdit ? 'PUT' : 'POST';
         const res = await fetch(url, {
@@ -1052,6 +1363,29 @@ async function saveRecurringModal() {
             await loadCalendarDay(calendarState.selectedDay);
         }
         await loadCalendarMonth();
+    };
+
+    if (startDay && typeof openCalendarMovePreviewModal === 'function') {
+        const movingLabel = `recurring item "${title}"`;
+        await openCalendarMovePreviewModal({
+            targetDay: startDay,
+            movingLabel,
+            confirmLabel: isEdit ? 'Update recurring' : 'Create recurring',
+            onConfirm: async () => {
+                try {
+                    await persistRecurring();
+                } catch (e) {
+                    console.error(`Error ${isEdit ? 'updating' : 'creating'} recurring item:`, e);
+                    showToast(`Could not ${isEdit ? 'update' : 'create'} recurring item.`, 'error');
+                    throw e;
+                }
+            }
+        });
+        return;
+    }
+
+    try {
+        await persistRecurring();
     } catch (e) {
         console.error(`Error ${isEdit ? 'updating' : 'creating'} recurring item:`, e);
         showToast(`Could not ${isEdit ? 'update' : 'create'} recurring item.`, 'error');
@@ -1388,7 +1722,7 @@ function renderDayTimelinePanel(allItems) {
         time.textContent = formatTimeRange(ev) || 'Timed';
         const title = document.createElement('span');
         title.className = 'title';
-        title.textContent = ev.title || 'Untitled';
+        setCalendarLinkedText(title, ev.title || 'Untitled', { stopPropagation: true });
         block.append(time, title);
         block.onclick = () => openTimelineItemTimeEditor(ev);
         track.appendChild(block);
@@ -1409,7 +1743,7 @@ function renderDayTimelinePanel(allItems) {
         row.className = `calendar-unscheduled-item ${isTimelineOnly ? 'timeline-only' : ''}`;
         const title = document.createElement('span');
         title.className = 'title';
-        title.textContent = ev.title || 'Untitled';
+        setCalendarLinkedText(title, ev.title || 'Untitled', { stopPropagation: true });
         const hint = document.createElement('span');
         hint.className = 'hint';
         hint.textContent = isTimelineOnly ? 'timeline only' : 'tap to add time';
@@ -1552,17 +1886,12 @@ function renderCalendarEvents() {
             row.classList.add('task-link-row');
             const titleWrap = document.createElement('div');
             titleWrap.className = 'calendar-title task-link-title';
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.value = ev.title;
-            titleInput.readOnly = true;
-            titleInput.setAttribute('aria-label', 'Open task');
-            titleWrap.appendChild(titleInput);
+            const titleText = document.createElement('div');
+            titleText.className = 'calendar-title-rich';
+            titleText.setAttribute('aria-label', 'Open task');
+            setCalendarLinkedText(titleText, ev.title || 'Untitled', { stopPropagation: true });
+            titleWrap.appendChild(titleText);
             titleWrap.addEventListener('click', () => {
-                window.location.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
-            });
-            titleInput.addEventListener('click', (e) => {
-                e.preventDefault();
                 window.location.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
             });
 
@@ -1741,19 +2070,14 @@ function renderCalendarEvents() {
 
             const titleWrap = document.createElement('div');
             titleWrap.className = 'calendar-title';
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.value = ev.title;
-            titleInput.readOnly = true;
-            titleInput.setAttribute('aria-label', 'Open in planner');
-            titleWrap.appendChild(titleInput);
+            const titleText = document.createElement('div');
+            titleText.className = 'calendar-title-rich';
+            titleText.setAttribute('aria-label', 'Open in planner');
+            setCalendarLinkedText(titleText, ev.title || 'Untitled', { stopPropagation: true });
+            titleWrap.appendChild(titleText);
 
             const plannerUrl = ev.planner_folder_id ? `/planner/folder/${ev.planner_folder_id}` : '/planner';
             titleWrap.addEventListener('click', () => {
-                window.location.href = plannerUrl;
-            });
-            titleInput.addEventListener('click', (e) => {
-                e.preventDefault();
                 window.location.href = plannerUrl;
             });
 
@@ -1949,12 +2273,11 @@ function renderCalendarEvents() {
 
             const titleWrap = document.createElement('div');
             titleWrap.className = 'calendar-title';
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.value = ev.title;
-            titleInput.readOnly = true;
-            titleInput.setAttribute('aria-label', 'Open feed item');
-            titleWrap.appendChild(titleInput);
+            const titleText = document.createElement('div');
+            titleText.className = 'calendar-title-rich';
+            titleText.setAttribute('aria-label', 'Open feed item');
+            setCalendarLinkedText(titleText, ev.title || 'Untitled', { stopPropagation: true });
+            titleWrap.appendChild(titleText);
 
             const openUrl = (ev.feed_url || '').trim() || '/feed';
             const isExternal = /^https?:\/\//i.test(openUrl);
@@ -1966,10 +2289,6 @@ function renderCalendarEvents() {
                 }
             };
             titleWrap.addEventListener('click', () => {
-                openFeedItem();
-            });
-            titleInput.addEventListener('click', (e) => {
-                e.preventDefault();
                 openFeedItem();
             });
 
@@ -2174,19 +2493,14 @@ function renderCalendarEvents() {
 
             const titleWrap = document.createElement('div');
             titleWrap.className = 'calendar-title task-link-title';
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.value = ev.title;
-            titleInput.readOnly = true;
-            titleInput.setAttribute('aria-label', 'Open list item');
-            titleWrap.appendChild(titleInput);
+            const titleText = document.createElement('div');
+            titleText.className = 'calendar-title-rich';
+            titleText.setAttribute('aria-label', 'Open list item');
+            setCalendarLinkedText(titleText, ev.title || 'Untitled', { stopPropagation: true });
+            titleWrap.appendChild(titleText);
 
             const openUrl = getCalendarNoteListItemUrl(ev);
             titleWrap.addEventListener('click', () => {
-                openCalendarNoteListItem(ev);
-            });
-            titleInput.addEventListener('click', (e) => {
-                e.preventDefault();
                 openCalendarNoteListItem(ev);
             });
 
@@ -2374,22 +2688,14 @@ function renderCalendarEvents() {
 
             const titleWrap = document.createElement('div');
             titleWrap.className = 'calendar-title';
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.value = ev.title;
-            titleInput.placeholder = 'Phase title';
-            titleInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    titleInput.blur();
+            appendCalendarEditableTitle(titleWrap, {
+                getValue: () => ev.title,
+                placeholder: 'Phase title',
+                ariaLabel: 'Edit phase title',
+                onSave: (nextTitle) => {
+                    updateCalendarEvent(ev.id, { title: nextTitle });
                 }
             });
-            titleInput.addEventListener('blur', () => {
-                if (titleInput.value.trim() !== ev.title) {
-                    updateCalendarEvent(ev.id, { title: titleInput.value.trim() || ev.title });
-                }
-            });
-            titleWrap.appendChild(titleInput);
 
             const actions = document.createElement('div');
             actions.className = 'calendar-actions-row';
@@ -2498,22 +2804,14 @@ function renderCalendarEvents() {
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'calendar-title';
-        const titleInput = document.createElement('input');
-        titleInput.type = 'text';
-        titleInput.value = ev.title;
-        titleInput.placeholder = 'Task title';
-        titleInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                titleInput.blur();
+        appendCalendarEditableTitle(titleWrap, {
+            getValue: () => ev.title,
+            placeholder: 'Task title',
+            ariaLabel: 'Edit task title',
+            onSave: (nextTitle) => {
+                updateCalendarEvent(ev.id, { title: nextTitle });
             }
         });
-        titleInput.addEventListener('blur', () => {
-            if (titleInput.value.trim() !== ev.title) {
-                updateCalendarEvent(ev.id, { title: titleInput.value.trim() || ev.title });
-            }
-        });
-        titleWrap.appendChild(titleInput);
 
         // Add time inline with title (clickable to edit)
         const timeBtn = document.createElement('button');
@@ -2763,22 +3061,14 @@ function renderCalendarEvents() {
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'calendar-title';
-        const titleInput = document.createElement('input');
-        titleInput.type = 'text';
-        titleInput.value = ev.title;
-        titleInput.placeholder = 'Event title';
-        titleInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                titleInput.blur();
+        appendCalendarEditableTitle(titleWrap, {
+            getValue: () => ev.title,
+            placeholder: 'Event title',
+            ariaLabel: 'Edit event title',
+            onSave: (nextTitle) => {
+                updateCalendarEvent(ev.id, { title: nextTitle });
             }
         });
-        titleInput.addEventListener('blur', () => {
-            if (titleInput.value.trim() !== ev.title) {
-                updateCalendarEvent(ev.id, { title: titleInput.value.trim() || ev.title });
-            }
-        });
-        titleWrap.appendChild(titleInput);
 
         // Add time inline with title
         const timeBtn = document.createElement('button');
@@ -3036,22 +3326,14 @@ function renderCalendarEvents() {
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'calendar-title';
-        const titleInput = document.createElement('input');
-        titleInput.type = 'text';
-        titleInput.value = group.title;
-        titleInput.placeholder = 'Group title';
-        titleInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                titleInput.blur();
+        appendCalendarEditableTitle(titleWrap, {
+            getValue: () => group.title,
+            placeholder: 'Group title',
+            ariaLabel: 'Edit group title',
+            onSave: (nextTitle) => {
+                updateCalendarEvent(group.id, { title: nextTitle });
             }
         });
-        titleInput.addEventListener('blur', () => {
-            if (titleInput.value.trim() !== group.title) {
-                updateCalendarEvent(group.id, { title: titleInput.value.trim() || group.title });
-            }
-        });
-        titleWrap.appendChild(titleInput);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
@@ -3370,12 +3652,28 @@ async function bulkCalendarMove(dayStr) {
 }
 
 function startBulkCalendarMovePrompt() {
+    const targets = getSelectedCalendarEvents(false).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+    if (!targets.length) return;
     openCalendarPrompt({
         title: 'Move to day',
         message: 'Choose a date',
         type: 'date',
         defaultValue: calendarState.selectedDay || '',
-        onSubmit: (val) => bulkCalendarMove(val)
+        onSubmit: async (val) => {
+            if (!val) return;
+            const excludeEventIds = targets
+                .map(ev => Number(ev.id))
+                .filter(id => Number.isFinite(id));
+            const movingLabel = `${targets.length} selected item${targets.length === 1 ? '' : 's'}`;
+            await openCalendarMovePreviewModal({
+                targetDay: val,
+                movingLabel,
+                excludeEventIds,
+                onConfirm: async () => {
+                    await bulkCalendarMove(val);
+                }
+            });
+        }
     });
 }
 
@@ -3526,7 +3824,8 @@ function parseCalendarQuickInput(text) {
         };
     }
 
-    let working = raw;
+    const protectedLinks = protectCalendarMarkdownLinks(raw);
+    let working = protectedLinks.maskedText;
     let startTime = null;
     let endTime = null;
     let priority = 'medium';
@@ -3611,7 +3910,8 @@ function parseCalendarQuickInput(text) {
         working = working.replace(/\+/g, '').trim();
     }
 
-    const title = working.trim();
+    const restored = restoreCalendarMarkdownLinks(working.trim(), protectedLinks.matches);
+    const title = restored.trim();
     if (!title) return null;
 
     return {

@@ -78,7 +78,7 @@ const calendarSelection = { active: false, ids: new Set(), longPressTimer: null,
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
-let datePickerState = { itemId: null };
+let datePickerState = { itemId: null, itemTitle: '' };
 let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
 let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null, noteType: 'note' };
 let linkEditState = { anchor: null };
@@ -473,6 +473,7 @@ function openDatePickerModal(itemId, currentDate, itemTitle) {
     const label = document.getElementById('date-picker-task-label');
     if (!modal || !input) return;
     datePickerState.itemId = itemId;
+    datePickerState.itemTitle = itemTitle || '';
     input.value = currentDate || '';
     if (label) label.textContent = itemTitle ? `For "${itemTitle}"` : '';
     modal.classList.add('active');
@@ -482,15 +483,19 @@ function openDatePickerModal(itemId, currentDate, itemTitle) {
 function closeDatePickerModal() {
     const modal = document.getElementById('date-picker-modal');
     if (modal) modal.classList.remove('active');
-    datePickerState = { itemId: null };
+    datePickerState = { itemId: null, itemTitle: '' };
 }
 
 async function saveDatePickerSelection(remove = false) {
     const input = document.getElementById('date-picker-input');
     if (!datePickerState.itemId || !input) return;
-    const payload = { due_date: remove ? null : (input.value || null) };
-    try {
-        const res = await fetch(`/api/items/${datePickerState.itemId}`, {
+    const itemId = datePickerState.itemId;
+    const itemTitle = datePickerState.itemTitle || '';
+    const dueDate = remove ? null : (input.value || null);
+    const payload = { due_date: dueDate };
+
+    const persistDate = async () => {
+        const res = await fetch(`/api/items/${itemId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -498,6 +503,29 @@ async function saveDatePickerSelection(remove = false) {
         if (!res.ok) throw new Error('Failed to set date');
         closeDatePickerModal();
         window.location.reload();
+    };
+
+    if (dueDate && typeof openCalendarMovePreviewModal === 'function') {
+        const movingLabel = itemTitle ? `"${itemTitle}"` : 'this task';
+        await openCalendarMovePreviewModal({
+            targetDay: dueDate,
+            movingLabel,
+            confirmLabel: 'Attach date',
+            onConfirm: async () => {
+                try {
+                    await persistDate();
+                } catch (e) {
+                    console.error('Error setting date:', e);
+                    showToast('Could not set date. Please try again.', 'error');
+                    throw e;
+                }
+            }
+        });
+        return;
+    }
+
+    try {
+        await persistDate();
     } catch (e) {
         console.error('Error setting date:', e);
         showToast('Could not set date. Please try again.', 'error');

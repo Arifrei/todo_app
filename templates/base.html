@@ -22,22 +22,47 @@
 
         // Universal share function that works on APK, mobile browsers, and desktop
         window.universalShare = async function(data) {
-            const { title, text, url } = data;
+            const {
+                title,
+                text,
+                url,
+                files,
+                fileName,
+                fileText,
+                mimeType = 'text/plain;charset=utf-8',
+                allowClipboardFallback = true,
+                allowDownloadFallback = false,
+                preferWebFileShare = false,
+                requireFileShare = false
+            } = data || {};
+            const shareTitle = title || '';
             const shareText = text || '';
-            const fullText = url ? `${shareText}\n\n${url}` : shareText;
-
-            // Method 1: Try Capacitor Share (APK) - wait briefly for bridge only in native app
-            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+            const fullText = url ? `${shareText}${shareText ? '\n\n' : ''}${url}` : shareText;
+            const normalizedFileText = String(typeof fileText === 'string' ? fileText : fullText).replace(/\r\n?/g, '\n');
+            const textForShare = normalizedFileText || fullText || shareTitle || '';
+            const shareFiles = Array.isArray(files) ? files.filter(Boolean) : [];
+            const wantsFileShare = !!(requireFileShare && fileName && shareFiles.length);
             const isNativeApp = typeof window.isNativeApp === 'function'
                 ? window.isNativeApp()
                 : !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+            const isSecure = typeof window.isSecureContext === 'boolean' ? window.isSecureContext : false;
+            const normalizedMimeType = String(mimeType || 'text/plain;charset=utf-8').trim() || 'text/plain;charset=utf-8';
 
-            if (isMobile && isNativeApp && !window.Capacitor) {
-                // Wait up to 500ms for Capacitor bridge to be injected
+            if (!shareFiles.length && fileName && typeof File !== 'undefined') {
+                try {
+                    shareFiles.push(new File([normalizedFileText], fileName, { type: normalizedMimeType }));
+                } catch (e) {
+                    console.log('Unable to create share file:', e);
+                }
+            }
+
+            // Method 1: Try Capacitor Share first for native mobile share sheet (APK/iOS app)
+            if (isNativeApp && (!window.Capacitor || !window.Capacitor?.Plugins?.Share)) {
+                // Wait briefly for Capacitor bridge/plugins to be injected
                 await new Promise(resolve => {
                     let attempts = 0;
                     const check = () => {
-                        if (window.Capacitor || attempts++ > 5) resolve();
+                        if ((window.Capacitor && window.Capacitor?.Plugins?.Share) || attempts++ > 12) resolve();
                         else setTimeout(check, 100);
                     };
                     check();
@@ -46,7 +71,58 @@
 
             if (window.Capacitor?.Plugins?.Share) {
                 try {
-                    await window.Capacitor.Plugins.Share.share({ title, text: fullText, url });
+                    const sharePlugin = window.Capacitor.Plugins.Share;
+                    const filesystemPlugin = window.Capacitor.Plugins.Filesystem;
+                    const nativePayload = { dialogTitle: shareTitle };
+                    if (shareTitle) nativePayload.title = shareTitle;
+                    if (!wantsFileShare && textForShare) nativePayload.text = textForShare;
+
+                    // If Filesystem is available in the native shell, write and attach a .txt file.
+                    if (shareFiles.length && fileName && filesystemPlugin?.writeFile) {
+                        try {
+                            const safeFileName = String(fileName || 'shared-note.txt')
+                                .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+                                .replace(/\s+/g, ' ')
+                                .trim() || 'shared-note.txt';
+                            const path = `shares/${Date.now()}-${safeFileName}`;
+                            const written = await filesystemPlugin.writeFile({
+                                path,
+                                data: normalizedFileText,
+                                directory: 'CACHE',
+                                encoding: 'utf8',
+                                recursive: true
+                            });
+                            if (written?.uri) {
+                                nativePayload.files = [written.uri];
+                                delete nativePayload.text;
+                            }
+                        } catch (fsErr) {
+                            console.log('Native .txt file preparation failed, sharing text payload instead:', fsErr);
+                        }
+                    }
+
+                    if (url) nativePayload.url = url;
+
+                    if (wantsFileShare && !nativePayload.files) {
+                        throw new Error('Required file share unavailable in native shell');
+                    }
+
+                    if (!nativePayload.files && !nativePayload.text && !nativePayload.url) {
+                        nativePayload.text = shareTitle || '';
+                    }
+
+                    if (typeof sharePlugin.canShare === 'function') {
+                        try {
+                            const canShareResult = await sharePlugin.canShare();
+                            if (canShareResult && canShareResult.value === false) {
+                                throw new Error('Capacitor share unavailable');
+                            }
+                        } catch (canShareErr) {
+                            console.log('Capacitor canShare check failed:', canShareErr);
+                        }
+                    }
+
+                    await sharePlugin.share(nativePayload);
                     return { success: true, method: 'capacitor' };
                 } catch (e) {
                     if (e?.name === 'AbortError') return { success: false, cancelled: true };
@@ -54,21 +130,88 @@
                 }
             }
 
-            // Method 2: Try Web Share API (mobile browsers, some desktop)
+            // Method 2: Try Web Share API once (single attempt preserves user-gesture context)
             if (navigator.share) {
                 try {
-                    const payload = { title, text: fullText };
-                    if (url) payload.url = url;
-                    await navigator.share(payload);
-                    return { success: true, method: 'webshare' };
+                    if (wantsFileShare) {
+                        if (isSecure) {
+                            let filePayloadSupported = true;
+                            if (typeof navigator.canShare === 'function') {
+                                try {
+                                    filePayloadSupported = !!navigator.canShare({ files: shareFiles });
+                                } catch (canShareErr) {
+                                    filePayloadSupported = false;
+                                    console.log('navigator.canShare(files) failed:', canShareErr);
+                                }
+                            }
+                            if (filePayloadSupported) {
+                                const filePayload = { title: shareTitle, files: shareFiles };
+                                if (url) filePayload.url = url;
+                                await navigator.share(filePayload);
+                                return { success: true, method: 'webshare-files' };
+                            }
+                        }
+                    } else {
+                        let payload = { title: shareTitle, text: textForShare };
+                        if (url) payload.url = url;
+
+                        // Optional file share for non-strict flows.
+                        let canShareFiles = false;
+                        if (preferWebFileShare && shareFiles.length && isSecure && typeof navigator.canShare === 'function') {
+                            try {
+                                canShareFiles = !!navigator.canShare({ files: shareFiles });
+                            } catch (canShareErr) {
+                                console.log('navigator.canShare(files) failed:', canShareErr);
+                            }
+                        }
+                        if (canShareFiles) {
+                            payload = { title: shareTitle, files: shareFiles };
+                            if (url) payload.url = url;
+                        }
+
+                        await navigator.share(payload);
+                        return { success: true, method: canShareFiles ? 'webshare-files' : 'webshare' };
+                    }
                 } catch (e) {
                     if (e?.name === 'AbortError') return { success: false, cancelled: true };
                     console.log('Web share failed:', e);
                 }
             }
 
-            // Method 3: Clipboard fallback
-            const clipboardText = `${title}\n\n${fullText}`.trim();
+            // Method 3: Download a share file when file sharing is unavailable.
+            if (allowDownloadFallback && fileName) {
+                try {
+                    const safeFileName = String(fileName || 'shared-note.txt')
+                        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim() || 'shared-note.txt';
+                    const fileBlob = (
+                        shareFiles.length && shareFiles[0] instanceof Blob
+                            ? shareFiles[0]
+                            : (typeof Blob !== 'undefined' ? new Blob([normalizedFileText], { type: normalizedMimeType }) : null)
+                    );
+                    if (fileBlob && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+                        const objectUrl = URL.createObjectURL(fileBlob);
+                        const anchor = document.createElement('a');
+                        anchor.href = objectUrl;
+                        anchor.download = safeFileName;
+                        anchor.style.display = 'none';
+                        document.body.appendChild(anchor);
+                        anchor.click();
+                        document.body.removeChild(anchor);
+                        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+                        return { success: true, method: 'download' };
+                    }
+                } catch (downloadErr) {
+                    console.log('File download fallback failed:', downloadErr);
+                }
+            }
+
+            // Method 4: Clipboard fallback
+            if (!allowClipboardFallback) {
+                return { success: false, method: 'none' };
+            }
+            const clipboardText = `${shareTitle}\n\n${textForShare}`.trim();
             try {
                 await navigator.clipboard.writeText(clipboardText);
                 return { success: true, method: 'clipboard' };
@@ -227,6 +370,22 @@
             <div class="modal-actions">
                 <button class="btn" id="overlap-cancel-button" type="button">Cancel</button>
                 <button class="btn btn-primary" id="overlap-add-anyway-button" type="button">Add Anyway</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Day Preview Modal -->
+    <div class="modal" id="calendar-move-preview-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-move-preview-title">
+        <div class="modal-content calendar-move-preview-content" tabindex="-1">
+            <h2 id="calendar-move-preview-title">Move to day</h2>
+            <p id="calendar-move-preview-moving" class="u-text-muted u-mt-neg-025"></p>
+            <p id="calendar-move-preview-summary" class="calendar-move-preview-summary"></p>
+            <div id="calendar-move-preview-list" class="calendar-move-preview-list">
+                <div class="calendar-move-preview-state">Loading...</div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" id="calendar-move-preview-cancel" type="button">Cancel</button>
+                <button class="btn btn-primary" id="calendar-move-preview-confirm" type="button">Continue</button>
             </div>
         </div>
     </div>

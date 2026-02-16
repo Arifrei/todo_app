@@ -401,6 +401,493 @@ function renderEmptyState(container, icon, message, actionBtn = null) {
     }
 }
 
+function normalizeShareNewlines(value) {
+    return String(value || '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ');
+}
+
+function cleanInlineShareText(value) {
+    return normalizeShareNewlines(value)
+        .replace(/[ \t\f\v]+/g, ' ')
+        .replace(/[ \t]*\n[ \t]*/g, '\n')
+        .trim();
+}
+
+function compactShareLines(lines) {
+    const compacted = [];
+    let prevBlank = true;
+    (lines || []).forEach((line) => {
+        const normalized = String(line ?? '').replace(/\u00a0/g, ' ');
+        const isBlank = normalized.trim() === '';
+        if (isBlank) {
+            if (!prevBlank) compacted.push('');
+            prevBlank = true;
+            return;
+        }
+        compacted.push(normalized);
+        prevBlank = false;
+    });
+    while (compacted.length && compacted[compacted.length - 1] === '') compacted.pop();
+    return compacted;
+}
+
+function renderInlineShareNode(node) {
+    if (!node) return '';
+    if (node.nodeType === 3) {
+        return node.nodeValue || '';
+    }
+    if (node.nodeType !== 1) return '';
+
+    const tag = node.tagName.toUpperCase();
+    if (tag === 'BR') return '\n';
+    if (tag === 'INPUT' && node.type === 'checkbox') {
+        return node.checked ? '☑' : '☐';
+    }
+
+    if (tag === 'SPAN' && node.classList.contains('note-inline-checkbox')) {
+        const checkbox = node.querySelector('input[type="checkbox"]');
+        const marker = checkbox && checkbox.checked ? '☑' : '☐';
+        const parts = [];
+        node.childNodes.forEach((child) => {
+            if (child.nodeType === 1 && child.tagName.toUpperCase() === 'INPUT') return;
+            parts.push(renderInlineShareNode(child));
+        });
+        const label = cleanInlineShareText(parts.join(''));
+        return label ? `${marker} ${label}` : marker;
+    }
+
+    let text = '';
+    node.childNodes.forEach((child) => {
+        text += renderInlineShareNode(child);
+    });
+    const inlineText = cleanInlineShareText(text);
+    if (!inlineText) return '';
+
+    if (tag === 'A') {
+        const href = cleanInlineShareText(node.getAttribute('href') || '');
+        if (href && inlineText && href !== inlineText) return `${inlineText} (${href})`;
+        return inlineText || href;
+    }
+    if (tag === 'STRONG' || tag === 'B') return inlineText;
+    if (tag === 'EM' || tag === 'I') return inlineText;
+    if (tag === 'U') return inlineText;
+    if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL') return inlineText;
+    if (tag === 'CODE' && (!node.parentElement || node.parentElement.tagName.toUpperCase() !== 'PRE')) return inlineText;
+    return inlineText;
+}
+
+function renderListShareBlock(listEl, outputLines, depth = 0) {
+    if (!listEl || !outputLines) return;
+    const isOrdered = listEl.tagName.toUpperCase() === 'OL';
+    const listItems = Array.from(listEl.children).filter((child) => child.tagName && child.tagName.toUpperCase() === 'LI');
+    listItems.forEach((li, index) => {
+        const marker = isOrdered ? `${index + 1}.` : '•';
+        const indent = '  '.repeat(depth);
+        const nestedLists = [];
+        const inlineNodes = [];
+        li.childNodes.forEach((child) => {
+            if (child.nodeType === 1) {
+                const childTag = child.tagName.toUpperCase();
+                if (childTag === 'UL' || childTag === 'OL') {
+                    nestedLists.push(child);
+                    return;
+                }
+            }
+            inlineNodes.push(child);
+        });
+        const text = cleanInlineShareText(inlineNodes.map((child) => renderInlineShareNode(child)).join(''));
+        if (text) {
+            const textLines = text.split('\n');
+            outputLines.push(`${indent}${marker} ${textLines[0]}`.trimEnd());
+            for (let i = 1; i < textLines.length; i += 1) {
+                outputLines.push(`${indent}  ${textLines[i]}`.trimEnd());
+            }
+        } else {
+            outputLines.push(`${indent}${marker}`);
+        }
+
+        nestedLists.forEach((nestedList) => renderListShareBlock(nestedList, outputLines, depth + 1));
+    });
+}
+
+function isShareBlockElementTag(tag) {
+    if (!tag) return false;
+    if (tag === 'UL' || tag === 'OL' || tag === 'PRE' || tag === 'BLOCKQUOTE' || tag === 'HR') return true;
+    if (/^H[1-6]$/.test(tag)) return true;
+    return [
+        'ADDRESS', 'ARTICLE', 'ASIDE', 'DIV', 'DL', 'FIELDSET', 'FIGCAPTION', 'FIGURE',
+        'FOOTER', 'FORM', 'HEADER', 'MAIN', 'NAV', 'P', 'SECTION', 'TABLE'
+    ].includes(tag);
+}
+
+function renderBlockShareNode(node, outputLines) {
+    if (!node) return;
+    if (node.nodeType === 3) {
+        const text = cleanInlineShareText(node.nodeValue || '');
+        if (text) outputLines.push(text);
+        return;
+    }
+    if (node.nodeType !== 1) return;
+
+    const tag = node.tagName.toUpperCase();
+    if (tag === 'UL' || tag === 'OL') {
+        renderListShareBlock(node, outputLines, 0);
+        outputLines.push('');
+        return;
+    }
+    if (tag === 'PRE') {
+        const code = normalizeShareNewlines(node.textContent || '').trimEnd();
+        if (code) {
+            code.split('\n').forEach((line) => outputLines.push(`    ${line}`));
+            outputLines.push('');
+        }
+        return;
+    }
+    if (tag === 'BLOCKQUOTE') {
+        const innerLines = [];
+        node.childNodes.forEach((child) => renderBlockShareNode(child, innerLines));
+        const compacted = compactShareLines(innerLines);
+        compacted.forEach((line) => {
+            outputLines.push(line ? `│ ${line}` : '│');
+        });
+        if (compacted.length) outputLines.push('');
+        return;
+    }
+    if (tag === 'HR') {
+        outputLines.push('────────────────────────');
+        outputLines.push('');
+        return;
+    }
+    if (/^H[1-6]$/.test(tag)) {
+        const level = parseInt(tag[1], 10) || 1;
+        const headingText = cleanInlineShareText(Array.from(node.childNodes).map((child) => renderInlineShareNode(child)).join(''));
+        if (headingText) {
+            outputLines.push(headingText);
+            if (level <= 2) {
+                const underlineChar = level === 1 ? '=' : '-';
+                outputLines.push(underlineChar.repeat(Math.max(headingText.length, 3)));
+            }
+            outputLines.push('');
+        }
+        return;
+    }
+
+    if (isShareBlockElementTag(tag)) {
+        const inlineNodes = Array.from(node.childNodes).filter((child) => {
+            if (child.nodeType !== 1) return true;
+            return !isShareBlockElementTag(child.tagName.toUpperCase());
+        });
+        const text = cleanInlineShareText(inlineNodes.map((child) => renderInlineShareNode(child)).join(''));
+        if (text) outputLines.push(...text.split('\n'));
+
+        Array.from(node.children).forEach((child) => {
+            const childTag = child.tagName.toUpperCase();
+            if (isShareBlockElementTag(childTag)) {
+                renderBlockShareNode(child, outputLines);
+            }
+        });
+
+        if (text) outputLines.push('');
+        return;
+    }
+
+    const fallbackText = cleanInlineShareText(Array.from(node.childNodes).map((child) => renderInlineShareNode(child)).join(''));
+    if (fallbackText) outputLines.push(...fallbackText.split('\n'));
+}
+
+function noteHtmlToShareText(html) {
+    const container = document.createElement('div');
+    container.innerHTML = html || '';
+    const lines = [];
+    container.childNodes.forEach((node) => renderBlockShareNode(node, lines));
+    const compacted = compactShareLines(lines);
+    return compacted.join('\n');
+}
+
+function buildShareTxtFileName(title, fallback = 'shared-note') {
+    const base = String(title || '')
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[. ]+$/g, '');
+    const safeBase = (base || fallback).slice(0, 80);
+    return `${safeBase}.txt`;
+}
+
+function sortListItemsForSharing(items) {
+    return (items || []).slice().sort((a, b) => {
+        const aOrder = a.order_index || 0;
+        const bOrder = b.order_index || 0;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.id || 0) - (b.id || 0);
+    });
+}
+
+function normalizeListDateValueForShare(raw) {
+    const str = String(raw || '').trim();
+    if (!str) return null;
+    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return null;
+    return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function formatListScheduledDateForShare(raw) {
+    const value = normalizeListDateValueForShare(raw);
+    if (!value) return '';
+    const date = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    if (date.getTime() === today.getTime()) return 'Today';
+    if (date.getTime() === tomorrow.getTime()) return 'Tomorrow';
+
+    const diffDays = Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays > 0 && diffDays <= 7) {
+        return date.toLocaleDateString('en-US', { weekday: 'long' });
+    }
+
+    return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
+    });
+}
+
+function isListSectionItemForShare(item) {
+    const textValue = String(item && item.text ? item.text : '').trim();
+    return textValue.startsWith('[[section]]');
+}
+
+function getListSectionTitleForShare(item) {
+    const textValue = String(item && item.text ? item.text : '').trim();
+    if (!textValue.startsWith('[[section]]')) return '';
+    return textValue.slice('[[section]]'.length).trim();
+}
+
+function buildListShareTextForShare(items, checkboxMode) {
+    const sorted = sortListItemsForSharing(items);
+    const lines = [];
+
+    sorted.forEach((item) => {
+        if (isListSectionItemForShare(item)) {
+            const title = getListSectionTitleForShare(item);
+            if (lines.length) lines.push('');
+            if (title) lines.push(title);
+            lines.push('');
+            return;
+        }
+
+        const textValue = String(item && item.text ? item.text : '').trim();
+        const linkLabel = String(item && item.link_text ? item.link_text : '').trim();
+        const linkUrl = String(item && item.link_url ? item.link_url : '').trim();
+        const noteValue = String(item && item.note ? item.note : '').trim();
+        const dateValue = normalizeListDateValueForShare(item ? item.scheduled_date : null);
+        let line = textValue;
+
+        if (linkLabel) {
+            if (line && linkLabel !== line) line = `${line} - ${linkLabel}`;
+            else if (!line) line = linkLabel;
+        }
+        if (linkUrl) {
+            if (line) line = `${line} (${linkUrl})`;
+            else line = linkUrl;
+        }
+        if (noteValue) {
+            line = line ? `${line} - ${noteValue}` : noteValue;
+        }
+        if (dateValue) {
+            const label = formatListScheduledDateForShare(dateValue) || dateValue;
+            line = line ? `${line} [${label}]` : `[${label}]`;
+        }
+        if (!line) return;
+
+        if (checkboxMode) {
+            lines.push(`${item && item.checked ? '☑' : '☐'} ${line}`);
+            return;
+        }
+        lines.push(`• ${line}`);
+    });
+
+    while (lines.length && lines[0] === '') lines.shift();
+    while (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return lines.join('\n');
+}
+
+function formatDayPreviewDateLabel(dayStr) {
+    if (!dayStr) return 'this day';
+    const date = new Date(`${dayStr}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return dayStr;
+    const timezone = window.USER_TIMEZONE || undefined;
+    return date.toLocaleDateString(undefined, {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+        timeZone: timezone
+    });
+}
+
+function formatDayPreviewTimeLabel(timeStr) {
+    if (!timeStr) return '';
+    const match = String(timeStr).match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return String(timeStr);
+    const hour24 = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour24) || !Number.isFinite(minute)) return String(timeStr);
+    const period = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12 = ((hour24 + 11) % 12) + 1;
+    return `${hour12}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+function buildDayPreviewMetaLabel(ev) {
+    const meta = [];
+    if (ev && ev.start_time) {
+        const start = formatDayPreviewTimeLabel(ev.start_time);
+        const end = ev.end_time ? formatDayPreviewTimeLabel(ev.end_time) : '';
+        meta.push(end ? `${start}-${end}` : start);
+    } else {
+        meta.push('No time');
+    }
+    if (ev && ev.is_phase) meta.push('Phase');
+    else if (ev && ev.is_group) meta.push('Group');
+    else if (ev && ev.is_event) meta.push('Event');
+    else meta.push('Task');
+    if (ev && ev.status === 'done') meta.push('Done');
+    if (ev && ev.status === 'canceled') meta.push('Canceled');
+    return meta.join(' - ');
+}
+
+function renderDayPreviewItems(listEl, events) {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (!Array.isArray(events) || !events.length) {
+        const empty = document.createElement('div');
+        empty.className = 'calendar-move-preview-state';
+        empty.textContent = 'No items are scheduled on this day yet.';
+        listEl.appendChild(empty);
+        return;
+    }
+
+    events.forEach((ev) => {
+        const row = document.createElement('div');
+        row.className = `calendar-move-preview-item ${ev && ev.status === 'done' ? 'done' : ''} ${ev && ev.status === 'canceled' ? 'canceled' : ''}`;
+
+        const dot = document.createElement('span');
+        dot.className = `calendar-move-preview-dot priority-${(ev && ev.priority) || 'medium'}`;
+        row.appendChild(dot);
+
+        const body = document.createElement('div');
+        body.className = 'calendar-move-preview-body';
+
+        const title = document.createElement('div');
+        title.className = 'calendar-move-preview-title';
+        title.textContent = (ev && ev.title) ? ev.title : 'Untitled';
+        body.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'calendar-move-preview-meta';
+        meta.textContent = buildDayPreviewMetaLabel(ev);
+        body.appendChild(meta);
+
+        row.appendChild(body);
+        listEl.appendChild(row);
+    });
+}
+
+async function fetchDayPreviewEvents(dayStr) {
+    if (!dayStr) return [];
+    const response = await fetch(`/api/calendar/events?day=${encodeURIComponent(dayStr)}`);
+    if (response.status === 401) {
+        window.location.href = '/select-user';
+        return [];
+    }
+    if (!response.ok) throw new Error('Could not load day preview.');
+    const payload = await response.json();
+    return Array.isArray(payload) ? payload : [];
+}
+
+async function openCalendarMovePreviewModal({ targetDay, movingLabel = '', excludeEventIds = [], onConfirm, confirmLabel = 'Continue' }) {
+    if (!targetDay) {
+        if (typeof onConfirm === 'function') await onConfirm();
+        return;
+    }
+    const modal = document.getElementById('calendar-move-preview-modal');
+    const titleEl = document.getElementById('calendar-move-preview-title');
+    const movingEl = document.getElementById('calendar-move-preview-moving');
+    const summaryEl = document.getElementById('calendar-move-preview-summary');
+    const listEl = document.getElementById('calendar-move-preview-list');
+    const confirmBtn = document.getElementById('calendar-move-preview-confirm');
+    const cancelBtn = document.getElementById('calendar-move-preview-cancel');
+    if (!modal || !titleEl || !movingEl || !summaryEl || !listEl || !confirmBtn || !cancelBtn) {
+        if (typeof onConfirm === 'function') await onConfirm();
+        return;
+    }
+
+    const initialConfirmText = confirmLabel || confirmBtn.textContent || 'Continue';
+    const close = () => {
+        modal.classList.remove('active');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = initialConfirmText;
+        cancelBtn.onclick = null;
+        confirmBtn.onclick = null;
+        modal.onclick = null;
+        deactivateModalA11y(modal);
+    };
+
+    titleEl.textContent = `Move to ${formatDayPreviewDateLabel(targetDay)}?`;
+    movingEl.textContent = movingLabel ? `Moving ${movingLabel}.` : 'Review this day before continuing.';
+    summaryEl.textContent = 'Loading items for this day...';
+    listEl.innerHTML = '<div class="calendar-move-preview-state">Loading...</div>';
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = initialConfirmText;
+    modal.classList.add('active');
+    activateModalA11y(modal, cancelBtn);
+
+    cancelBtn.onclick = close;
+    modal.onclick = (e) => {
+        if (e.target === modal) close();
+    };
+    confirmBtn.onclick = async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Saving...';
+        try {
+            if (typeof onConfirm === 'function') {
+                await onConfirm();
+            }
+            close();
+        } catch (error) {
+            console.error('Day preview confirm failed:', error);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = initialConfirmText;
+        }
+    };
+
+    try {
+        const rawEvents = await fetchDayPreviewEvents(targetDay);
+        const excluded = new Set(
+            (excludeEventIds || [])
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id))
+        );
+        const events = rawEvents.filter((ev) => !excluded.has(Number(ev.id)));
+        renderDayPreviewItems(listEl, events);
+        summaryEl.textContent = events.length === 1
+            ? '1 item is already scheduled on this day.'
+            : `${events.length} items are already scheduled on this day.`;
+    } catch (error) {
+        console.error('Day preview load failed:', error);
+        summaryEl.textContent = 'Could not load this day preview. You can still continue.';
+        listEl.innerHTML = '<div class="calendar-move-preview-state error">Preview unavailable.</div>';
+    }
+
+    confirmBtn.disabled = false;
+}
+
+window.openCalendarMovePreviewModal = openCalendarMovePreviewModal;
+
 const confirmModal = document.getElementById('confirm-modal');
 const confirmMessage = document.getElementById('confirm-message');
 const confirmYesButton = document.getElementById('confirm-yes-button');
@@ -686,3 +1173,6 @@ window.openConfirmModal = openConfirmModal;
 window.closeConfirmModal = closeConfirmModal;
 window.openOverlapWarningModal = openOverlapWarningModal;
 window.closeOverlapWarningModal = closeOverlapWarningModal;
+window.noteHtmlToShareText = noteHtmlToShareText;
+window.buildShareTxtFileName = buildShareTxtFileName;
+window.buildListShareTextForShare = buildListShareTextForShare;

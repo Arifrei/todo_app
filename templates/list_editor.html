@@ -152,7 +152,15 @@
                 <button class="note-tool" type="button" data-list-note-command="quote" title="Quote block" aria-label="Quote block"><i class="fa-solid fa-quote-left"></i></button>
             </div>
             <div class="form-group">
-                <textarea id="list-item-note-input" class="form-control list-item-note-input" rows="8" placeholder="Type note details..."></textarea>
+                <div
+                    id="list-item-note-input"
+                    class="form-control list-item-note-input note-editor-surface"
+                    contenteditable="true"
+                    role="textbox"
+                    aria-multiline="true"
+                    aria-label="Inner note editor"
+                    data-placeholder="Type note details..."
+                ></div>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="list-item-note-clear-btn">Clear</button>
@@ -202,6 +210,7 @@
 
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
+<script src="{{ url_for('static', filename='notes/markdown.js') }}" defer></script>
 <script src="{{ url_for('static', filename='notes/detail.js') }}" defer></script>
 <script src="{{ url_for('static', filename='notes/editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='notes/list-editor.js') }}" defer></script>

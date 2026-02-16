@@ -280,6 +280,29 @@ function initListEditorPage() {
                 saveListItemInnerNote();
             }
         });
+        itemNoteInput.addEventListener('paste', (e) => {
+            if (itemNoteInput.getAttribute('contenteditable') === 'false') return;
+            const clipboard = e.clipboardData || window.clipboardData;
+            if (!clipboard) return;
+            const html = clipboard.getData('text/html');
+            if (html && html.trim()) return;
+            const plainText = clipboard.getData('text/plain') || '';
+            const markdown = window.NoteMarkdown;
+            if (!plainText || !markdown || typeof markdown.shouldConvertPastedMarkdown !== 'function') {
+                return;
+            }
+            if (!markdown.shouldConvertPastedMarkdown(plainText)) {
+                return;
+            }
+            const markdownHtml = typeof markdown.markdownToHtml === 'function'
+                ? markdown.markdownToHtml(plainText)
+                : '';
+            if (!markdownHtml) {
+                return;
+            }
+            e.preventDefault();
+            document.execCommand('insertHTML', false, markdownHtml);
+        });
     }
     if (itemDateInput) {
         itemDateInput.addEventListener('keydown', (e) => {
@@ -780,26 +803,36 @@ function buildListShareText(items, checkboxMode) {
 
 async function shareListContent({ title, items, checkboxMode }) {
     const shareTitle = title || 'Untitled List';
-    const shareText = buildListShareText(items, checkboxMode);
+    const shareText = typeof window.buildListShareTextForShare === 'function'
+        ? window.buildListShareTextForShare(items, checkboxMode)
+        : buildListShareText(items, checkboxMode);
+    const fileName = typeof window.buildShareTxtFileName === 'function'
+        ? window.buildShareTxtFileName(shareTitle, 'shared-list')
+        : 'shared-list.txt';
+    const fileText = `${shareTitle}\n\n${shareText}`.trim();
+
     if (typeof window.universalShare === 'function') {
-        const result = await window.universalShare({ title: shareTitle, text: shareText });
+        const result = await window.universalShare({
+            title: shareTitle,
+            text: shareText,
+            fileName,
+            fileText,
+            allowClipboardFallback: false,
+            allowDownloadFallback: true,
+            preferWebFileShare: true,
+            requireFileShare: true
+        });
         if (result.cancelled) return result;
         if (result.success && result.method === 'clipboard') {
             showToast('List copied to clipboard', 'success', 2000);
+        } else if (result.success && result.method === 'download') {
+            showToast('List file downloaded for sharing', 'success', 2200);
         }
         return result;
     }
 
-    const fallbackText = `${shareTitle}\n\n${shareText}`.trim();
-    try {
-        await navigator.clipboard.writeText(fallbackText);
-        showToast('List copied to clipboard', 'success', 2000);
-        return { success: true, method: 'clipboard' };
-    } catch (err) {
-        console.error('Share list failed:', err);
-        showToast('Could not share list', 'error', 2000);
-        return { success: false, method: 'none' };
-    }
+    showToast('Could not share list on this device', 'error', 2200);
+    return { success: false, method: 'none' };
 }
 
 async function shareCurrentList() {
@@ -824,7 +857,7 @@ let listSectionReorderState = {
     dragPreviewEl: null
 };
 let listItemNoteModalState = { itemId: null };
-let listItemDateModalState = { itemId: null };
+let listItemDateModalState = { itemId: null, itemTitle: '' };
 let activeListItemMenuAnchor = null;
 
 function ensureCollapsedSectionSet() {
@@ -967,9 +1000,58 @@ function formatListScheduledDate(raw) {
     });
 }
 
+function escapeListInnerNoteHtml(raw) {
+    const holder = document.createElement('div');
+    holder.textContent = String(raw || '');
+    return holder.innerHTML;
+}
+
+function getListInnerNotePlainText(raw) {
+    const holder = document.createElement('div');
+    holder.innerHTML = String(raw || '');
+    return (holder.textContent || holder.innerText || '').replace(/\u00a0/g, ' ').trim();
+}
+
+function hasMeaningfulListInnerNote(raw) {
+    return !!getListInnerNotePlainText(raw);
+}
+
+function renderListInnerNoteForEditor(raw) {
+    const incoming = String(raw || '').trim();
+    if (!incoming) return '';
+    const markdown = window.NoteMarkdown;
+    if (markdown && typeof markdown.renderNoteContentForEditor === 'function') {
+        return markdown.renderNoteContentForEditor(incoming);
+    }
+    const safe = escapeListInnerNoteHtml(incoming).replace(/\r\n?/g, '\n').replace(/\n/g, '<br>');
+    return safe ? `<p>${safe}</p>` : '';
+}
+
+function normalizeListInnerNoteForSave(rawHtml) {
+    const incoming = String(rawHtml || '');
+    const markdown = window.NoteMarkdown;
+    if (markdown && typeof markdown.normalizeNoteEditorHtml === 'function') {
+        return markdown.normalizeNoteEditorHtml(incoming);
+    }
+    return incoming.trim();
+}
+
+function placeCaretAtEnd(el) {
+    if (!el) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+
 function closeListItemNoteModal() {
     const modal = document.getElementById('list-item-note-modal');
+    const input = document.getElementById('list-item-note-input');
     if (modal) modal.classList.remove('active');
+    if (input) input.innerHTML = '';
     listItemNoteModalState.itemId = null;
 }
 
@@ -988,9 +1070,9 @@ function openListItemNoteModal(itemId) {
     const title = (item.text || '').trim() || 'Untitled item';
     titleEl.textContent = 'Inner Note';
     subtitleEl.textContent = title;
-    input.value = item.inner_note || '';
+    input.innerHTML = renderListInnerNoteForEditor(item.inner_note || '');
     const isReadOnly = !!listState.isArchived;
-    input.readOnly = isReadOnly;
+    input.setAttribute('contenteditable', isReadOnly ? 'false' : 'true');
     if (saveBtn) saveBtn.disabled = isReadOnly;
     if (clearBtn) clearBtn.disabled = isReadOnly;
     if (toolbar) {
@@ -1001,7 +1083,7 @@ function openListItemNoteModal(itemId) {
     modal.classList.add('active');
     setTimeout(() => {
         input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
+        placeCaretAtEnd(input);
     }, 0);
 }
 
@@ -1013,7 +1095,8 @@ async function saveListItemInnerNote() {
         showReadOnlyToast();
         return;
     }
-    const noteValue = (input.value || '').trim() || null;
+    const normalizedHtml = normalizeListInnerNoteForSave(input.innerHTML || '');
+    const noteValue = hasMeaningfulListInnerNote(normalizedHtml) ? normalizedHtml : null;
     try {
         await updateListItem(itemId, { inner_note: noteValue }, { refresh: true });
         closeListItemNoteModal();
@@ -1043,118 +1126,54 @@ async function clearListItemInnerNote() {
 
 function applyListInnerNoteCommand(command) {
     const input = document.getElementById('list-item-note-input');
-    if (!input || input.readOnly || listState.isArchived) return;
+    if (!input || input.getAttribute('contenteditable') === 'false' || listState.isArchived) return;
     input.focus();
     if (command === 'bold') {
-        wrapListInnerNoteSelection('**');
+        document.execCommand('bold', false, null);
         return;
     }
     if (command === 'italic') {
-        wrapListInnerNoteSelection('*');
+        document.execCommand('italic', false, null);
         return;
     }
     if (command === 'strike') {
-        wrapListInnerNoteSelection('~~');
+        document.execCommand('strikeThrough', false, null);
         return;
     }
     if (command === 'bullet') {
-        toggleListInnerNoteLinePrefix('bullet');
+        document.execCommand('insertUnorderedList', false, null);
         return;
     }
     if (command === 'number') {
-        toggleListInnerNoteLinePrefix('number');
+        document.execCommand('insertOrderedList', false, null);
         return;
     }
     if (command === 'quote') {
-        toggleListInnerNoteLinePrefix('quote');
-    }
-}
-
-function wrapListInnerNoteSelection(marker) {
-    const input = document.getElementById('list-item-note-input');
-    if (!input) return;
-    const value = input.value || '';
-    const start = input.selectionStart ?? 0;
-    const end = input.selectionEnd ?? 0;
-    const selected = value.slice(start, end);
-    const wrappedPrefix = `${marker}`;
-    const wrappedSuffix = `${marker}`;
-
-    if (selected) {
-        const hasWrap = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2;
-        const replacement = hasWrap
-            ? selected.slice(marker.length, selected.length - marker.length)
-            : `${wrappedPrefix}${selected}${wrappedSuffix}`;
-        input.value = `${value.slice(0, start)}${replacement}${value.slice(end)}`;
-        const nextStart = start;
-        const nextEnd = start + replacement.length;
-        input.setSelectionRange(nextStart, nextEnd);
-        return;
-    }
-
-    const insertion = `${wrappedPrefix}${wrappedSuffix}`;
-    input.value = `${value.slice(0, start)}${insertion}${value.slice(end)}`;
-    const cursor = start + marker.length;
-    input.setSelectionRange(cursor, cursor);
-}
-
-function toggleListInnerNoteLinePrefix(mode) {
-    const input = document.getElementById('list-item-note-input');
-    if (!input) return;
-    const value = input.value || '';
-    const selStart = input.selectionStart ?? 0;
-    const selEnd = input.selectionEnd ?? 0;
-
-    const blockStart = value.lastIndexOf('\n', Math.max(selStart - 1, 0));
-    const start = blockStart === -1 ? 0 : blockStart + 1;
-    const blockEndIndex = value.indexOf('\n', selEnd);
-    const end = blockEndIndex === -1 ? value.length : blockEndIndex;
-    const block = value.slice(start, end);
-    const lines = block.split('\n');
-    const nonEmpty = lines.filter(line => line.trim() !== '');
-    if (!nonEmpty.length) return;
-
-    let nextLines = lines.slice();
-    if (mode === 'bullet') {
-        const allBulleted = nonEmpty.every(line => /^\s*[-*]\s+/.test(line));
-        nextLines = lines.map((line) => {
-            if (!line.trim()) return line;
-            if (allBulleted) return line.replace(/^(\s*)[-*]\s+/, '$1');
-            return line.replace(/^(\s*)/, '$1- ');
-        });
-    } else if (mode === 'number') {
-        const allNumbered = nonEmpty.every(line => /^\s*\d+\.\s+/.test(line));
-        if (allNumbered) {
-            nextLines = lines.map((line) => line.replace(/^(\s*)\d+\.\s+/, '$1'));
-        } else {
-            let index = 1;
-            nextLines = lines.map((line) => {
-                if (!line.trim()) return line;
-                const leading = (line.match(/^(\s*)/) || [''])[0];
-                const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, '$1').trimStart();
-                const numbered = `${leading}${index}. ${stripped}`;
-                index += 1;
-                return numbered;
-            });
+        const selection = window.getSelection();
+        let isInsideQuote = false;
+        if (selection && selection.rangeCount > 0) {
+            let node = selection.focusNode;
+            while (node && node !== input && node !== document.body) {
+                if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BLOCKQUOTE') {
+                    isInsideQuote = true;
+                    break;
+                }
+                node = node.parentNode;
+            }
         }
-    } else if (mode === 'quote') {
-        const allQuoted = nonEmpty.every(line => /^\s*>\s+/.test(line));
-        nextLines = lines.map((line) => {
-            if (!line.trim()) return line;
-            if (allQuoted) return line.replace(/^(\s*)>\s+/, '$1');
-            return line.replace(/^(\s*)/, '$1> ');
-        });
+        if (isInsideQuote) {
+            document.execCommand('outdent', false, null);
+        } else {
+            document.execCommand('formatBlock', false, 'blockquote');
+        }
     }
-
-    const replacement = nextLines.join('\n');
-    input.value = `${value.slice(0, start)}${replacement}${value.slice(end)}`;
-    input.setSelectionRange(start, start + replacement.length);
 }
 
 function closeListItemDateModal() {
     const modal = document.getElementById('list-item-date-modal');
     if (modal) modal.classList.remove('active');
     listItemDateModalState.itemId = null;
+    listItemDateModalState.itemTitle = '';
 }
 
 function openListItemDateModal(itemId) {
@@ -1169,6 +1188,7 @@ function openListItemDateModal(itemId) {
     if (!item || !modal || !subtitleEl || !input) return;
 
     listItemDateModalState.itemId = itemId;
+    listItemDateModalState.itemTitle = (item.text || '').trim();
     subtitleEl.textContent = (item.text || '').trim() || 'Untitled item';
     input.value = normalizeListDateValue(item.scheduled_date) || '';
     modal.classList.add('active');
@@ -1177,6 +1197,7 @@ function openListItemDateModal(itemId) {
 
 async function saveListItemScheduledDate() {
     const itemId = listItemDateModalState.itemId;
+    const itemTitle = listItemDateModalState.itemTitle || '';
     const input = document.getElementById('list-item-date-input');
     if (!itemId || !input) return;
     if (listState.isArchived) {
@@ -1184,10 +1205,31 @@ async function saveListItemScheduledDate() {
         return;
     }
     const dateValue = (input.value || '').trim();
-    try {
+    const persistDate = async () => {
         await updateListItem(itemId, { scheduled_date: dateValue || null }, { refresh: true });
         closeListItemDateModal();
         showToast('Date saved', 'success', 1400);
+    };
+    if (dateValue && typeof openCalendarMovePreviewModal === 'function') {
+        const movingLabel = itemTitle ? `"${itemTitle}"` : 'this list item';
+        await openCalendarMovePreviewModal({
+            targetDay: dateValue,
+            movingLabel,
+            confirmLabel: 'Save date',
+            onConfirm: async () => {
+                try {
+                    await persistDate();
+                } catch (err) {
+                    console.error('Save item date failed:', err);
+                    showToast('Could not save date', 'error');
+                    throw err;
+                }
+            }
+        });
+        return;
+    }
+    try {
+        await persistDate();
     } catch (err) {
         console.error('Save item date failed:', err);
         showToast('Could not save date', 'error');
@@ -2176,7 +2218,7 @@ function renderListItems() {
         const textValue = (item.text || '').toLowerCase();
         const linkLabel = (item.link_text || '').toLowerCase();
         const noteValue = (item.note || '').toLowerCase();
-        const innerNoteValue = (item.inner_note || '').toLowerCase();
+        const innerNoteValue = getListInnerNotePlainText(item.inner_note || '').toLowerCase();
         const scheduledValue = (normalizeListDateValue(item.scheduled_date) || '').toLowerCase();
         const scheduledLabel = (formatListScheduledDate(item.scheduled_date) || '').toLowerCase();
         return (
@@ -2635,7 +2677,7 @@ function appendListNoteTextWithLinks(target, text) {
 function createListPill(item) {
     const pill = document.createElement('div');
     const hasNote = !!(item.note && item.note.trim());
-    const hasInnerNote = !!(item.inner_note && item.inner_note.trim());
+    const hasInnerNote = hasMeaningfulListInnerNote(item.inner_note || '');
     const isExpanded = hasNote && listState.expandedItemId === item.id;
     const isSelected = listSelectionState.ids.has(item.id);
     pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}${isSelected ? ' selected' : ''}`;
@@ -3528,6 +3570,14 @@ function loadListEditorScriptOnce(url, marker) {
 }
 
 async function ensureListEditorDependencies() {
+    const hasMarkdownHelpers =
+        window.NoteMarkdown &&
+        typeof window.NoteMarkdown.renderNoteContentForEditor === 'function' &&
+        typeof window.NoteMarkdown.normalizeNoteEditorHtml === 'function';
+    if (!hasMarkdownHelpers) {
+        await loadListEditorScriptOnce('/static/notes/markdown.js', 'markdown');
+    }
+
     const hasDetailHelpers = typeof window.formatNoteDate === 'function';
     if (!hasDetailHelpers) {
         await loadListEditorScriptOnce('/static/notes/detail.js', 'detail');

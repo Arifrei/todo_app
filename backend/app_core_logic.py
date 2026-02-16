@@ -960,7 +960,7 @@ def _rollover_incomplete_events():
             return
 
         try:
-            today = date.today()
+            today = _now_local().date()
             yesterday = today - timedelta(days=1)
 
             # Build a map of phases that need to be recreated
@@ -1330,7 +1330,7 @@ def _send_daily_email_digest(target_day=None):
             return {'skipped_lock': True}
 
         try:
-            tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'UTC'))
+            tz = pytz.timezone(app.config.get('DEFAULT_TIMEZONE', 'America/New_York'))
             now_local = datetime.now(tz)
             is_manual = target_day is not None
             if target_day is None:
@@ -1703,7 +1703,7 @@ def _start_scheduler():
     # Avoid double-start in Flask debug reloader
     if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         return
-    scheduler = BackgroundScheduler(timezone=app.config.get('DEFAULT_TIMEZONE', 'UTC'))
+    scheduler = BackgroundScheduler(timezone=app.config.get('DEFAULT_TIMEZONE', 'America/New_York'))
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
     scheduler.add_job(
         _cleanup_completed_tasks,

@@ -72,6 +72,17 @@ function initNoteEditorPage() {
         }
         tryConvertBracketLink(editor, e);
         tryConvertMarkdownLink(editor, e);
+        const markdown = window.NoteMarkdown;
+        let converted = false;
+        if (markdown && typeof markdown.tryConvertBlockMarkdownAtSelection === 'function') {
+            converted = markdown.tryConvertBlockMarkdownAtSelection(editor, e) || converted;
+        }
+        if (markdown && typeof markdown.tryConvertInlineMarkdownAtSelection === 'function') {
+            converted = markdown.tryConvertInlineMarkdownAtSelection(editor, e) || converted;
+        }
+        if (converted) {
+            bindNoteCheckboxes();
+        }
         refreshNoteDirtyState();
         autoGenerateTitle();
     });
@@ -143,9 +154,39 @@ function initNoteEditorPage() {
         showReadOnlyToast();
     });
     editor.addEventListener('paste', (e) => {
-        if (!notesState.activeNoteIsArchived) return;
+        if (notesState.activeNoteIsArchived) {
+            e.preventDefault();
+            showReadOnlyToast();
+            return;
+        }
+
+        const clipboard = e.clipboardData || window.clipboardData;
+        const plainText = clipboard ? (clipboard.getData('text/plain') || '') : '';
+        const markdown = window.NoteMarkdown;
+        if (!plainText || !markdown || typeof markdown.shouldConvertPastedMarkdown !== 'function') {
+            return;
+        }
+        if (!markdown.shouldConvertPastedMarkdown(plainText)) {
+            return;
+        }
+
+        const markdownHtml = typeof markdown.markdownToHtml === 'function'
+            ? markdown.markdownToHtml(plainText)
+            : '';
+        if (!markdownHtml) {
+            return;
+        }
+
         e.preventDefault();
-        showReadOnlyToast();
+        if (document.queryCommandSupported && document.queryCommandSupported('insertHTML')) {
+            document.execCommand('insertHTML', false, markdownHtml);
+        } else {
+            insertHtmlAtSelection(markdownHtml);
+        }
+        bindNoteCheckboxes();
+        refreshNoteDirtyState();
+        autoGenerateTitle();
+        updateNoteToolbarStates();
     });
     titleInput.addEventListener('input', () => {
         if (notesState.activeNoteIsArchived) {
@@ -179,6 +220,33 @@ function initNoteEditorPage() {
         loadNoteForEditor(noteId);
     } else {
         prepareNewNoteEditor();
+    }
+}
+
+function insertHtmlAtSelection(html) {
+    if (!html) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    const fragment = document.createDocumentFragment();
+    let lastNode = null;
+    while (holder.firstChild) {
+        lastNode = holder.firstChild;
+        fragment.appendChild(holder.firstChild);
+    }
+
+    range.insertNode(fragment);
+    if (lastNode) {
+        const newRange = document.createRange();
+        newRange.setStartAfter(lastNode);
+        newRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
     }
 }
 
@@ -831,4 +899,3 @@ if (document.readyState === 'complete') {
 } else {
     document.addEventListener('DOMContentLoaded', bootNoteEditorPage, { once: true });
 }
-
