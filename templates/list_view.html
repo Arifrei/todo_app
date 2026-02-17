@@ -185,7 +185,7 @@
                     <i class="fa-solid fa-chevron-right"></i>
                 </button>
                 <div class="bulk-menu-form" id="bulk-tag-form">
-                    <input type="text" id="bulk-tag-input" class="form-control" placeholder="Tag">
+                    <input type="text" id="bulk-tag-input" class="form-control" placeholder="Tag" autocomplete="off">
                     <button class="btn btn-secondary btn-small" type="button" data-onclick="bulkAddTag(); toggleBulkMenu(event, true);">Add</button>
                 </div>
                 {% endif %}
@@ -396,7 +396,7 @@
         {% if todo_list.type == 'list' %}
         <div class="form-group">
             <label for="item-tags">Tags (comma separated)</label>
-            <input type="text" id="item-tags" class="form-control" placeholder="e.g. home, errands">
+            <input type="text" id="item-tags" class="form-control" placeholder="e.g. home, errands" autocomplete="off">
         </div>
         {% endif %}
         <input type="hidden" id="item-phase-id">
@@ -429,7 +429,7 @@
         {% if todo_list.type == 'list' %}
         <div class="form-group">
             <label for="edit-item-tags">Tags (comma separated)</label>
-            <input type="text" id="edit-item-tags" class="form-control">
+            <input type="text" id="edit-item-tags" class="form-control" autocomplete="off">
         </div>
         {% endif %}
         <div class="modal-actions">

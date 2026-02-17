@@ -72,6 +72,9 @@ let recallState = {
 let currentTaskFilter = 'all';
 let selectedTagFilters = new Set();
 const TASK_FILTER_STATE_KEY_PREFIX = 'task_filter_state:';
+const taskTagAutocompleteMap = new Map();
+let taskTagAutocompleteGlobalHandlersBound = false;
+let taskTagAutocompleteRepositionRaf = 0;
 let calendarState = { selectedDay: null, events: [], monthCursor: null, monthEventsByDay: {}, dayViewOpen: false, detailsOpen: false, daySort: 'time', dayViewMode: 'timeline' };
 let calendarSearchState = { query: '', results: [], loading: false, debounceTimer: null, requestToken: 0 };
 const calendarSelection = { active: false, ids: new Set(), longPressTimer: null, longPressTriggered: false, touchStart: { x: 0, y: 0 } };
@@ -1574,6 +1577,240 @@ function applyTagColors() {
     });
 }
 
+function collectTaskTagAutocompleteSource() {
+    const byNormalized = new Map();
+    const addTag = (value) => {
+        const raw = (value || '').toString().trim();
+        if (!raw || raw === '__all') return;
+        const normalized = raw.toLowerCase();
+        if (!byNormalized.has(normalized)) byNormalized.set(normalized, raw);
+    };
+
+    document.querySelectorAll('#task-filter-submenu-tags .tag-filter-chip[data-tag]').forEach((chip) => {
+        addTag(chip.dataset.tag);
+    });
+    document.querySelectorAll('.task-item[data-tags]').forEach((item) => {
+        const rawTags = item.dataset.tags || '';
+        rawTags.split(',').forEach(addTag);
+    });
+
+    return Array.from(byNormalized.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+function buildTaskTagAutocompleteContext(input) {
+    const value = input.value || '';
+    const selectionStart = Number.isInteger(input.selectionStart) ? input.selectionStart : value.length;
+    const caret = Math.max(0, Math.min(selectionStart, value.length));
+    const commaSearchIndex = caret > 0 ? caret - 1 : 0;
+    const previousComma = value.lastIndexOf(',', commaSearchIndex);
+    const tokenStart = previousComma === -1 ? 0 : previousComma + 1;
+    const nextComma = value.indexOf(',', caret);
+    const tokenEnd = nextComma === -1 ? value.length : nextComma;
+    const rawToken = value.slice(tokenStart, tokenEnd);
+    const leadingWhitespace = (rawToken.match(/^\s*/) || [''])[0];
+    return {
+        query: rawToken.trim().toLowerCase(),
+        valuePrefix: value.slice(0, tokenStart) + leadingWhitespace,
+        valueSuffix: value.slice(tokenEnd)
+    };
+}
+
+function getTaskTagAutocompleteState(input) {
+    if (!input) return null;
+    if (taskTagAutocompleteMap.has(input)) return taskTagAutocompleteMap.get(input);
+    const dropdown = document.createElement('div');
+    dropdown.className = 'autocomplete-dropdown';
+    dropdown.setAttribute('role', 'listbox');
+    dropdown.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+    });
+    document.body.appendChild(dropdown);
+    const state = { dropdown, matches: [], selectedIndex: -1 };
+    taskTagAutocompleteMap.set(input, state);
+    return state;
+}
+
+function positionTaskTagDropdown(input, dropdown) {
+    if (!input || !dropdown) return;
+    const rect = input.getBoundingClientRect();
+    const gutter = 8;
+    const spacing = 6;
+    const maxWidth = Math.max(220, window.innerWidth - (gutter * 2));
+    const width = Math.min(rect.width, maxWidth);
+    const left = Math.max(gutter, Math.min(rect.left, window.innerWidth - width - gutter));
+
+    dropdown.style.left = `${Math.round(left)}px`;
+    dropdown.style.width = `${Math.round(width)}px`;
+    dropdown.style.top = `${Math.round(rect.bottom + spacing)}px`;
+
+    const dropHeight = Math.min(dropdown.offsetHeight || 220, 260);
+    const spaceBelow = window.innerHeight - rect.bottom - spacing;
+    const spaceAbove = rect.top - spacing;
+    if (spaceBelow < 120 && spaceAbove > spaceBelow) {
+        const top = Math.max(gutter, rect.top - dropHeight - spacing);
+        dropdown.style.top = `${Math.round(top)}px`;
+    }
+}
+
+function hideTaskTagDropdown(input) {
+    const state = input ? taskTagAutocompleteMap.get(input) : null;
+    if (!state) return;
+    state.matches = [];
+    state.selectedIndex = -1;
+    state.dropdown.classList.remove('show');
+    state.dropdown.innerHTML = '';
+}
+
+function updateTaskTagActiveOption(state) {
+    if (!state || !state.dropdown) return;
+    const items = state.dropdown.querySelectorAll('.autocomplete-item');
+    items.forEach((item, index) => {
+        const isActive = index === state.selectedIndex;
+        item.classList.toggle('active', isActive);
+        if (isActive) {
+            item.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function applyTaskTagSuggestion(input, selectedTag) {
+    if (!input || !selectedTag) return;
+    const context = buildTaskTagAutocompleteContext(input);
+    const isBulkTagInput = input.id === 'bulk-tag-input';
+    const appendCommaForMultiTag = !isBulkTagInput && !context.valueSuffix;
+    const nextValue = appendCommaForMultiTag
+        ? `${context.valuePrefix}${selectedTag}, `
+        : `${context.valuePrefix}${selectedTag}${context.valueSuffix}`;
+    const caretPos = appendCommaForMultiTag
+        ? nextValue.length
+        : (context.valuePrefix + selectedTag).length;
+    input.value = nextValue;
+    input.focus();
+    input.setSelectionRange(caretPos, caretPos);
+    hideTaskTagDropdown(input);
+}
+
+function renderTaskTagSuggestions(input) {
+    if (!input) return;
+    taskTagAutocompleteMap.forEach((_state, otherInput) => {
+        if (otherInput !== input) hideTaskTagDropdown(otherInput);
+    });
+    const state = getTaskTagAutocompleteState(input);
+    if (!state) return;
+
+    const { query } = buildTaskTagAutocompleteContext(input);
+    if (!query) {
+        hideTaskTagDropdown(input);
+        return;
+    }
+
+    const matches = collectTaskTagAutocompleteSource()
+        .filter((tag) => tag.toLowerCase().startsWith(query));
+
+    if (!matches.length) {
+        hideTaskTagDropdown(input);
+        return;
+    }
+
+    state.matches = matches;
+    state.selectedIndex = 0;
+    state.dropdown.innerHTML = '';
+    matches.forEach((tag, index) => {
+        const item = document.createElement('div');
+        item.className = 'autocomplete-item';
+        item.setAttribute('role', 'option');
+        if (index === 0) item.classList.add('active');
+        item.textContent = tag;
+        item.addEventListener('mouseenter', () => {
+            state.selectedIndex = index;
+            updateTaskTagActiveOption(state);
+        });
+        item.addEventListener('click', () => applyTaskTagSuggestion(input, tag));
+        state.dropdown.appendChild(item);
+    });
+    state.dropdown.classList.add('show');
+    positionTaskTagDropdown(input, state.dropdown);
+}
+
+function repositionVisibleTaskTagDropdowns() {
+    taskTagAutocompleteMap.forEach((state, input) => {
+        if (!state.dropdown.classList.contains('show')) return;
+        positionTaskTagDropdown(input, state.dropdown);
+    });
+}
+
+function bindTaskTagAutocompleteGlobals() {
+    if (taskTagAutocompleteGlobalHandlersBound) return;
+    taskTagAutocompleteGlobalHandlersBound = true;
+
+    document.addEventListener('click', (event) => {
+        taskTagAutocompleteMap.forEach((state, input) => {
+            if (input.contains(event.target) || state.dropdown.contains(event.target)) return;
+            hideTaskTagDropdown(input);
+        });
+    });
+
+    window.addEventListener('resize', repositionVisibleTaskTagDropdowns, { passive: true });
+    window.addEventListener('scroll', () => {
+        if (taskTagAutocompleteRepositionRaf) return;
+        taskTagAutocompleteRepositionRaf = window.requestAnimationFrame(() => {
+            taskTagAutocompleteRepositionRaf = 0;
+            repositionVisibleTaskTagDropdowns();
+        });
+    }, true);
+}
+
+function bindTaskTagAutocompleteInput(input) {
+    if (!input || input.dataset.tagAutocompleteBound === '1') return;
+    input.dataset.tagAutocompleteBound = '1';
+
+    getTaskTagAutocompleteState(input);
+    input.addEventListener('focus', () => renderTaskTagSuggestions(input));
+    input.addEventListener('click', () => renderTaskTagSuggestions(input));
+    input.addEventListener('input', () => renderTaskTagSuggestions(input));
+    input.addEventListener('blur', () => {
+        window.setTimeout(() => hideTaskTagDropdown(input), 120);
+    });
+    input.addEventListener('keydown', (event) => {
+        const state = taskTagAutocompleteMap.get(input);
+        if (!state || !state.dropdown.classList.contains('show')) return;
+        if (!state.matches.length) return;
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            state.selectedIndex = (state.selectedIndex + 1) % state.matches.length;
+            updateTaskTagActiveOption(state);
+            return;
+        }
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            state.selectedIndex = (state.selectedIndex - 1 + state.matches.length) % state.matches.length;
+            updateTaskTagActiveOption(state);
+            return;
+        }
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            const selected = state.matches[state.selectedIndex] || state.matches[0];
+            applyTaskTagSuggestion(input, selected);
+            return;
+        }
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            hideTaskTagDropdown(input);
+        }
+    });
+}
+
+function initTaskTagAutocomplete() {
+    const hasTagInput = document.getElementById('item-tags') ||
+        document.getElementById('edit-item-tags') ||
+        document.getElementById('bulk-tag-input');
+    if (!hasTagInput) return;
+    bindTaskTagAutocompleteGlobals();
+    bindTaskTagAutocompleteInput(document.getElementById('item-tags'));
+    bindTaskTagAutocompleteInput(document.getElementById('edit-item-tags'));
+    bindTaskTagAutocompleteInput(document.getElementById('bulk-tag-input'));
+}
+
 function setTaskFilter(filter) {
     const menu = document.getElementById('task-filter-menu');
     if (!menu) return;
@@ -1970,7 +2207,10 @@ function closeAddItemModal() {
     const notesInput = document.getElementById('item-notes');
     if (notesInput) notesInput.value = '';
     const tagsInput = document.getElementById('item-tags');
-    if (tagsInput) tagsInput.value = '';
+    if (tagsInput) {
+        tagsInput.value = '';
+        hideTaskTagDropdown(tagsInput);
+    }
     const phaseSelect = document.getElementById('item-phase-select');
     if (phaseSelect) phaseSelect.value = '';
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -2196,7 +2436,10 @@ function closeEditItemModal() {
     const modal = document.getElementById('edit-item-modal');
     modal.classList.remove('active');
     const tagsInput = document.getElementById('edit-item-tags');
-    if (tagsInput) tagsInput.value = '';
+    if (tagsInput) {
+        tagsInput.value = '';
+        hideTaskTagDropdown(tagsInput);
+    }
 }
 
 // --- Move Navigation (step-by-step) ---

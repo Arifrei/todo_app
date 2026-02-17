@@ -544,11 +544,13 @@ async function loadListForEditor(listId) {
         restoreCollapsedListSections();
         listState.activeSnapshot = {
             title: list.title || '',
-            checkboxMode: !!list.checkbox_mode
+            checkboxMode: !!list.checkbox_mode,
+            items: cloneListSnapshotItems(list.items || [])
         };
         listState.sessionSnapshot = {
             title: list.title || '',
-            checkboxMode: !!list.checkbox_mode
+            checkboxMode: !!list.checkbox_mode,
+            items: cloneListSnapshotItems(list.items || [])
         };
         listState.dirty = false;
         listState.insertionIndex = null;
@@ -589,12 +591,62 @@ function refreshListDirtyState() {
     setListDirty(dirty);
 }
 
+function normalizeListSnapshotItem(item, fallbackOrder = 0) {
+    const id = parseInt(item && item.id, 10);
+    const orderIndex = parseInt(item && item.order_index, 10);
+    return {
+        id: Number.isFinite(id) && id > 0 ? id : null,
+        text: ((item && item.text) || '').trim(),
+        note: item && item.note != null ? String(item.note) : null,
+        inner_note: item && item.inner_note != null ? String(item.inner_note) : null,
+        link_text: item && item.link_text != null ? String(item.link_text).trim() : null,
+        link_url: item && item.link_url != null ? String(item.link_url).trim() : null,
+        scheduled_date: normalizeListDateValue(item && item.scheduled_date) || null,
+        checked: !!(item && item.checked),
+        order_index: Number.isFinite(orderIndex) ? orderIndex : fallbackOrder
+    };
+}
+
+function cloneListSnapshotItems(items) {
+    return (Array.isArray(items) ? items : [])
+        .map((item, index) => normalizeListSnapshotItem(item, index + 1))
+        .sort((a, b) => {
+            const aOrder = Number.isFinite(a.order_index) ? a.order_index : 0;
+            const bOrder = Number.isFinite(b.order_index) ? b.order_index : 0;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return (a.id || 0) - (b.id || 0);
+        });
+}
+
+function getComparableListSnapshotItems(items) {
+    return cloneListSnapshotItems(items).map((item) => ({
+        id: item.id,
+        text: item.text,
+        note: item.note || null,
+        inner_note: item.inner_note || null,
+        link_text: item.link_text || null,
+        link_url: item.link_url || null,
+        scheduled_date: item.scheduled_date || null,
+        checked: !!item.checked
+    }));
+}
+
+function hasListItemSessionChanges(snapshot = getListSessionSnapshot()) {
+    const currentComparable = getComparableListSnapshotItems(listState.items || []);
+    const sessionComparable = getComparableListSnapshotItems((snapshot && snapshot.items) || []);
+    return JSON.stringify(currentComparable) !== JSON.stringify(sessionComparable);
+}
+
+function updateListSessionActionState() {
+    const cancelBtn = document.getElementById('list-cancel-btn');
+    if (cancelBtn) cancelBtn.disabled = listState.isArchived || !hasListSessionChanges();
+}
+
 function setListDirty(dirty) {
     listState.dirty = dirty;
     const saveBtn = document.getElementById('list-save-btn');
-    const cancelBtn = document.getElementById('list-cancel-btn');
     if (saveBtn) saveBtn.disabled = false;
-    if (cancelBtn) cancelBtn.disabled = listState.isArchived || !hasListSessionChanges();
+    updateListSessionActionState();
     if (!dirty) {
         if (listAutoSaveTimer) {
             clearTimeout(listAutoSaveTimer);
@@ -615,13 +667,104 @@ function getCurrentListMetadataSnapshot() {
 }
 
 function getListSessionSnapshot() {
-    return listState.sessionSnapshot || listState.activeSnapshot || { title: '', checkboxMode: false };
+    return listState.sessionSnapshot || listState.activeSnapshot || { title: '', checkboxMode: false, items: [] };
 }
 
 function hasListSessionChanges() {
     const current = getCurrentListMetadataSnapshot();
     const session = getListSessionSnapshot();
-    return current.title !== (session.title || '') || current.checkboxMode !== !!session.checkboxMode;
+    const metadataChanged = current.title !== (session.title || '') || current.checkboxMode !== !!session.checkboxMode;
+    return metadataChanged || hasListItemSessionChanges(session);
+}
+
+function buildListRestoreUpdatePayload(currentItem, targetItem) {
+    const payload = {};
+    if ((currentItem.text || '') !== (targetItem.text || '')) payload.text = targetItem.text || '';
+    if ((currentItem.note || null) !== (targetItem.note || null)) payload.note = targetItem.note || null;
+    if ((currentItem.inner_note || null) !== (targetItem.inner_note || null)) payload.inner_note = targetItem.inner_note || null;
+    if ((currentItem.link_text || null) !== (targetItem.link_text || null)) payload.link_text = targetItem.link_text || null;
+    if ((currentItem.link_url || null) !== (targetItem.link_url || null)) payload.link_url = targetItem.link_url || null;
+    if ((normalizeListDateValue(currentItem.scheduled_date) || null) !== (normalizeListDateValue(targetItem.scheduled_date) || null)) {
+        payload.scheduled_date = normalizeListDateValue(targetItem.scheduled_date) || null;
+    }
+    if (!!currentItem.checked !== !!targetItem.checked) payload.checked = !!targetItem.checked;
+    return payload;
+}
+
+function buildListRestoreCreatePayload(targetItem) {
+    const textValue = (targetItem.text || '').trim();
+    if (!textValue) return null;
+    const payload = { text: textValue };
+    if (targetItem.note != null) payload.note = targetItem.note;
+    if (targetItem.inner_note != null) payload.inner_note = targetItem.inner_note;
+    if (targetItem.link_text != null) payload.link_text = targetItem.link_text;
+    if (targetItem.link_url != null) payload.link_url = targetItem.link_url;
+    if (targetItem.scheduled_date != null) payload.scheduled_date = normalizeListDateValue(targetItem.scheduled_date) || null;
+    if (targetItem.checked) payload.checked = true;
+    return payload;
+}
+
+async function restoreListItemsToSessionSnapshot(snapshot) {
+    const targetItems = cloneListSnapshotItems((snapshot && snapshot.items) || []);
+    const currentItems = cloneListSnapshotItems(listState.items || []);
+    const currentById = new Map(currentItems.filter(item => item.id).map(item => [item.id, item]));
+    const targetIds = new Set(targetItems.filter(item => item.id).map(item => item.id));
+    const recreatedIdMap = new Map();
+
+    for (const currentItem of currentItems) {
+        if (!currentItem.id) continue;
+        if (!targetIds.has(currentItem.id)) {
+            await deleteListItem(currentItem.id);
+            currentById.delete(currentItem.id);
+        }
+    }
+
+    for (const targetItem of targetItems) {
+        if (!targetItem.id) continue;
+        const currentItem = currentById.get(targetItem.id);
+        if (!currentItem) continue;
+        const payload = buildListRestoreUpdatePayload(currentItem, targetItem);
+        if (Object.keys(payload).length) {
+            await updateListItem(targetItem.id, payload);
+        }
+    }
+
+    for (const targetItem of targetItems) {
+        if (targetItem.id && currentById.has(targetItem.id)) continue;
+        const payload = buildListRestoreCreatePayload(targetItem);
+        if (!payload) continue;
+        const created = await createListItem(payload, null);
+        const createdId = parseInt(created && created.id, 10);
+        if (targetItem.id && Number.isFinite(createdId) && createdId > 0) {
+            recreatedIdMap.set(targetItem.id, createdId);
+        }
+    }
+
+    await loadListItems();
+    const sortedCurrentItems = cloneListSnapshotItems(listState.items || []);
+    const currentIdSet = new Set(sortedCurrentItems.map(item => item.id).filter(id => id));
+    const desiredOrderIds = [];
+    targetItems.forEach((targetItem) => {
+        let desiredId = targetItem.id;
+        if (!(desiredId && currentIdSet.has(desiredId))) {
+            desiredId = recreatedIdMap.get(targetItem.id);
+        }
+        if (desiredId && currentIdSet.has(desiredId)) {
+            desiredOrderIds.push(desiredId);
+        }
+    });
+    sortedCurrentItems.forEach((item) => {
+        if (item.id && !desiredOrderIds.includes(item.id)) {
+            desiredOrderIds.push(item.id);
+        }
+    });
+    const currentOrderIds = sortedCurrentItems.map(item => item.id).filter(id => id);
+    const orderChanged = desiredOrderIds.length !== currentOrderIds.length
+        || desiredOrderIds.some((id, index) => id !== currentOrderIds[index]);
+    if (orderChanged && desiredOrderIds.length) {
+        await reorderListItems(desiredOrderIds);
+        await loadListItems();
+    }
 }
 
 async function cancelListMetadataChanges() {
@@ -634,17 +777,31 @@ async function cancelListMetadataChanges() {
     const checkboxToggle = document.getElementById('list-checkbox-toggle');
     if (!titleInput || !checkboxToggle) return;
     const snapshot = getListSessionSnapshot();
-    titleInput.value = snapshot.title || '';
-    checkboxToggle.checked = !!snapshot.checkboxMode;
-    listState.checkboxMode = !!snapshot.checkboxMode;
-    refreshListDirtyState();
-    if (listState.dirty) {
-        await saveListMetadata({ silent: true });
-    } else {
-        setListDirty(false);
+    try {
+        titleInput.value = snapshot.title || '';
+        checkboxToggle.checked = !!snapshot.checkboxMode;
+        listState.checkboxMode = !!snapshot.checkboxMode;
+        if (hasListItemSessionChanges(snapshot)) {
+            await restoreListItemsToSessionSnapshot(snapshot);
+        }
+        refreshListDirtyState();
+        if (listState.dirty) {
+            await saveListMetadata({ silent: true });
+        } else {
+            setListDirty(false);
+        }
+        listState.sessionSnapshot = {
+            title: (titleInput.value || '').trim(),
+            checkboxMode: !!checkboxToggle.checked,
+            items: cloneListSnapshotItems(listState.items || [])
+        };
+        updateListSessionActionState();
+        renderListItems();
+        showToast('Restored to session start.', 'success', 1800);
+    } catch (err) {
+        console.error('List restore failed:', err);
+        showToast('Could not restore list.', 'error');
     }
-    renderListItems();
-    showToast('Restored to session start.', 'success', 1800);
 }
 
 function scheduleListAutosave() {
@@ -690,7 +847,8 @@ async function saveListMetadata(options = {}) {
         const saved = await res.json();
         listState.activeSnapshot = {
             title: saved.title || title,
-            checkboxMode: !!saved.checkbox_mode
+            checkboxMode: !!saved.checkbox_mode,
+            items: cloneListSnapshotItems(listState.items || [])
         };
         listState.checkboxMode = !!saved.checkbox_mode;
         setListDirty(false);
@@ -3275,6 +3433,7 @@ async function loadListItems(options = {}) {
         listState.items = await res.json();
         updateListSectionReorderUI();
         renderListItems();
+        updateListSessionActionState();
         if (focusPrimary) {
             const inputs = document.querySelectorAll('.list-pill-input textarea');
             const last = inputs[inputs.length - 1];
@@ -3592,5 +3751,3 @@ async function ensureListEditorDependencies() {
         await loadListEditorScriptOnce('/static/notes/editor.js', 'editor');
     }
 }
-
-

@@ -2573,12 +2573,12 @@ button.meta-chip {
         grid-row: 4;
         margin-top: 0.25rem;
     }
-
     .calendar-meta-lite {
-        grid-column: 3;
-        grid-row: 2;
-        margin-top: 0;
-        align-self: center;
+        grid-column: 2 / span 3;
+        grid-row: 3;
+        margin-top: 0.15rem;
+        align-self: start;
+        min-width: 0;
     }
 
     /* Action Buttons Row - Same row as time on Mobile */
@@ -2590,6 +2590,7 @@ button.meta-chip {
         grid-row: 2;
         justify-self: end;
         align-items: center;
+        min-width: 0;
     }
 
     /* Row gap for spacing */
@@ -2731,10 +2732,16 @@ button.meta-chip {
     .calendar-item-menu-option i {
         font-size: 1rem;
     }
-
     .calendar-icon-btn {
         min-width: 44px;
         min-height: 44px;
+    }
+
+    .calendar-row .calendar-icon-btn.overflow-trigger {
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
+        min-height: 36px;
     }
 }
 
@@ -2911,4 +2918,5 @@ button.meta-chip {
         break-inside: avoid;
     }
 }
+
 

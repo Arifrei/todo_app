@@ -701,6 +701,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof initStickyListHeader === 'function') initStickyListHeader();
     if (typeof initTaskFilters === 'function') initTaskFilters();
     if (typeof initTagFilters === 'function') initTagFilters();
+    if (typeof initTaskTagAutocomplete === 'function') initTaskTagAutocomplete();
     if (typeof repositionLinkedNoteChips === 'function') repositionLinkedNoteChips();
     if (typeof applyTagColors === 'function') applyTagColors();
     initMobileTopbar();
