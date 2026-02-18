@@ -1016,8 +1016,23 @@ def _rollover_incomplete_events():
                 if not events:
                     continue
 
+                linked_todo_ids = {ev.todo_item_id for ev in events if ev.todo_item_id}
+                done_linked_todo_ids = set()
+                if linked_todo_ids:
+                    done_linked_todo_ids = {
+                        task_id for (task_id,) in db.session.query(TodoItem.id).filter(
+                            TodoItem.id.in_(linked_todo_ids),
+                            TodoItem.status == 'done'
+                        ).all()
+                    }
+
                 events_to_delete = {}
                 for ev in events:
+                    if ev.todo_item_id and ev.todo_item_id in done_linked_todo_ids:
+                        if ev.status != 'done':
+                            ev.status = 'done'
+                        continue
+
                     # Skip if this event has already been rolled over today
                     if ev.id in rolled_lookup:
                         events_to_delete[ev.id] = ev
@@ -1518,6 +1533,29 @@ def _cancel_reminder_job(event):
 
 
 
+def _is_event_reminder_source_active(event):
+    """Return True when an event reminder still points to a live, actionable source item."""
+    if not event or event.status in {'done', 'canceled'}:
+        return False
+    if event.todo_item_id:
+        linked_todo = db.session.get(TodoItem, event.todo_item_id)
+        if (not linked_todo) or linked_todo.status == 'done':
+            return False
+    if event.note_list_item_id:
+        linked_item = db.session.get(NoteListItem, event.note_list_item_id)
+        if (not linked_item) or linked_item.checked:
+            return False
+        if (not linked_item.scheduled_date) or linked_item.scheduled_date != event.day:
+            return False
+    if event.do_feed_item_id:
+        linked_feed = db.session.get(DoFeedItem, event.do_feed_item_id)
+        if not linked_feed:
+            return False
+        if linked_feed.scheduled_date and linked_feed.scheduled_date != event.day:
+            return False
+    return True
+
+
 def _send_event_reminder(event_id):
     """Send a reminder notification for a specific calendar event."""
     with app.app_context():
@@ -1528,6 +1566,12 @@ def _send_event_reminder(event_id):
 
             # Check if already sent or snoozed
             if event.reminder_sent:
+                return
+            if not _is_event_reminder_source_active(event):
+                event.reminder_job_id = None
+                event.reminder_snoozed_until = None
+                event.reminder_sent = True
+                db.session.commit()
                 return
 
             # Check if snoozed
@@ -1678,12 +1722,21 @@ def _schedule_existing_reminders():
             ).all()
 
             scheduled_count = 0
+            updated_invalid = False
             for event in events:
                 try:
+                    if not _is_event_reminder_source_active(event):
+                        event.reminder_job_id = None
+                        event.reminder_snoozed_until = None
+                        event.reminder_sent = True
+                        updated_invalid = True
+                        continue
                     _schedule_reminder_job(event)
                     scheduled_count += 1
                 except Exception as e:
                     app.logger.error(f"Error scheduling reminder for event {event.id}: {e}")
+            if updated_invalid:
+                db.session.commit()
 
         except Exception as e:
             app.logger.error(f"Error in _schedule_existing_reminders: {e}")

@@ -78,8 +78,12 @@ def snooze_reminder(event_id):
 def get_pending_reminders():
     import app as a
     CalendarEvent = a.CalendarEvent
+    DoFeedItem = a.DoFeedItem
+    NoteListItem = a.NoteListItem
+    TodoItem = a.TodoItem
     app = a.app
     datetime = a.datetime
+    db = a.db
     get_current_user = a.get_current_user
     jsonify = a.jsonify
     or_ = a.or_
@@ -99,11 +103,28 @@ def get_pending_reminders():
 
     events = CalendarEvent.query.filter(
         CalendarEvent.user_id == user.id,
+        CalendarEvent.status.notin_(['done', 'canceled']),
         or_(CalendarEvent.reminder_sent.is_(False), CalendarEvent.reminder_sent.is_(None))
     ).all()
 
     pending = []
     for event in events:
+        if event.todo_item_id:
+            linked_todo = db.session.get(TodoItem, event.todo_item_id)
+            if (not linked_todo) or linked_todo.status == 'done':
+                continue
+        if event.note_list_item_id:
+            linked_item = db.session.get(NoteListItem, event.note_list_item_id)
+            if (not linked_item) or linked_item.checked:
+                continue
+            if (not linked_item.scheduled_date) or linked_item.scheduled_date != event.day:
+                continue
+        if event.do_feed_item_id:
+            linked_feed = db.session.get(DoFeedItem, event.do_feed_item_id)
+            if not linked_feed:
+                continue
+            if linked_feed.scheduled_date and linked_feed.scheduled_date != event.day:
+                continue
         if not event.start_time:
             continue
 

@@ -249,7 +249,9 @@
                 {% if item.due_date or (item.linked_notes|length) %}
                 <div class="task-meta-lite u-mt-6px u-flex-wrap-gap-05">
                     {% if item.due_date %}
-                    <span class="meta-chip time">Due {{ item.due_date }}</span>
+                    <a class="meta-chip time" href="/calendar?day={{ item.due_date }}&mode=day" title="Open {{ item.due_date }} in Calendar day view">
+                        Due {{ item.due_date }}
+                    </a>
                     {% endif %}
                     {% if item.linked_notes|length %}
                         {% for note in item.linked_notes %}

@@ -85,9 +85,12 @@ def reorder_lists():
 def handle_list(list_id):
     import app as a
 
+    CalendarEvent = a.CalendarEvent
+    ENTITY_CALENDAR = a.ENTITY_CALENDAR
     ENTITY_TODO_ITEM = a.ENTITY_TODO_ITEM
     ENTITY_TODO_LIST = a.ENTITY_TODO_LIST
     TodoList = a.TodoList
+    _cancel_reminder_job = a._cancel_reminder_job
     canonicalize_phase_flags = a.canonicalize_phase_flags
     db = a.db
     delete_embedding = a.delete_embedding
@@ -104,6 +107,21 @@ def handle_list(list_id):
     canonicalize_phase_flags(todo_list, commit_callback=db.session.commit)
 
     if request.method == 'DELETE':
+        todo_item_ids_to_remove = set()
+        for item in (todo_list.items or []):
+            todo_item_ids_to_remove.add(item.id)
+            if item.linked_list:
+                for child_item in (item.linked_list.items or []):
+                    todo_item_ids_to_remove.add(child_item.id)
+        if todo_item_ids_to_remove:
+            linked_events = CalendarEvent.query.filter(
+                CalendarEvent.user_id == user.id,
+                CalendarEvent.todo_item_id.in_(list(todo_item_ids_to_remove))
+            ).all()
+            for linked_event in linked_events:
+                _cancel_reminder_job(linked_event)
+                delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+                db.session.delete(linked_event)
         for item in todo_list.items:
             if item.linked_list:
                 delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)

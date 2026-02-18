@@ -37,6 +37,18 @@ def handle_item(item_id):
         # models.py has cascade="all, delete-orphan" on the parent list side, 
         # but the linked_list is a separate relationship.
         phase_id = item.phase_id
+        todo_item_ids_to_remove = {item.id}
+        if item.linked_list:
+            for child_item in (item.linked_list.items or []):
+                todo_item_ids_to_remove.add(child_item.id)
+        linked_events = CalendarEvent.query.filter(
+            CalendarEvent.user_id == user.id,
+            CalendarEvent.todo_item_id.in_(list(todo_item_ids_to_remove))
+        ).all()
+        for linked_event in linked_events:
+            _cancel_reminder_job(linked_event)
+            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+            db.session.delete(linked_event)
         if item.linked_list:
             delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)
             db.session.delete(item.linked_list)
@@ -55,7 +67,7 @@ def handle_item(item_id):
         data = request.json or {}
         old_due_date = item.due_date
         old_status = item.status
-        calendar_event_to_refresh = None
+        calendar_event_ids_to_refresh = set()
         if 'dependency_ids' in data:
             if not item.list or item.list.type != 'list':
                 return jsonify({'error': 'Dependencies are only supported for task lists'}), 400
@@ -113,21 +125,34 @@ def handle_item(item_id):
             due_date_raw = data.get('due_date')
             item.due_date = parse_day_value(due_date_raw) if due_date_raw else None
             if old_due_date != item.due_date:
-                linked_event = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).first()
-                if linked_event:
+                linked_events = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).all()
+                if linked_events:
                     if item.due_date:
-                        linked_event.day = item.due_date
-                        linked_event.order_index = _next_calendar_order(item.due_date, user.id)
-                        if linked_event.reminder_minutes_before is not None and linked_event.start_time:
-                            _schedule_reminder_job(linked_event)
-                        calendar_event_to_refresh = linked_event.id
+                        primary = next((linked_event for linked_event in linked_events if linked_event.day == item.due_date), None)
+                        if primary is None:
+                            primary = linked_events[0]
+                            primary.day = item.due_date
+                            primary.order_index = _next_calendar_order(item.due_date, user.id)
+                        for linked_event in linked_events:
+                            if linked_event.id == primary.id:
+                                continue
+                            _cancel_reminder_job(linked_event)
+                            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+                            db.session.delete(linked_event)
+                        if primary.reminder_minutes_before is not None and primary.start_time:
+                            _schedule_reminder_job(primary)
+                        calendar_event_ids_to_refresh.add(primary.id)
                     else:
-                        _cancel_reminder_job(linked_event)
-                        db.session.delete(linked_event)
+                        for linked_event in linked_events:
+                            _cancel_reminder_job(linked_event)
+                            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+                            db.session.delete(linked_event)
 
         if old_status != new_status:
-            linked_event = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).first()
-            if linked_event:
+            linked_events = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).all()
+            for linked_event in linked_events:
+                linked_event.status = new_status
+                calendar_event_ids_to_refresh.add(linked_event.id)
                 if new_status == 'done':
                     _cancel_reminder_job(linked_event)
                     linked_event.reminder_sent = True
@@ -145,8 +170,8 @@ def handle_item(item_id):
 
         db.session.commit()
         start_embedding_job(user.id, ENTITY_TODO_ITEM, item.id)
-        if calendar_event_to_refresh:
-            start_embedding_job(user.id, ENTITY_CALENDAR, calendar_event_to_refresh)
+        for event_id in calendar_event_ids_to_refresh:
+            start_embedding_job(user.id, ENTITY_CALENDAR, event_id)
         return jsonify(item.to_dict())
 
 def create_item(list_id):
@@ -476,10 +501,14 @@ def bulk_import(list_id):
 
 def bulk_items():
     import app as a
+    CalendarEvent = a.CalendarEvent
+    ENTITY_CALENDAR = a.ENTITY_CALENDAR
     ENTITY_TODO_ITEM = a.ENTITY_TODO_ITEM
     ENTITY_TODO_LIST = a.ENTITY_TODO_LIST
     TodoItem = a.TodoItem
     TodoList = a.TodoList
+    _cancel_reminder_job = a._cancel_reminder_job
+    _schedule_reminder_job = a._schedule_reminder_job
     datetime = a.datetime
     db = a.db
     delete_embedding = a.delete_embedding
@@ -549,10 +578,13 @@ def bulk_items():
                 return jsonify({'error': f'{len(blocked)} task(s) are blocked by dependencies.'}), 409
 
         affected_phases = set()
+        calendar_event_ids_to_refresh = set()
+        events_to_reschedule = []
         for item in items:
             # Avoid changing phases to task statuses inadvertently
             if is_phase_header(item):
                 continue
+            old_status = item.status
             if status == 'done':
                 if item.status != 'done' or not item.completed_at:
                     item.completed_at = datetime.now(pytz.UTC).replace(tzinfo=None)
@@ -561,6 +593,19 @@ def bulk_items():
             item.status = status
             if item.phase_id:
                 affected_phases.add(item.phase_id)
+            if old_status != item.status:
+                linked_events = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).all()
+                for linked_event in linked_events:
+                    linked_event.status = item.status
+                    calendar_event_ids_to_refresh.add(linked_event.id)
+                    if item.status == 'done':
+                        _cancel_reminder_job(linked_event)
+                        linked_event.reminder_sent = True
+                        linked_event.reminder_snoozed_until = None
+                    elif old_status == 'done':
+                        linked_event.reminder_sent = False
+                        if linked_event.reminder_minutes_before is not None and linked_event.start_time:
+                            events_to_reschedule.append(linked_event)
 
         # Update all affected phase statuses
         for phase_id in affected_phases:
@@ -569,6 +614,10 @@ def bulk_items():
                 phase_item.update_phase_status()
 
         db.session.commit()
+        for linked_event in events_to_reschedule:
+            _schedule_reminder_job(linked_event)
+        for event_id in calendar_event_ids_to_refresh:
+            start_embedding_job(user.id, ENTITY_CALENDAR, event_id)
         return jsonify({'updated': len(items)})
 
     if action == 'add_tag':
@@ -597,6 +646,20 @@ def bulk_items():
         return jsonify({'updated': updated})
 
     if action == 'delete':
+        todo_item_ids_to_remove = set()
+        for item in items:
+            todo_item_ids_to_remove.add(item.id)
+            if item.linked_list:
+                for child_item in (item.linked_list.items or []):
+                    todo_item_ids_to_remove.add(child_item.id)
+        linked_events = CalendarEvent.query.filter(
+            CalendarEvent.user_id == user.id,
+            CalendarEvent.todo_item_id.in_(list(todo_item_ids_to_remove))
+        ).all()
+        for linked_event in linked_events:
+            _cancel_reminder_job(linked_event)
+            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+            db.session.delete(linked_event)
         for item in items:
             if item.linked_list:
                 delete_embedding(user.id, ENTITY_TODO_LIST, item.linked_list.id)

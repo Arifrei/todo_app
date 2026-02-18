@@ -1543,13 +1543,12 @@ body.list-section-dragging .list-section-drag-handle {
     pointer-events: auto;
 }
 
-.list-pill:focus-within .list-pill-actions {
-    opacity: 1;
-    pointer-events: auto;
-}
-
-/* On hybrid devices (touch + mouse/trackpad), allow hover reveal too. */
-@media (hover: hover), (any-hover: hover) {
+/* Desktop pointer/keyboard reveal. */
+@media (hover: hover) and (pointer: fine) {
+    .list-pill:focus-within .list-pill-actions {
+        opacity: 1;
+        pointer-events: auto;
+    }
     .list-pill:hover .list-pill-actions {
         opacity: 1;
         pointer-events: auto;

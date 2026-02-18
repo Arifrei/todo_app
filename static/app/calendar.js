@@ -645,6 +645,13 @@ async function updateCalendarEvent(id, payload, options = {}) {
     const { skipReload = false, skipMonth = false, skipConflictWarning = false } = options;
     const prevEvent = Array.isArray(calendarState.events) ? calendarState.events.find(e => e.id === id) : null;
     const prevDay = prevEvent ? prevEvent.day : null;
+    const prevReminderId = prevEvent ? (prevEvent.calendar_event_id || prevEvent.id) : null;
+    const prevHadReminder = !!(
+        prevEvent &&
+        prevEvent.start_time &&
+        prevEvent.reminder_minutes_before !== null &&
+        prevEvent.reminder_minutes_before !== undefined
+    );
     const reminderAffecting = payload && ['status', 'reminder_minutes_before', 'start_time', 'day'].some(key => Object.prototype.hasOwnProperty.call(payload, key));
     try {
         const res = await fetch(`/api/calendar/events/${id}`, {
@@ -679,6 +686,28 @@ async function updateCalendarEvent(id, payload, options = {}) {
             updated = await res.json();
         } catch (_) {
             // Some updates may not return JSON; skip in that case
+        }
+        if (window.isNativeApp && window.isNativeApp() && prevReminderId && prevHadReminder) {
+            const movedDay = !!(updated && prevDay && updated.day && updated.day !== prevDay);
+            const updatedReminderStillActive = !!(
+                updated &&
+                updated.status !== 'done' &&
+                updated.status !== 'canceled' &&
+                updated.start_time &&
+                updated.reminder_minutes_before !== null &&
+                updated.reminder_minutes_before !== undefined
+            );
+            const payloadLikelyCancels = (
+                (Object.prototype.hasOwnProperty.call(payload, 'status') && ['done', 'canceled'].includes(payload.status)) ||
+                (Object.prototype.hasOwnProperty.call(payload, 'reminder_minutes_before') && (payload.reminder_minutes_before === null || payload.reminder_minutes_before === undefined || payload.reminder_minutes_before === '')) ||
+                (Object.prototype.hasOwnProperty.call(payload, 'start_time') && !payload.start_time) ||
+                (Object.prototype.hasOwnProperty.call(payload, 'day') && prevDay && payload.day && payload.day !== prevDay)
+            );
+            if (movedDay || !updatedReminderStillActive || (!updated && payloadLikelyCancels)) {
+                if (window.NotificationService && typeof window.NotificationService.cancel === 'function') {
+                    await window.NotificationService.cancel(prevReminderId);
+                }
+            }
         }
 
         // Optimistically update local state so the UI reflects changes without waiting on a reload
@@ -726,6 +755,11 @@ async function updateCalendarEvent(id, payload, options = {}) {
 async function deleteCalendarEvent(id) {
     try {
         await fetch(`/api/calendar/events/${id}`, { method: 'DELETE' });
+        if (window.isNativeApp && window.isNativeApp()) {
+            if (window.NotificationService && typeof window.NotificationService.cancel === 'function') {
+                await window.NotificationService.cancel(id);
+            }
+        }
         calendarState.events = calendarState.events.filter(e => e.id !== id);
         renderCalendarEvents();
     } catch (err) {
@@ -771,10 +805,9 @@ async function scheduleLocalReminders() {
 
     // In native app mode, use Capacitor Local Notifications
     if (window.isNativeApp && window.isNativeApp()) {
-        // Only cancel reminders for items we are about to reschedule (avoid wiping background-synced reminders)
+        // Cancel reminder IDs tied to events in the active day before recalculating this day's schedule.
         const cancelIds = new Set();
         calendarState.events.forEach((ev) => {
-            if (ev.status === 'done' || ev.status === 'canceled') return;
             if (!ev.start_time || ev.reminder_minutes_before === null || ev.reminder_minutes_before === undefined) return;
             const reminderId = ev.calendar_event_id || ev.id;
             cancelIds.add(reminderId);

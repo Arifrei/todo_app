@@ -1076,6 +1076,20 @@ async function updateLinkedNoteListStatus(ev, status) {
     }
 }
 
+async function updateLinkedFeedStatus(ev, status) {
+    try {
+        const linked = await ensureLinkedFeedEvent(ev);
+        if (!linked || !linked.calendar_event_id) return;
+        await updateCalendarEvent(linked.calendar_event_id, { status }, { skipReload: false, skipMonth: true });
+        linked.status = status;
+        ev.status = status;
+        if (calendarState.monthCursor) await loadCalendarMonth();
+        await scheduleLocalReminders();
+    } catch (e) {
+        console.error('Error updating linked feed item status:', e);
+    }
+}
+
 async function unpinPlannerDate(ev) {
     openConfirmModal('Remove this item from this date?', async () => {
         try {

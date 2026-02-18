@@ -2574,11 +2574,24 @@ button.meta-chip {
         margin-top: 0.25rem;
     }
     .calendar-meta-lite {
-        grid-column: 2 / span 3;
-        grid-row: 3;
-        margin-top: 0.15rem;
-        align-self: start;
+        grid-column: 3;
+        grid-row: 2;
+        margin-top: 0;
+        align-self: center;
+        justify-self: stretch;
         min-width: 0;
+        display: flex;
+        flex-wrap: nowrap;
+        overflow: hidden;
+    }
+
+    .calendar-meta-lite .meta-chip {
+        max-width: 100%;
+        min-width: 0;
+        display: inline-block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     /* Action Buttons Row - Same row as time on Mobile */

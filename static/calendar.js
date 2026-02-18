@@ -2269,7 +2269,13 @@ function renderCalendarEvents() {
 
             const left = document.createElement('div');
             left.className = 'row-left';
-            left.innerHTML = '<i class="fa-regular fa-square"></i>';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = ev.status === 'done';
+            checkbox.onchange = async () => {
+                await updateLinkedFeedStatus(ev, checkbox.checked ? 'done' : 'not_started');
+            };
+            left.appendChild(checkbox);
 
             const titleWrap = document.createElement('div');
             titleWrap.className = 'calendar-title';

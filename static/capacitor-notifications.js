@@ -398,8 +398,36 @@ async function syncPendingReminders() {
 
         const data = await response.json();
         const reminders = data.reminders || [];
+        const pendingReminderIds = new Set(
+            reminders
+                .map(reminder => Number(reminder.event_id))
+                .filter(id => Number.isFinite(id) && id > 0)
+        );
 
         notifyDebugLog(`Found ${reminders.length} pending reminders to schedule`);
+
+        const { LocalNotifications } = window.Capacitor.Plugins;
+        const pendingLocal = await LocalNotifications.getPending();
+        const staleReminderIds = new Set();
+        (pendingLocal.notifications || []).forEach((notification) => {
+            const extra = notification?.extra || {};
+            const extraEventId = extra.event_id ?? extra.eventId;
+            const channelId = notification?.channelId || notification?.channel_id;
+            const actionTypeId = notification?.actionTypeId || notification?.actionType;
+            const looksLikeTaskReminder = (
+                extraEventId !== undefined && extraEventId !== null
+            ) || channelId === 'taskflow_reminders' || actionTypeId === 'REMINDER_ACTIONS';
+            if (!looksLikeTaskReminder) return;
+            const linkedId = Number(extraEventId ?? notification?.id);
+            if (!Number.isFinite(linkedId) || linkedId <= 0) return;
+            if (!pendingReminderIds.has(linkedId)) staleReminderIds.add(linkedId);
+        });
+        if (staleReminderIds.size > 0) {
+            await LocalNotifications.cancel({
+                notifications: Array.from(staleReminderIds).map(id => ({ id }))
+            });
+            notifyDebugLog(`Cancelled ${staleReminderIds.size} stale task reminders`);
+        }
 
         for (const reminder of reminders) {
             try {
