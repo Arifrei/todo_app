@@ -412,11 +412,18 @@
             <p id="link-note-task-label" class="u-text-muted u-mt-neg-025"></p>
             <div class="form-group">
                 <label id="calendar-link-note-list-label">Choose an existing note</label>
+                <div class="note-chooser-nav">
+                    <button class="btn btn-secondary btn-small u-hidden" id="link-note-back-button" type="button" data-onclick="linkNoteNavBack()">
+                        <i class="fa-solid fa-arrow-left"></i> Back
+                    </button>
+                    <span id="link-note-location" class="note-chooser-location" aria-live="polite"></span>
+                </div>
                 <div id="link-note-list" class="note-chooser" aria-labelledby="calendar-link-note-list-label"></div>
             </div>
             <div class="form-group">
                 <label for="link-note-new-title">Create a new note</label>
                 <input type="text" id="link-note-new-title" class="form-control" placeholder="New note title (optional)">
+                <p id="link-note-create-location" class="note-chooser-create-location"></p>
             </div>
             <div class="modal-actions">
                 <button class="btn" data-onclick="closeLinkNoteModal()">

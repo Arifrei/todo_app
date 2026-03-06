@@ -1543,12 +1543,14 @@ body.list-section-dragging .list-section-drag-handle {
     pointer-events: auto;
 }
 
-/* Desktop pointer/keyboard reveal. */
-@media (hover: hover) and (pointer: fine) {
-    .list-pill:focus-within .list-pill-actions {
-        opacity: 1;
-        pointer-events: auto;
-    }
+/* Always reveal on keyboard focus. */
+.list-pill:focus-within .list-pill-actions {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Reveal on devices where any input can actually hover. */
+@media (any-hover: hover) {
     .list-pill:hover .list-pill-actions {
         opacity: 1;
         pointer-events: auto;
@@ -1702,6 +1704,35 @@ body.list-section-dragging .list-section-drag-handle {
     margin-left: 6px;
     flex: 0 0 auto;
     align-self: center;
+}
+
+.list-pill-inline-toggle {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.08);
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.list-pill-inline-toggle:hover {
+    background: rgba(59, 130, 246, 0.12);
+    color: var(--text-color);
+}
+
+.list-pill-inline-toggle.expanded {
+    color: var(--text-color);
+    background: rgba(59, 130, 246, 0.14);
+}
+
+.list-pill-inline-toggle i {
+    font-size: 0.72rem;
 }
 
 .list-note-indicator {
@@ -1881,6 +1912,10 @@ body.list-section-dragging .list-section-drag-handle {
     line-height: 1.4;
 }
 
+.list-pill-input.expanded > textarea:not(.list-pill-note-edit) {
+    min-height: calc(1.4em * 2);
+}
+
 .list-pill-input textarea::placeholder {
     color: var(--text-muted);
 }
@@ -2053,7 +2088,8 @@ body.list-section-dragging .list-section-drag-handle {
     .list-pill-content > span,
     .list-pill-content > a,
     .list-pill-content > .list-date-badge,
-    .list-pill-content > .list-note-indicators {
+    .list-pill-content > .list-note-indicators,
+    .list-pill-content > .list-pill-inline-toggle {
         white-space: nowrap;
         vertical-align: middle;
     }
@@ -2073,17 +2109,17 @@ body.list-section-dragging .list-section-drag-handle {
         width: calc(100% - 0.55rem);
     }
 
-    .list-pill-input > textarea:not(.list-pill-note-edit) {
-        white-space: pre;
-        overflow-wrap: normal;
-        word-break: normal;
-        overflow-x: auto;
-        overflow-y: hidden;
+    .list-pill-input.expanded > textarea:not(.list-pill-note-edit) {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        overflow-x: hidden;
+        overflow-y: auto;
         scrollbar-width: none;
         -ms-overflow-style: none;
     }
 
-    .list-pill-input > textarea:not(.list-pill-note-edit)::-webkit-scrollbar {
+    .list-pill-input.expanded > textarea:not(.list-pill-note-edit)::-webkit-scrollbar {
         width: 0;
         height: 0;
         display: none;

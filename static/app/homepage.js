@@ -635,24 +635,8 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
-        // Force repaint while typing in modals (fixes WebView not painting text)
-        let repaintDebounce = null;
-        document.addEventListener('input', (e) => {
-            if (!keyboardOpen) return;
-            const target = e.target;
-            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
-                const modalWrap = target.closest('.modal-content') || target.closest('.ai-panel');
-                if (modalWrap) {
-                    // Debounce repaint calls
-                    if (repaintDebounce) clearTimeout(repaintDebounce);
-                    repaintDebounce = setTimeout(() => {
-                        forceRepaint(modalWrap);
-                    }, 100);
-                }
-            }
-        }, true);
-
-        // Also force repaint on focus changes within modals
+        // Force repaint on focus changes within keyboard-open modals.
+        // Avoid repainting on every keystroke, which causes visible modal jitter.
         document.addEventListener('focusin', (e) => {
             if (!keyboardOpen) return;
             const target = e.target;

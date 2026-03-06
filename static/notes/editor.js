@@ -406,9 +406,13 @@ function tryConvertBracketLink(editor, event) {
     // If we just typed the 2nd closing bracket after a triple opener (`[[[`),
     // defer conversion until the 3rd bracket is typed so `[[[title]]]` works.
     if (!isTripleLink && openIndex > 0 && before.charAt(openIndex - 1) === '[') return false;
-    const rawTitle = before.slice(openIndex + openToken.length);
-    const title = rawTitle.trim();
-    if (!title || title.includes('\n')) return false;
+    const rawSpec = before.slice(openIndex + openToken.length);
+    const spec = rawSpec.trim();
+    if (!spec || spec.includes('\n')) return false;
+    const separatorIndex = spec.indexOf('|');
+    const title = (separatorIndex >= 0 ? spec.slice(0, separatorIndex) : spec).trim();
+    const label = (separatorIndex >= 0 ? spec.slice(separatorIndex + 1) : spec).trim();
+    if (!title || !label) return false;
 
     const prefix = text.slice(0, openIndex);
     const suffix = text.slice(offset);
@@ -420,7 +424,7 @@ function tryConvertBracketLink(editor, event) {
     link.setAttribute('data-note-title', title);
     link.setAttribute('data-note-link-type', noteLinkType);
     link.setAttribute('href', '#');
-    link.textContent = title;
+    link.textContent = label;
 
     const fragment = document.createDocumentFragment();
     if (prefix) fragment.appendChild(document.createTextNode(prefix));
@@ -689,22 +693,26 @@ function setupNoteLinkModalControls() {
 function openEditNoteLinkModal(linkEl) {
     const modal = document.getElementById('note-edit-link-modal');
     const textInput = document.getElementById('note-edit-link-text');
+    const targetGroup = document.getElementById('note-edit-link-target-group');
+    const targetInput = document.getElementById('note-edit-link-target');
     const typeSelect = document.getElementById('note-edit-link-type');
     const urlGroup = document.getElementById('note-edit-link-url-group');
     const urlInput = document.getElementById('note-edit-link-url');
     const noteGroup = document.getElementById('note-edit-link-note-group');
-    if (!modal || !textInput || !typeSelect || !urlGroup || !urlInput || !noteGroup) return;
+    if (!modal || !textInput || !targetGroup || !targetInput || !typeSelect || !urlGroup || !urlInput || !noteGroup) return;
 
     linkEditState.anchor = linkEl;
     const isExternal = linkEl.classList.contains('external-link');
     textInput.value = linkEl.textContent || '';
+    targetInput.value = isExternal ? '' : ((linkEl.dataset.noteTitle || linkEl.textContent || '').trim());
     typeSelect.value = isExternal ? 'external' : 'note';
     urlInput.value = isExternal ? (linkEl.getAttribute('href') || '') : '';
+    targetGroup.style.display = isExternal ? 'none' : 'block';
     urlGroup.style.display = isExternal ? 'block' : 'none';
     noteGroup.style.display = isExternal ? 'none' : 'block';
     modal.classList.add('active');
-    textInput.focus();
-    textInput.select();
+    (isExternal ? textInput : targetInput).focus();
+    (isExternal ? textInput : targetInput).select();
 }
 
 function closeEditNoteLinkModal() {
@@ -715,9 +723,11 @@ function closeEditNoteLinkModal() {
 
 async function relinkNoteFromEditModal() {
     const anchor = linkEditState.anchor;
+    const targetInput = document.getElementById('note-edit-link-target');
     const textInput = document.getElementById('note-edit-link-text');
-    if (!anchor || !textInput) return;
-    const title = textInput.value.trim();
+    if (!anchor || !targetInput || !textInput) return;
+    const title = targetInput.value.trim();
+    const label = textInput.value.trim() || title;
     if (!title) return;
     const noteLinkType = (anchor.dataset.noteLinkType === 'list') ? 'list' : 'note';
     const sourceNoteId = await ensureActiveNoteIdForLink();
@@ -742,7 +752,7 @@ async function relinkNoteFromEditModal() {
         }
         if (data.note) {
             applyResolvedNoteLink(anchor, data.note);
-            anchor.textContent = title;
+            anchor.textContent = label;
             setNoteDirty(true);
         }
     } catch (err) {
@@ -765,15 +775,17 @@ function removeNoteLinkFromEditModal() {
 function saveEditNoteLinkModal() {
     const anchor = linkEditState.anchor;
     const textInput = document.getElementById('note-edit-link-text');
+    const targetInput = document.getElementById('note-edit-link-target');
     const typeSelect = document.getElementById('note-edit-link-type');
     const urlInput = document.getElementById('note-edit-link-url');
-    if (!anchor || !textInput || !typeSelect || !urlInput) return;
+    if (!anchor || !textInput || !targetInput || !typeSelect || !urlInput) return;
 
     const label = textInput.value.trim() || 'Link';
     const type = typeSelect.value;
+    const nextTarget = targetInput.value.trim() || label;
+    const previousTarget = (anchor.dataset.noteTitle || '').trim();
 
     anchor.textContent = label;
-    anchor.dataset.noteTitle = label;
 
     if (type === 'external') {
         const url = urlInput.value.trim();
@@ -793,7 +805,11 @@ function saveEditNoteLinkModal() {
         anchor.setAttribute('href', anchor.dataset.noteId ? `/notes/${anchor.dataset.noteId}` : '#');
         anchor.removeAttribute('target');
         anchor.removeAttribute('rel');
-        anchor.dataset.noteTitle = label;
+        anchor.dataset.noteTitle = nextTarget;
+        if (nextTarget !== previousTarget) {
+            anchor.removeAttribute('data-note-id');
+        }
+        anchor.setAttribute('href', anchor.dataset.noteId ? `/notes/${anchor.dataset.noteId}` : '#');
     }
 
     setNoteDirty(true);
@@ -807,6 +823,7 @@ function setupEditNoteLinkModalControls() {
     const removeBtn = document.getElementById('note-edit-link-remove-btn');
     const relinkBtn = document.getElementById('note-edit-link-relink-btn');
     const typeSelect = document.getElementById('note-edit-link-type');
+    const targetGroup = document.getElementById('note-edit-link-target-group');
     const urlGroup = document.getElementById('note-edit-link-url-group');
     const noteGroup = document.getElementById('note-edit-link-note-group');
 
@@ -816,9 +833,10 @@ function setupEditNoteLinkModalControls() {
     if (saveBtn) saveBtn.onclick = () => saveEditNoteLinkModal();
     if (removeBtn) removeBtn.onclick = () => removeNoteLinkFromEditModal();
     if (relinkBtn) relinkBtn.onclick = () => relinkNoteFromEditModal();
-    if (typeSelect && urlGroup && noteGroup) {
+    if (typeSelect && targetGroup && urlGroup && noteGroup) {
         typeSelect.onchange = () => {
             const isExternal = typeSelect.value === 'external';
+            targetGroup.style.display = isExternal ? 'none' : 'block';
             urlGroup.style.display = isExternal ? 'block' : 'none';
             noteGroup.style.display = isExternal ? 'none' : 'block';
         };

@@ -13,6 +13,7 @@ const vaultState = {
 let vaultSelection = null;
 let vaultBulkActions = null;
 let vaultUploadAbortController = null;
+let vaultUploadQueue = [];
 
 function initVaultSelection() {
     vaultSelection = new SelectionManager({
@@ -412,11 +413,9 @@ function openVaultUploadModal() {
     const modal = document.getElementById('vault-upload-modal');
     if (modal) modal.classList.add('active');
     const tagsInput = document.getElementById('vault-tags-input');
-    const fileInput = document.getElementById('vault-file-input');
-    const filesContainer = document.getElementById('vault-upload-files');
     if (tagsInput) tagsInput.value = '';
-    if (fileInput) fileInput.value = '';
-    if (filesContainer) filesContainer.innerHTML = '';
+    vaultUploadQueue = [];
+    renderVaultUploadFiles();
 }
 
 function closeVaultUploadModal(options = {}) {
@@ -431,6 +430,10 @@ function closeVaultUploadModal(options = {}) {
     const progressBar = document.getElementById('vault-upload-bar');
     if (progressWrap) progressWrap.style.display = 'none';
     if (progressBar) progressBar.style.width = '0%';
+    vaultUploadQueue = [];
+    const fileInput = document.getElementById('vault-file-input');
+    if (fileInput) fileInput.value = '';
+    renderVaultUploadFiles();
 }
 
 function vaultDownloadDoc(doc) {
@@ -569,8 +572,7 @@ function resetVaultFolderModal() {
 }
 
 async function vaultHandleUpload() {
-    const fileInput = document.getElementById('vault-file-input');
-    const files = fileInput ? Array.from(fileInput.files || []) : [];
+    const files = vaultUploadQueue.slice();
     if (!files.length) {
         showToast('Select at least one file', 'warning');
         return;
@@ -620,7 +622,6 @@ async function vaultHandleUpload() {
 
         showToast('Upload complete', 'success');
         closeVaultUploadModal({ abortUpload: false });
-        if (fileInput) fileInput.value = '';
         await loadVaultDocuments();
         await loadVaultStats();
     } catch (err) {
@@ -654,7 +655,7 @@ function bindVaultDropZone() {
     });
     dropZone.addEventListener('drop', (e) => {
         if (e.dataTransfer && e.dataTransfer.files.length) {
-            fileInput.files = e.dataTransfer.files;
+            vaultUploadQueue = vaultUploadQueue.concat(Array.from(e.dataTransfer.files));
             renderVaultUploadFiles();
         }
     });
@@ -774,6 +775,11 @@ function initVaultPage() {
     // File input change handler for showing selected files
     if (fileInput) {
         fileInput.addEventListener('change', () => {
+            const selectedFiles = Array.from(fileInput.files || []);
+            if (selectedFiles.length) {
+                vaultUploadQueue = vaultUploadQueue.concat(selectedFiles);
+                fileInput.value = '';
+            }
             renderVaultUploadFiles();
         });
     }
@@ -787,11 +793,10 @@ function initVaultPage() {
 }
 
 function renderVaultUploadFiles() {
-    const fileInput = document.getElementById('vault-file-input');
     const container = document.getElementById('vault-upload-files');
-    if (!fileInput || !container) return;
+    if (!container) return;
 
-    const files = Array.from(fileInput.files || []);
+    const files = vaultUploadQueue;
     if (!files.length) {
         container.innerHTML = '';
         return;
@@ -800,16 +805,19 @@ function renderVaultUploadFiles() {
     container.innerHTML = files.map((file, idx) => `
         <div class="vault-upload-file" data-idx="${idx}">
             <i class="fa-solid fa-file"></i>
-            <span>${escapeHtml(file.name)}</span>
+            <span>${escapeHtml((file.name || '').trim() || `Camera item ${idx + 1}`)}</span>
             <button type="button" title="Remove"><i class="fa-solid fa-xmark"></i></button>
         </div>
     `).join('');
 
     container.querySelectorAll('.vault-upload-file button').forEach(btn => {
-        btn.addEventListener('click', () => {
-            // Note: Can't remove individual files from FileList, so just clear all
-            fileInput.value = '';
-            container.innerHTML = '';
+        btn.addEventListener('click', (e) => {
+            const row = e.currentTarget.closest('.vault-upload-file');
+            const idx = row ? Number(row.dataset.idx) : -1;
+            if (idx >= 0 && idx < vaultUploadQueue.length) {
+                vaultUploadQueue.splice(idx, 1);
+            }
+            renderVaultUploadFiles();
         });
     });
 }

@@ -82,7 +82,17 @@ let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
 let datePickerState = { itemId: null, itemTitle: '' };
-let linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
+let linkNoteModalState = {
+    targetType: 'task',
+    targetId: null,
+    targetTitle: '',
+    selectedNoteId: null,
+    notes: [],
+    existingNoteIds: [],
+    folders: [],
+    navStack: [],
+    currentFolderId: null
+};
 let noteLinkState = { anchor: null, title: '', matches: [], sourceNoteId: null, openOnResolve: true, folderId: null, noteType: 'note' };
 let linkEditState = { anchor: null };
 let suppressLinkClickUntil = 0;
@@ -166,6 +176,27 @@ function initDashboardReorder() {
         if (!el) return;
         let draggingEl = null;
         let dragMoved = false;
+        let touchDragCard = null;
+        let touchDragActive = false;
+        let touchDragMoved = false;
+        let touchHoldTimer = null;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let ignoreNextCardClick = false;
+
+        const clearTouchHoldTimer = () => {
+            if (touchHoldTimer) {
+                clearTimeout(touchHoldTimer);
+                touchHoldTimer = null;
+            }
+        };
+
+        const markIgnoreNextCardClick = () => {
+            ignoreNextCardClick = true;
+            setTimeout(() => {
+                ignoreNextCardClick = false;
+            }, 250);
+        };
 
         const cards = Array.from(el.querySelectorAll('.card[data-list-id]'));
         cards.forEach(card => {
@@ -181,7 +212,10 @@ function initDashboardReorder() {
             card.addEventListener('dragend', async () => {
                 if (draggingEl) draggingEl.classList.remove('dragging');
                 draggingEl = null;
-                if (dragMoved) {
+                const shouldPersist = dragMoved;
+                dragMoved = false;
+                if (shouldPersist) {
+                    markIgnoreNextCardClick();
                     await persistDashboardOrder(el, type);
                 }
             });
@@ -198,10 +232,72 @@ function initDashboardReorder() {
                 dragMoved = true;
             });
 
+            card.addEventListener('touchstart', (e) => {
+                if (e.touches.length !== 1) return;
+                if (e.target.closest('button, .btn, .btn-icon')) return;
+                const touch = e.touches[0];
+                touchStartX = touch.clientX;
+                touchStartY = touch.clientY;
+                touchDragCard = card;
+                touchDragActive = false;
+                touchDragMoved = false;
+                clearTouchHoldTimer();
+                // Use a short hold so normal scrolling/taps are not interpreted as drag.
+                touchHoldTimer = setTimeout(() => {
+                    if (touchDragCard !== card) return;
+                    touchDragActive = true;
+                    card.classList.add('dragging');
+                }, 200);
+            }, { passive: true });
+
+            card.addEventListener('touchmove', (e) => {
+                if (!touchDragCard || e.touches.length !== 1) return;
+                const touch = e.touches[0];
+                const dx = Math.abs(touch.clientX - touchStartX);
+                const dy = Math.abs(touch.clientY - touchStartY);
+                if (!touchDragActive && (dx > 8 || dy > 8)) {
+                    clearTouchHoldTimer();
+                    touchDragCard = null;
+                    return;
+                }
+                if (!touchDragActive) return;
+                e.preventDefault();
+                const afterElement = getDashboardDragAfterElement(el, touch.clientY);
+                if (afterElement == null) {
+                    el.appendChild(card);
+                } else if (afterElement !== card) {
+                    el.insertBefore(card, afterElement);
+                }
+                touchDragMoved = true;
+            }, { passive: false });
+
+            const finishTouchDrag = async () => {
+                clearTouchHoldTimer();
+                const draggedCard = touchDragCard;
+                const shouldPersist = !!draggedCard && touchDragActive && touchDragMoved;
+                if (draggedCard) draggedCard.classList.remove('dragging');
+                touchDragCard = null;
+                touchDragActive = false;
+                touchDragMoved = false;
+                if (shouldPersist) {
+                    markIgnoreNextCardClick();
+                    await persistDashboardOrder(el, type);
+                }
+            };
+
+            card.addEventListener('touchend', () => {
+                finishTouchDrag().catch(err => console.error('Failed to persist touch dashboard reorder:', err));
+            });
+            card.addEventListener('touchcancel', () => {
+                finishTouchDrag().catch(err => console.error('Failed to persist touch dashboard reorder:', err));
+            });
+
             card.addEventListener('click', (e) => {
-                if (dragMoved) {
+                if (dragMoved || ignoreNextCardClick) {
                     e.preventDefault();
                     e.stopPropagation();
+                    dragMoved = false;
+                    ignoreNextCardClick = false;
                 }
             });
         });
@@ -346,6 +442,7 @@ async function createItem(listId, listType) {
     const descriptionInput = document.getElementById('item-description');
     const notesInput = document.getElementById('item-notes');
     const tagsInput = document.getElementById('item-tags');
+    const dueDateInput = document.getElementById('item-due-date');
     const phaseSelect = document.getElementById('item-phase-select');
     const projectTypeSelect = document.getElementById('project-type-select');
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -366,6 +463,7 @@ async function createItem(listId, listType) {
                     description: descriptionInput ? descriptionInput.value.trim() : '',
                     notes: notesInput ? notesInput.value.trim() : '',
                     tags: tagsInput ? tagsInput.value.trim() : '',
+                    due_date: dueDateInput && dueDateInput.value ? dueDateInput.value : null,
                     is_project: listType === 'hub',
                     project_type: projectType, // Pass the selected type
                     phase_id: phaseId,
@@ -556,59 +654,195 @@ async function openLinkNoteModal(targetType, targetId, targetTitle, existingNote
         targetTitle,
         selectedNoteId: existingNoteIds && existingNoteIds.length ? existingNoteIds[0] : null,
         notes: [],
-        existingNoteIds: existingNoteIds || []
+        existingNoteIds: existingNoteIds || [],
+        folders: [],
+        navStack: [null],
+        currentFolderId: null
     };
     if (label) label.textContent = targetTitle ? `For "${targetTitle}"` : '';
     if (newTitleInput) newTitleInput.value = `${targetTitle || 'New'} note`;
-    listEl.innerHTML = '<div class="note-chooser-empty">Loading notes...</div>';
+    listEl.innerHTML = '<div class="note-chooser-empty">Loading notes and folders...</div>';
+    updateLinkNoteModalNavigation();
     modal.classList.add('active');
 
     try {
-        const res = await fetch('/api/notes?all=1');
-        if (!res.ok) throw new Error('Failed to fetch notes');
-        const notes = await res.json();
-        linkNoteModalState.notes = notes;
-        renderLinkNoteList(notes);
+        const [notesRes, foldersRes] = await Promise.all([
+            fetch('/api/notes?all=1'),
+            fetch('/api/note-folders')
+        ]);
+        if (!notesRes.ok) throw new Error('Failed to fetch notes');
+        const notes = await notesRes.json();
+        const folders = foldersRes.ok ? await foldersRes.json() : [];
+        linkNoteModalState.notes = Array.isArray(notes) ? notes : [];
+        linkNoteModalState.folders = Array.isArray(folders) ? folders : [];
+
+        const selected = linkNoteModalState.notes.find(n => n.id === linkNoteModalState.selectedNoteId);
+        const startFolderId = selected ? (selected.folder_id || null) : null;
+        linkNoteModalState.currentFolderId = startFolderId;
+        linkNoteModalState.navStack = buildLinkNoteNavStack(startFolderId);
+        renderLinkNoteList();
     } catch (e) {
         console.error('Error loading notes:', e);
         listEl.innerHTML = '<div class="note-chooser-empty">Could not load notes.</div>';
     }
 }
 
-function renderLinkNoteList(notes) {
+function getLinkNoteFolderPath(folderId) {
+    if (!folderId) return [];
+    const folderMap = new Map((linkNoteModalState.folders || []).map(folder => [folder.id, folder]));
+    const path = [];
+    let currentId = folderId;
+    let guard = 0;
+    while (currentId && guard < 100) {
+        const folder = folderMap.get(currentId);
+        if (!folder) break;
+        path.unshift(folder);
+        currentId = folder.parent_id || null;
+        guard += 1;
+    }
+    return path;
+}
+
+function buildLinkNoteNavStack(folderId) {
+    if (!folderId) return [null];
+    const path = getLinkNoteFolderPath(folderId);
+    return [null, ...path.map(folder => folder.id)];
+}
+
+function getLinkNoteLocationLabel(folderId) {
+    if (!folderId) return 'Main notes';
+    const path = getLinkNoteFolderPath(folderId);
+    if (!path.length) return 'Main notes';
+    return `Main notes / ${path.map(folder => folder.name || 'Untitled folder').join(' / ')}`;
+}
+
+function updateLinkNoteModalNavigation() {
+    const backBtn = document.getElementById('link-note-back-button');
+    const locationEl = document.getElementById('link-note-location');
+    const createLocationEl = document.getElementById('link-note-create-location');
+    const locationLabel = getLinkNoteLocationLabel(linkNoteModalState.currentFolderId);
+    if (backBtn) backBtn.classList.toggle('u-hidden', (linkNoteModalState.navStack || []).length <= 1);
+    if (locationEl) locationEl.textContent = locationLabel;
+    if (createLocationEl) createLocationEl.textContent = `New note location: ${locationLabel}`;
+}
+
+function linkNoteNavBack() {
+    if ((linkNoteModalState.navStack || []).length <= 1) return;
+    linkNoteModalState.navStack.pop();
+    linkNoteModalState.currentFolderId = linkNoteModalState.navStack[linkNoteModalState.navStack.length - 1] || null;
+    renderLinkNoteList();
+}
+
+function renderLinkNoteList() {
     const listEl = document.getElementById('link-note-list');
     if (!listEl) return;
     listEl.innerHTML = '';
-    if (!notes || !notes.length) {
-        listEl.innerHTML = '<div class="note-chooser-empty">No notes yet. Create one below.</div>';
+
+    const currentFolderId = linkNoteModalState.currentFolderId || null;
+    updateLinkNoteModalNavigation();
+    const folders = (linkNoteModalState.folders || [])
+        .filter(folder => (folder.parent_id || null) === currentFolderId)
+        .sort((a, b) => {
+            const orderDiff = (a.order_index || 0) - (b.order_index || 0);
+            if (orderDiff) return orderDiff;
+            return (a.name || '').localeCompare(b.name || '');
+        });
+    const notesHere = (linkNoteModalState.notes || [])
+        .filter(note => (note.folder_id || null) === currentFolderId);
+    const standardNotes = notesHere.filter(note => note.note_type !== 'list');
+    const listNotes = notesHere.filter(note => note.note_type === 'list');
+
+    if (!folders.length && !standardNotes.length && !listNotes.length) {
+        listEl.innerHTML = '<div class="note-chooser-empty">No notes or folders here.</div>';
         return;
     }
-    notes.forEach(note => {
+
+    const appendSectionHeader = (labelText) => {
+        const header = document.createElement('div');
+        header.className = 'note-chooser-section-label';
+        header.textContent = labelText;
+        listEl.appendChild(header);
+    };
+
+    if (folders.length) appendSectionHeader('Folders');
+    folders.forEach(folder => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        const isSelected = linkNoteModalState.selectedNoteId === note.id;
-        const isLinked = linkNoteModalState.existingNoteIds.includes(note.id);
-        btn.className = `note-chooser-item ${isSelected ? 'active' : ''}`;
+        btn.className = 'note-chooser-item note-chooser-folder';
         btn.innerHTML = `
-            <span>${note.title || 'Untitled'}</span>
-            <span class="note-chooser-meta">#${note.id}${isLinked ? ' • linked' : ''}</span>
+            <span class="note-chooser-main">
+                <span class="notes-item-icon type-folder"><i class="fa-solid fa-folder"></i></span>
+                <span class="note-chooser-text">
+                    <span class="note-chooser-title">${escapeHtml(folder.name || 'Untitled folder')}</span>
+                    <span class="note-chooser-meta">Folder</span>
+                </span>
+            </span>
+            <i class="fa-solid fa-chevron-right note-chooser-arrow"></i>
         `;
         btn.onclick = () => {
-            linkNoteModalState.selectedNoteId = note.id;
-            renderLinkNoteList(notes);
+            linkNoteModalState.currentFolderId = folder.id;
+            linkNoteModalState.navStack.push(folder.id);
+            renderLinkNoteList();
         };
         listEl.appendChild(btn);
     });
+
+    const appendNoteRows = (items, sectionLabel) => {
+        if (!items.length) return;
+        appendSectionHeader(sectionLabel);
+        items.forEach(note => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            const isSelected = linkNoteModalState.selectedNoteId === note.id;
+            const isLinked = linkNoteModalState.existingNoteIds.includes(note.id);
+            const isList = note.note_type === 'list';
+            const iconClass = isList ? 'type-list' : 'type-note';
+            const iconName = isList ? 'fa-list' : 'fa-note-sticky';
+            btn.className = `note-chooser-item note-chooser-note ${isSelected ? 'active' : ''}`;
+            btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+            btn.innerHTML = `
+                <span class="note-chooser-main">
+                    <span class="notes-item-icon ${iconClass}"><i class="fa-solid ${iconName}"></i></span>
+                    <span class="note-chooser-text">
+                        <span class="note-chooser-title">${escapeHtml(note.title || 'Untitled')}</span>
+                        <span class="note-chooser-meta">${isList ? 'List' : 'Note'} #${note.id}${isLinked ? ' | linked' : ''}</span>
+                    </span>
+                </span>
+            `;
+            btn.onclick = () => {
+                linkNoteModalState.selectedNoteId = note.id;
+                renderLinkNoteList();
+            };
+            listEl.appendChild(btn);
+        });
+    };
+
+    appendNoteRows(standardNotes, 'Notes');
+    appendNoteRows(listNotes, 'Lists');
 }
 
 function closeLinkNoteModal() {
     const modal = document.getElementById('link-note-modal');
     if (modal) modal.classList.remove('active');
-    linkNoteModalState = { targetType: 'task', targetId: null, targetTitle: '', selectedNoteId: null, notes: [], existingNoteIds: [] };
+    linkNoteModalState = {
+        targetType: 'task',
+        targetId: null,
+        targetTitle: '',
+        selectedNoteId: null,
+        notes: [],
+        existingNoteIds: [],
+        folders: [],
+        navStack: [],
+        currentFolderId: null
+    };
     const listEl = document.getElementById('link-note-list');
     if (listEl) listEl.innerHTML = '';
     const newTitleInput = document.getElementById('link-note-new-title');
     if (newTitleInput) newTitleInput.value = '';
+    const locationEl = document.getElementById('link-note-location');
+    if (locationEl) locationEl.textContent = '';
+    const createLocationEl = document.getElementById('link-note-create-location');
+    if (createLocationEl) createLocationEl.textContent = '';
 }
 
 async function saveLinkedNote() {
@@ -641,6 +875,7 @@ async function createAndLinkNote() {
     const newTitleInput = document.getElementById('link-note-new-title');
     const title = newTitleInput ? newTitleInput.value.trim() : '';
     const finalTitle = title || (linkNoteModalState.targetTitle ? `${linkNoteModalState.targetTitle} note` : 'New note');
+    const folderId = linkNoteModalState.currentFolderId || null;
     try {
         const createRes = await fetch('/api/notes', {
             method: 'POST',
@@ -648,6 +883,7 @@ async function createAndLinkNote() {
             body: JSON.stringify({
                 title: finalTitle,
                 content: '',
+                folder_id: folderId,
                 ...(linkNoteModalState.targetType === 'calendar'
                     ? { calendar_event_id: linkNoteModalState.targetId }
                     : { todo_item_id: linkNoteModalState.targetId })
@@ -2185,6 +2421,8 @@ function openAddItemModal(phaseId = null, mode = 'task') {
     const phaseSelectGroup = document.getElementById('phase-select-group');
     const projectTypeGroup = document.getElementById('project-type-select-group');
     const projectTypeSelect = document.getElementById('project-type-select');
+    const dueDateGroup = document.getElementById('item-due-date-group');
+    const dueDateInput = document.getElementById('item-due-date');
 
     if (modeInput) modeInput.value = mode || 'task';
 
@@ -2209,6 +2447,9 @@ function openAddItemModal(phaseId = null, mode = 'task') {
         }
     }
     if (phaseSelectGroup) phaseSelectGroup.style.display = mode === 'phase' ? 'none' : 'block';
+    const isTaskMode = mode === 'task';
+    if (dueDateGroup) dueDateGroup.style.display = isTaskMode ? 'block' : 'none';
+    if (!isTaskMode && dueDateInput) dueDateInput.value = '';
 }
 
 function closeAddItemModal() {
@@ -2225,6 +2466,8 @@ function closeAddItemModal() {
         tagsInput.value = '';
         hideTaskTagDropdown(tagsInput);
     }
+    const dueDateInput = document.getElementById('item-due-date');
+    if (dueDateInput) dueDateInput.value = '';
     const phaseSelect = document.getElementById('item-phase-select');
     if (phaseSelect) phaseSelect.value = '';
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -2239,6 +2482,8 @@ function closeAddItemModal() {
     
     const phaseSelectGroup = document.getElementById('phase-select-group');
     if (phaseSelectGroup) phaseSelectGroup.style.display = 'block';
+    const dueDateGroup = document.getElementById('item-due-date-group');
+    if (dueDateGroup) dueDateGroup.style.display = 'block';
 }
 
 function openBulkImportModal() {
@@ -2435,7 +2680,7 @@ async function moveItem() {
     }
 }
 
-function openEditItemModal(itemId, content, description, notes, tags) {
+function openEditItemModal(itemId, content, description, notes, tags, dueDate) {
     const modal = document.getElementById('edit-item-modal');
     document.getElementById('edit-item-id').value = itemId;
     document.getElementById('edit-item-content').value = content;
@@ -2443,6 +2688,8 @@ function openEditItemModal(itemId, content, description, notes, tags) {
     document.getElementById('edit-item-notes').value = notes || '';
     const tagsInput = document.getElementById('edit-item-tags');
     if (tagsInput) tagsInput.value = tags || '';
+    const dueDateInput = document.getElementById('edit-item-due-date');
+    if (dueDateInput) dueDateInput.value = dueDate || '';
     modal.classList.add('active');
 }
 
@@ -2454,6 +2701,8 @@ function closeEditItemModal() {
         tagsInput.value = '';
         hideTaskTagDropdown(tagsInput);
     }
+    const dueDateInput = document.getElementById('edit-item-due-date');
+    if (dueDateInput) dueDateInput.value = '';
 }
 
 // --- Move Navigation (step-by-step) ---
@@ -2674,6 +2923,8 @@ async function saveItemChanges() {
     const notes = document.getElementById('edit-item-notes').value.trim();
     const tagsInput = document.getElementById('edit-item-tags');
     const tags = tagsInput ? tagsInput.value.trim() : '';
+    const dueDateInput = document.getElementById('edit-item-due-date');
+    const dueDate = dueDateInput && dueDateInput.value ? dueDateInput.value : null;
 
     if (!content) return;
 
@@ -2681,7 +2932,7 @@ async function saveItemChanges() {
         const res = await fetch(`/api/items/${itemId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content, description, notes, tags })
+            body: JSON.stringify({ content, description, notes, tags, due_date: dueDate })
         });
 
         if (res.ok) {
@@ -2702,5 +2953,6 @@ if (document.readyState === 'loading') {
 } else {
     autoInitTasksDashboard();
 }
+
 
 

@@ -594,11 +594,12 @@ function hideMonthAutocomplete() {
 
 async function createCalendarEvent(payload, options = {}) {
     const { skipConflictWarning = false } = options;
+    const targetDay = payload && payload.day ? payload.day : calendarState.selectedDay;
     try {
         const res = await fetch('/api/calendar/events', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...payload, day: calendarState.selectedDay })
+            body: JSON.stringify({ ...payload, day: targetDay })
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));

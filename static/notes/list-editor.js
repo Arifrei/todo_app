@@ -2656,7 +2656,21 @@ function createListGap(insertIndex) {
     return gap;
 }
 
-const LIST_NOTE_LINK_PATTERN = /\[\[\[([^\]\n]+)\]\]\]|\[\[([^\]\n]+)\]\]|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
+function resizeListInputTextarea(textarea, options = {}) {
+    if (!textarea) return;
+    const { minRows = 1, maxRows = minRows } = options;
+    const styles = window.getComputedStyle(textarea);
+    const lineHeight = parseFloat(styles.lineHeight) || 16;
+    const border = textarea.offsetHeight - textarea.clientHeight;
+    const minHeight = (lineHeight * minRows) + border;
+    const maxHeight = (lineHeight * maxRows) + border;
+    textarea.style.height = 'auto';
+    const nextHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight));
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+}
+
+const LIST_NOTE_LINK_PATTERN = /\[\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]\]|\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
 const LIST_NOTE_INLINE_FORMAT_PATTERN = /(\*\*([^*\n]+)\*\*|__([^_\n]+)__|\*([^*\n]+)\*|_([^_\n]+)_|~~([^~\n]+)~~|`([^`\n]+)`)/g;
 
 function escapeRegExp(value) {
@@ -2739,24 +2753,25 @@ function appendListNoteLineWithLinks(target, line) {
         if (matchIndex > lastIndex) {
             appendFormattedInlineText(target, line.slice(lastIndex, matchIndex));
         }
-        if (match[1] || match[2]) {
+        if (match[1] || match[3]) {
             const isListLink = !!match[1];
-            const title = (match[1] || match[2] || '').trim();
-            if (title) {
+            const title = (match[1] || match[3] || '').trim();
+            const label = (match[2] || match[4] || title).trim();
+            if (title && label) {
                 const link = document.createElement('a');
                 link.className = 'note-link';
                 if (isListLink) link.classList.add('list-link');
                 link.dataset.noteTitle = title;
                 link.dataset.noteLinkType = isListLink ? 'list' : 'note';
                 link.setAttribute('href', '#');
-                appendFormattedInlineText(link, title);
+                appendFormattedInlineText(link, label);
                 target.appendChild(link);
             } else {
                 appendFormattedInlineText(target, match[0]);
             }
-        } else if (match[3] && match[4]) {
-            const label = match[3].trim();
-            const url = match[4].trim();
+        } else if (match[5] && match[6]) {
+            const label = match[5].trim();
+            const url = match[6].trim();
             if (label && url) {
                 const link = document.createElement('a');
                 link.className = 'external-link';
@@ -2917,6 +2932,25 @@ function createListPill(item) {
             noteBadgeWrap.appendChild(attachedDot);
         }
         content.appendChild(noteBadgeWrap);
+    }
+
+    if (hasNote && isExpanded) {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'list-pill-inline-toggle expanded';
+        toggleBtn.title = 'Collapse note';
+        toggleBtn.setAttribute('aria-label', 'Collapse note');
+        toggleBtn.setAttribute('aria-expanded', 'true');
+        toggleBtn.innerHTML = '<i class="fa-solid fa-chevron-up"></i>';
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (isListSelectionActive()) return;
+            listState.expandedItemId = listState.expandedItemId === item.id ? null : item.id;
+            listState.editingItemId = null;
+            listState.insertionIndex = null;
+            renderListItems();
+        });
+        content.appendChild(toggleBtn);
     }
 
     content.addEventListener('click', (e) => {
@@ -3123,10 +3157,11 @@ function createListInputRow(options) {
     const row = document.createElement('div');
     row.className = `list-pill list-pill-input${mode === 'edit' ? ' expanded' : ''}`;
     const input = document.createElement('textarea');
-    input.rows = 1;
-    input.wrap = 'off';
+    input.rows = mode === 'edit' ? 2 : 1;
+    input.wrap = 'soft';
     input.value = value || '';
     input.placeholder = placeholder || '';
+    resizeListInputTextarea(input, { minRows: mode === 'edit' ? 2 : 1, maxRows: mode === 'edit' ? 2 : 2 });
     let committed = false;
     let noteInput = null;
     const initialNoteValue = noteValue || '';
@@ -3209,6 +3244,9 @@ function createListInputRow(options) {
             listState.editingItemId = null;
             renderListItems();
         }
+    });
+    input.addEventListener('input', () => {
+        resizeListInputTextarea(input, { minRows: mode === 'edit' ? 2 : 1, maxRows: 2 });
     });
 
     input.addEventListener('paste', async (e) => {
@@ -3309,6 +3347,7 @@ function createListInputRow(options) {
     }
     if (autoFocus) {
         requestAnimationFrame(() => {
+            resizeListInputTextarea(input, { minRows: mode === 'edit' ? 2 : 1, maxRows: 2 });
             input.focus();
             input.setSelectionRange(input.value.length, input.value.length);
         });

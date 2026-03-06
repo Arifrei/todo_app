@@ -697,12 +697,15 @@ async function bulkUnpinNotes() {
 
 // Task list and pinned notes need different drag logic; keep these helpers distinct.
 function getDoneBarForY(container, y) {
-    const bars = [...container.querySelectorAll('.phase-done-bar')];
+    const bars = [...container.querySelectorAll('.phase-blocked-bar, .phase-done-bar')];
     for (const bar of bars) {
         const rect = bar.getBoundingClientRect();
         if (y < rect.top) continue;
         const phaseId = bar.getAttribute('data-phase-id');
-        const doneBox = container.querySelector(`.phase-done-container[data-phase-id='${phaseId}']`);
+        const containerSelector = bar.classList.contains('phase-blocked-bar')
+            ? '.phase-blocked-container'
+            : '.phase-done-container';
+        const doneBox = container.querySelector(`${containerSelector}[data-phase-id='${phaseId}']`);
         let bottom = rect.bottom;
         if (doneBox) {
             const boxRect = doneBox.getBoundingClientRect();
@@ -715,6 +718,8 @@ function getDoneBarForY(container, y) {
 
 function getPhaseEndAnchor(container, phaseId) {
     if (phaseId) {
+        const blockedBar = container.querySelector(`.phase-blocked-bar[data-phase-id='${phaseId}']`);
+        if (blockedBar) return blockedBar;
         const doneBar = container.querySelector(`.phase-done-bar[data-phase-id='${phaseId}']`);
         if (doneBar) return doneBar;
         const phaseEl = container.querySelector(`.task-item.phase[data-phase-id='${phaseId}']`);
@@ -731,6 +736,7 @@ function getPhaseEndAnchor(container, phaseId) {
 function getTaskDragAfterElement(container, y, phaseId) {
     const elements = [...container.querySelectorAll('.task-item:not(.dragging):not(.drag-placeholder)')]
         .filter(el => !el.closest('.phase-done-container'))
+        .filter(el => !el.closest('.phase-blocked-container'))
         .filter(el => !el.classList.contains('phase'))
         .filter(el => (el.dataset.phaseParent || '') === (phaseId || ''));
 
@@ -1348,8 +1354,12 @@ function applyPhaseVisibility(phaseId, modeInput) {
     const phaseIdStr = String(phaseId);
     const hideAll = collapsed;
     const hideDone = hideDoneOnly && currentTaskFilter !== 'done';
+    const blockedBar = document.querySelector(`.phase-blocked-bar[data-phase-id='${phaseIdStr}']`);
+    const blockedContainer = document.querySelector(`.phase-blocked-container[data-phase-id='${phaseIdStr}']`);
     const doneBar = document.querySelector(`.phase-done-bar[data-phase-id='${phaseIdStr}']`);
     const doneContainer = document.querySelector(`.phase-done-container[data-phase-id='${phaseIdStr}']`);
+    if (blockedBar) blockedBar.classList.toggle('hidden-by-phase', hideAll);
+    if (blockedContainer) blockedContainer.classList.toggle('hidden-by-phase', hideAll);
     if (doneBar) doneBar.classList.toggle('hidden-by-phase', hideAll);
     if (doneContainer) {
         doneContainer.classList.toggle('hidden-by-phase', hideAll);
@@ -1449,6 +1459,132 @@ function organizePhaseDoneTasks() {
         bar.appendChild(btn);
         container.insertBefore(bar, anchor);
         container.insertBefore(doneBox, anchor);
+    });
+}
+
+function getTaskTitleText(taskEl) {
+    if (!taskEl) return '';
+    const titleEl = taskEl.querySelector('.task-text');
+    return titleEl ? titleEl.textContent.trim() : '';
+}
+
+function getBlockedDependencySummary(taskEl, taskIndex) {
+    if (!taskEl) return '';
+    const depIds = (taskEl.dataset.deps || '')
+        .split(',')
+        .map(value => parseInt(value, 10))
+        .filter(Number.isFinite);
+
+    if (!depIds.length) return '';
+
+    const unresolved = depIds
+        .map((depId) => taskIndex.get(String(depId)))
+        .filter(dep => dep && dep.status !== 'done')
+        .map(dep => dep.title)
+        .filter(Boolean);
+
+    if (!unresolved.length) return '';
+    return `Blocked by: ${unresolved.join(', ')}`;
+}
+
+function updateBlockedTaskDependencyLabel(taskEl, taskIndex) {
+    if (!taskEl) return;
+
+    const existing = taskEl.querySelector('.task-blocked-dependencies');
+    if (existing) existing.remove();
+
+    const summary = getBlockedDependencySummary(taskEl, taskIndex);
+    if (!summary) {
+        taskEl.removeAttribute('data-blocked-detail');
+        return;
+    }
+
+    const body = taskEl.querySelector('.task-body');
+    const description = body ? body.querySelector('.task-description') : null;
+    const notes = body ? body.querySelector('.task-notes') : null;
+    const tags = body ? body.querySelector('.task-tags') : null;
+    const meta = body ? body.querySelector('.task-meta-lite') : null;
+    const anchor = description || notes || tags || meta;
+
+    const detail = document.createElement('div');
+    detail.className = 'task-blocked-dependencies';
+    detail.textContent = summary;
+    taskEl.dataset.blockedDetail = summary;
+
+    if (anchor && anchor.parentElement === body) {
+        body.insertBefore(detail, anchor);
+    } else if (body) {
+        body.appendChild(detail);
+    }
+}
+
+function organizePhaseBlockedTasks() {
+    const container = document.getElementById('items-container');
+    if (!container) return;
+
+    const taskIndex = new Map(
+        Array.from(container.querySelectorAll('.task-item')).map((taskEl) => [
+            String(taskEl.dataset.itemId || ''),
+            {
+                title: getTaskTitleText(taskEl),
+                status: taskEl.dataset.status || ''
+            }
+        ])
+    );
+
+    document.querySelectorAll('.task-blocked-dependencies').forEach(el => el.remove());
+
+    document.querySelectorAll('.phase-blocked-container').forEach(box => {
+        while (box.firstChild) {
+            container.insertBefore(box.firstChild, box);
+        }
+        box.remove();
+    });
+    document.querySelectorAll('.phase-blocked-bar').forEach(bar => bar.remove());
+
+    const phases = Array.from(container.querySelectorAll('.task-item.phase'));
+    phases.forEach(phaseEl => {
+        const phaseIdStr = String(phaseEl.dataset.phaseId || '');
+        if (!phaseIdStr) return;
+
+        const blockedTasks = [];
+        let cursor = phaseEl.nextElementSibling;
+        while (cursor && !cursor.classList.contains('phase')) {
+            if (cursor.classList.contains('task-item')) {
+                const belongs = cursor.dataset.phaseParent === phaseIdStr
+                    || (!cursor.dataset.phaseParent && cursor.classList.contains('under-phase'));
+                if (belongs && cursor.dataset.blocked === 'true' && cursor.dataset.status !== 'done') {
+                    blockedTasks.push(cursor);
+                }
+            }
+            cursor = cursor.nextElementSibling;
+        }
+
+        if (!blockedTasks.length) return;
+
+        const doneAnchor = container.querySelector(`.phase-done-bar[data-phase-id="${phaseIdStr}"]`);
+        const anchor = doneAnchor || cursor || null;
+
+        const bar = document.createElement('div');
+        bar.className = 'phase-blocked-bar';
+        bar.setAttribute('data-phase-id', phaseIdStr);
+
+        const label = document.createElement('span');
+        label.className = 'phase-blocked-label';
+        label.textContent = `Blocked tasks (${blockedTasks.length})`;
+
+        const blockedBox = document.createElement('div');
+        blockedBox.className = 'phase-blocked-container';
+        blockedBox.setAttribute('data-phase-id', phaseIdStr);
+
+        blockedTasks.forEach(task => {
+            updateBlockedTaskDependencyLabel(task, taskIndex);
+            blockedBox.appendChild(task);
+        });
+
+        bar.appendChild(label);
+        container.insertBefore(bar, anchor);
+        container.insertBefore(blockedBox, anchor);
     });
 }
 

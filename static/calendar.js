@@ -559,6 +559,74 @@ function openCalendarMovePrompt(ev) {
     });
 }
 
+function buildCalendarFollowUpTitle(rawTitle) {
+    const base = String(rawTitle || '').trim();
+    if (!base) return 'Follow up';
+    if (/^follow[\s-]?up[:\s-]/i.test(base)) return base;
+    return `Follow up: ${base}`;
+}
+
+async function createCalendarFollowUp(ev, dayStr) {
+    const targetDay = String(dayStr || '').trim();
+    if (!targetDay) return;
+    const followUpTitle = buildCalendarFollowUpTitle(ev && ev.title);
+
+    try {
+        if (ev && ev.is_task_link && ev.task_list_id) {
+            const res = await fetch(`/api/lists/${ev.task_list_id}/items`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: followUpTitle,
+                    due_date: targetDay
+                })
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Could not create follow-up task.');
+            }
+        } else {
+            const created = await createCalendarEvent({
+                title: followUpTitle,
+                day: targetDay,
+                is_event: false,
+                priority: (ev && ev.priority) || 'medium',
+                allow_overlap: !!(ev && ev.allow_overlap),
+                display_mode: (ev && ev.display_mode) || 'both',
+                rollover_enabled: ev && typeof ev.rollover_enabled === 'boolean' ? ev.rollover_enabled : true
+            });
+            if (!created || !created.id) {
+                throw new Error('Could not create follow-up task.');
+            }
+        }
+
+        showToast('Follow-up task created.', 'success');
+        if (calendarState.detailsOpen && calendarState.selectedDay) {
+            await loadCalendarDay(calendarState.selectedDay);
+        }
+        if (calendarState.monthCursor) {
+            await loadCalendarMonth();
+        }
+    } catch (error) {
+        console.error('Failed to create follow-up task', error);
+        showToast(error && error.message ? error.message : 'Could not create follow-up task.', 'error');
+    }
+}
+
+function openCalendarFollowUpPrompt(ev) {
+    const currentDay = (ev && ev.day) || calendarState.selectedDay || '';
+    openCalendarPrompt({
+        title: 'Create follow-up',
+        message: 'Choose a date for the follow-up task',
+        type: 'date',
+        defaultValue: currentDay,
+        onSubmit: async (val) => {
+            if (!val) return;
+            await createCalendarFollowUp(ev, val);
+        }
+    });
+}
+
 async function setCalendarDay(dayStr, options = {}) {
     const { skipLoad = false, skipLabel = false } = options;
     calendarState.selectedDay = dayStr;
@@ -2002,6 +2070,15 @@ function renderCalendarEvents() {
             }
         };
 
+        const followUpMenuItem = document.createElement('button');
+        followUpMenuItem.className = 'calendar-item-menu-option';
+        followUpMenuItem.innerHTML = '<i class="fa-solid fa-reply"></i> Follow up';
+        followUpMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            openCalendarFollowUpPrompt(ev);
+        };
+
         const openBtn = document.createElement('a');
         openBtn.className = 'calendar-item-menu-option';
         openBtn.href = `/list/${ev.task_list_id}#item-${ev.task_id}`;
@@ -2017,7 +2094,7 @@ function renderCalendarEvents() {
         };
 
         const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, openBtn, unpinBtn);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, followUpMenuItem, openBtn, unpinBtn);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -2907,6 +2984,15 @@ function renderCalendarEvents() {
             openCalendarMovePrompt(ev);
         };
 
+        const followUpMenuItem = document.createElement('button');
+        followUpMenuItem.className = 'calendar-item-menu-option';
+        followUpMenuItem.innerHTML = '<i class="fa-solid fa-reply"></i> Follow up';
+        followUpMenuItem.onclick = (e) => {
+            e.stopPropagation();
+            overflowDropdown.classList.remove('active');
+            openCalendarFollowUpPrompt(ev);
+        };
+
         const noteMenuItem = document.createElement('button');
         noteMenuItem.className = 'calendar-item-menu-option';
         noteMenuItem.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Add Note...';
@@ -2975,8 +3061,8 @@ function renderCalendarEvents() {
         };
 
         const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
-        // Order: reminder, rollover, allow overlap, timeline mode, note, move, delete
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, noteMenuItem, moveMenuItem, deleteMenuItem);
+        // Order: reminder, rollover, allow overlap, timeline mode, note, move, follow up, delete
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, noteMenuItem, moveMenuItem, followUpMenuItem, deleteMenuItem);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 

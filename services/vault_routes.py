@@ -47,11 +47,23 @@ def vault_documents():
         ).all()
         return jsonify([doc.to_dict() for doc in docs])
 
-    files = request.files.getlist('files') or []
-    if not files:
-        single = request.files.get('file')
-        if single:
-            files = [single]
+    files = []
+    for field_name in ['files', 'files[]', 'file', 'file[]']:
+        files.extend(request.files.getlist(field_name) or [])
+    if not files and request.files:
+        for field_name in request.files.keys():
+            files.extend(request.files.getlist(field_name) or [])
+    deduped_files = []
+    seen_file_ids = set()
+    for uploaded in files:
+        if not uploaded:
+            continue
+        uploaded_id = id(uploaded)
+        if uploaded_id in seen_file_ids:
+            continue
+        seen_file_ids.add(uploaded_id)
+        deduped_files.append(uploaded)
+    files = deduped_files
     if not files:
         return jsonify({'error': 'No file uploaded'}), 400
 
@@ -61,14 +73,25 @@ def vault_documents():
         DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
 
     prepared = []
+    mime_extension_overrides = {
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/heic': '.heic',
+        'image/heif': '.heif',
+        'image/webp': '.webp',
+    }
     for file in files:
-        if not file or not file.filename:
+        if not file:
             continue
-        original_filename = os.path.basename(file.filename)
+        raw_filename = (getattr(file, 'filename', '') or '').strip()
+        original_filename = raw_filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1].strip()
+        guessed_type = mimetypes.guess_type(original_filename)[0] if original_filename else None
+        file_type = (file.mimetype or guessed_type or 'application/octet-stream').split(';', 1)[0].strip().lower()
         if not original_filename:
-            continue
-        guessed_type = mimetypes.guess_type(original_filename)[0]
-        file_type = file.mimetype or guessed_type or 'application/octet-stream'
+            inferred_ext = mime_extension_overrides.get(file_type) or mimetypes.guess_extension(file_type) or ''
+            if inferred_ext == '.jpe':
+                inferred_ext = '.jpg'
+            original_filename = f"upload{inferred_ext}"
         if _vault_is_blocked_file(original_filename, file_type):
             return jsonify({'error': f'Blocked file type: {original_filename}'}), 400
         title = (request.form.get('title') or '').strip()
