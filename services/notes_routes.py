@@ -625,6 +625,7 @@ def handle_note(note_id):
 
 def note_list_items(note_id):
     import app as a
+    CalendarEvent = a.CalendarEvent
     Note = a.Note
     NoteListItem = a.NoteListItem
     _sanitize_note_html = a._sanitize_note_html
@@ -648,7 +649,40 @@ def note_list_items(note_id):
             NoteListItem.order_index.asc(),
             NoteListItem.id.asc()
         ).all()
-        return jsonify([item.to_dict() for item in items])
+        item_ids = [item.id for item in items]
+        linked_event_map = {}
+        if item_ids:
+            linked_events = CalendarEvent.query.filter(
+                CalendarEvent.user_id == user.id,
+                CalendarEvent.note_list_item_id.in_(item_ids)
+            ).all()
+            scheduled_dates = {item.id: item.scheduled_date for item in items}
+            for linked_event in linked_events:
+                item_id = linked_event.note_list_item_id
+                if not item_id:
+                    continue
+                current = linked_event_map.get(item_id)
+                if current is None:
+                    linked_event_map[item_id] = linked_event
+                    continue
+                if current.day != linked_event.day and linked_event.day == scheduled_dates.get(item_id):
+                    linked_event_map[item_id] = linked_event
+        payload = []
+        for item in items:
+            data = item.to_dict()
+            linked_event = linked_event_map.get(item.id)
+            if linked_event:
+                data['calendar_event_id'] = linked_event.id
+                data['start_time'] = linked_event.start_time.isoformat() if linked_event.start_time else None
+                data['end_time'] = linked_event.end_time.isoformat() if linked_event.end_time else None
+                data['reminder_minutes_before'] = linked_event.reminder_minutes_before
+            else:
+                data['calendar_event_id'] = None
+                data['start_time'] = None
+                data['end_time'] = None
+                data['reminder_minutes_before'] = None
+            payload.append(data)
+        return jsonify(payload)
 
     data = request.json or {}
     text = (data.get('text') or '').strip()
@@ -716,6 +750,7 @@ def note_list_item_detail(note_id, item_id):
     get_current_user = a.get_current_user
     jsonify = a.jsonify
     parse_day_value = a.parse_day_value
+    parse_time_str = a.parse_time_str
     pytz = a.pytz
     request = a.request
     start_embedding_job = a.start_embedding_job
@@ -748,6 +783,27 @@ def note_list_item_detail(note_id, item_id):
     old_text = item.text
     old_scheduled_date = item.scheduled_date
     old_checked = bool(item.checked)
+    start_time_in_payload = 'start_time' in data
+    reminder_in_payload = 'reminder_minutes_before' in data
+    parsed_start_time = None
+    parsed_reminder_minutes = None
+    start_time_changed = False
+    reminder_changed = False
+    if start_time_in_payload:
+        start_time_raw = data.get('start_time')
+        if start_time_raw:
+            parsed_start_time = parse_time_str(start_time_raw)
+            if parsed_start_time is None:
+                return jsonify({'error': 'Invalid start_time'}), 400
+    if reminder_in_payload:
+        reminder_raw = data.get('reminder_minutes_before')
+        if reminder_raw in (None, ''):
+            parsed_reminder_minutes = None
+        else:
+            try:
+                parsed_reminder_minutes = int(reminder_raw)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid reminder_minutes_before'}), 400
     if 'text' in data:
         text = (data.get('text') or '').strip()
         if not text:
@@ -797,26 +853,57 @@ def note_list_item_detail(note_id, item_id):
             linked_event.title = item.text
             calendar_event_ids_to_refresh.add(linked_event.id)
 
+    linked_event_fields_changed = ('scheduled_date' in data) or start_time_in_payload or reminder_in_payload
     if item.scheduled_date is None:
         for linked_event in linked_events:
             _cancel_reminder_job(linked_event)
             delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
             db.session.delete(linked_event)
         linked_events = []
-    elif linked_events:
-        primary = next((linked_event for linked_event in linked_events if linked_event.day == item.scheduled_date), None)
-        if primary is None:
-            primary = linked_events[0]
+    elif linked_event_fields_changed:
+        should_keep_linked_event = bool(linked_events) or parsed_start_time is not None or parsed_reminder_minutes is not None
+        if should_keep_linked_event:
+            primary = next((linked_event for linked_event in linked_events if linked_event.day == item.scheduled_date), None)
+            if primary is None and linked_events:
+                primary = linked_events[0]
+                primary.day = item.scheduled_date
+                primary.order_index = _next_calendar_order(item.scheduled_date, user.id)
+                calendar_event_ids_to_refresh.add(primary.id)
+            elif primary is None:
+                primary = CalendarEvent(
+                    user_id=user.id,
+                    title=item.text,
+                    day=item.scheduled_date,
+                    status='done' if item.checked else 'not_started',
+                    priority='medium',
+                    order_index=_next_calendar_order(item.scheduled_date, user.id),
+                    note_list_item_id=item.id,
+                    rollover_enabled=True
+                )
+                db.session.add(primary)
+                db.session.flush()
+            primary.title = item.text
             primary.day = item.scheduled_date
-            primary.order_index = _next_calendar_order(item.scheduled_date, user.id)
-            calendar_event_ids_to_refresh.add(primary.id)
-        for linked_event in linked_events:
-            if linked_event.id == primary.id:
-                continue
-            _cancel_reminder_job(linked_event)
-            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
-            db.session.delete(linked_event)
-        linked_events = [primary]
+            primary.status = 'done' if item.checked else 'not_started'
+            if start_time_in_payload:
+                old_start_time = primary.start_time
+                primary.start_time = parsed_start_time
+                if parsed_start_time is None:
+                    primary.end_time = None
+                start_time_changed = (old_start_time != primary.start_time)
+            if reminder_in_payload:
+                old_reminder = primary.reminder_minutes_before
+                primary.reminder_minutes_before = parsed_reminder_minutes
+                reminder_changed = (old_reminder != primary.reminder_minutes_before)
+            for linked_event in linked_events:
+                if linked_event.id == primary.id:
+                    continue
+                _cancel_reminder_job(linked_event)
+                delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+                db.session.delete(linked_event)
+            linked_events = [primary]
+        else:
+            linked_events = []
 
     for linked_event in linked_events:
         calendar_event_ids_to_refresh.add(linked_event.id)
@@ -832,12 +919,11 @@ def note_list_item_detail(note_id, item_id):
             linked_event.reminder_sent = False
             if linked_event.reminder_minutes_before is not None and linked_event.start_time and linked_event.status not in {'done', 'canceled'}:
                 events_to_reschedule[linked_event.id] = linked_event
-        if scheduled_changed:
-            if linked_event.reminder_minutes_before is not None:
-                if linked_event.start_time and linked_event.status not in {'done', 'canceled'}:
-                    events_to_reschedule[linked_event.id] = linked_event
-                else:
-                    _cancel_reminder_job(linked_event)
+        if scheduled_changed or start_time_changed or reminder_changed:
+            if linked_event.reminder_minutes_before is not None and linked_event.start_time and linked_event.status not in {'done', 'canceled'}:
+                events_to_reschedule[linked_event.id] = linked_event
+            else:
+                _cancel_reminder_job(linked_event)
 
     note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
     db.session.commit()

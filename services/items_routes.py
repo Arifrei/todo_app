@@ -17,6 +17,7 @@ def handle_item(item_id):
     get_current_user = a.get_current_user
     jsonify = a.jsonify
     parse_day_value = a.parse_day_value
+    parse_time_str = a.parse_time_str
     pytz = a.pytz
     request = a.request
     start_embedding_job = a.start_embedding_job
@@ -68,6 +69,25 @@ def handle_item(item_id):
         old_due_date = item.due_date
         old_status = item.status
         calendar_event_ids_to_refresh = set()
+        start_time_in_payload = 'start_time' in data
+        reminder_in_payload = 'reminder_minutes_before' in data
+        parsed_start_time = None
+        parsed_reminder_minutes = None
+        if start_time_in_payload:
+            start_time_raw = data.get('start_time')
+            if start_time_raw:
+                parsed_start_time = parse_time_str(start_time_raw)
+                if parsed_start_time is None:
+                    return jsonify({'error': 'Invalid start_time'}), 400
+        if reminder_in_payload:
+            reminder_raw = data.get('reminder_minutes_before')
+            if reminder_raw in (None, ''):
+                parsed_reminder_minutes = None
+            else:
+                try:
+                    parsed_reminder_minutes = int(reminder_raw)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'Invalid reminder_minutes_before'}), 400
         if 'dependency_ids' in data:
             if not item.list or item.list.type != 'list':
                 return jsonify({'error': 'Dependencies are only supported for task lists'}), 400
@@ -124,29 +144,60 @@ def handle_item(item_id):
         if 'due_date' in data:
             due_date_raw = data.get('due_date')
             item.due_date = parse_day_value(due_date_raw) if due_date_raw else None
-            if old_due_date != item.due_date:
-                linked_events = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).all()
-                if linked_events:
-                    if item.due_date:
-                        primary = next((linked_event for linked_event in linked_events if linked_event.day == item.due_date), None)
-                        if primary is None:
-                            primary = linked_events[0]
-                            primary.day = item.due_date
-                            primary.order_index = _next_calendar_order(item.due_date, user.id)
-                        for linked_event in linked_events:
-                            if linked_event.id == primary.id:
-                                continue
-                            _cancel_reminder_job(linked_event)
-                            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
-                            db.session.delete(linked_event)
+        linked_event_fields_changed = ('due_date' in data) or start_time_in_payload or reminder_in_payload
+        if linked_event_fields_changed:
+            linked_events = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).all()
+            if item.due_date:
+                should_keep_linked_event = bool(linked_events) or parsed_start_time is not None or parsed_reminder_minutes is not None
+                if should_keep_linked_event:
+                    primary = next((linked_event for linked_event in linked_events if linked_event.day == item.due_date), None)
+                    if primary is None and linked_events:
+                        primary = linked_events[0]
+                        primary.day = item.due_date
+                        primary.order_index = _next_calendar_order(item.due_date, user.id)
+                    elif primary is None:
+                        primary = CalendarEvent(
+                            user_id=user.id,
+                            title=item.content,
+                            day=item.due_date,
+                            status=item.status,
+                            priority='medium',
+                            order_index=_next_calendar_order(item.due_date, user.id),
+                            todo_item_id=item.id,
+                            rollover_enabled=True
+                        )
+                        db.session.add(primary)
+                        db.session.flush()
+                    primary.title = item.content
+                    primary.day = item.due_date
+                    primary.status = item.status
+                    if start_time_in_payload:
+                        primary.start_time = parsed_start_time
+                        if parsed_start_time is None:
+                            primary.end_time = None
+                    if reminder_in_payload:
+                        primary.reminder_minutes_before = parsed_reminder_minutes
+                    for linked_event in linked_events:
+                        if linked_event.id == primary.id:
+                            continue
+                        _cancel_reminder_job(linked_event)
+                        delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+                        db.session.delete(linked_event)
+                    _cancel_reminder_job(primary)
+                    if item.status == 'done':
+                        primary.reminder_sent = True
+                        primary.reminder_snoozed_until = None
+                    else:
+                        primary.reminder_sent = False
+                        primary.reminder_snoozed_until = None
                         if primary.reminder_minutes_before is not None and primary.start_time:
                             _schedule_reminder_job(primary)
-                        calendar_event_ids_to_refresh.add(primary.id)
-                    else:
-                        for linked_event in linked_events:
-                            _cancel_reminder_job(linked_event)
-                            delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
-                            db.session.delete(linked_event)
+                    calendar_event_ids_to_refresh.add(primary.id)
+            else:
+                for linked_event in linked_events:
+                    _cancel_reminder_job(linked_event)
+                    delete_embedding(user.id, ENTITY_CALENDAR, linked_event.id)
+                    db.session.delete(linked_event)
 
         if old_status != new_status:
             linked_events = CalendarEvent.query.filter_by(user_id=user.id, todo_item_id=item.id).all()

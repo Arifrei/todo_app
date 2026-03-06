@@ -179,6 +179,9 @@
                         <i class="fa-solid fa-check"></i> Done
                     </button>
                 </div>
+                <button class="bulk-menu-item" data-onclick="openBulkTaskDatePicker(); toggleBulkMenu(event, true);">
+                    <i class="fa-solid fa-calendar-days"></i> Date
+                </button>
                 {% if todo_list.type == 'list' %}
                 <button class="bulk-menu-item bulk-menu-parent" data-onclick="toggleBulkSubmenu('tag', event)" aria-label="Tag actions" aria-controls="bulk-tag-form" aria-expanded="false">
                     <span><i class="fa-solid fa-tag"></i> Add tag</span>
@@ -199,6 +202,7 @@
     {% set parent_phase_id = item.phase_id if (item.phase_id and todo_list.type == 'list') else '' %}
     {% set tag_list = item.tag_list() %}
     {% set is_blocked = (todo_list.type == 'list' and (item.id in blocked_ids) and (not item.is_phase) and item.status != 'phase') %}
+    {% set linked_event = linked_calendar_events.get(item.id) if linked_calendar_events else None %}
     {% if todo_list.type == 'list' and item.is_phase %}
         {% set phase_tasks = item.phase_tasks
             |selectattr('is_phase', 'equalto', False)
@@ -339,7 +343,7 @@
                             <button class="task-actions-menu-item" data-onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-arrow-right"></i> Move to
                             </button>
-                            <button class="task-actions-menu-item" data-onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <button class="task-actions-menu-item" data-onclick="setItemDate({{ item.id }}, '{{ item.due_date or '' }}', `{{ item.content|replace('`', '\\`') }}`, '{{ linked_event.start_time.isoformat() if linked_event and linked_event.start_time else '' }}', '{{ linked_event.reminder_minutes_before if linked_event and linked_event.reminder_minutes_before is not none else '' }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-calendar-days"></i> Date
                             </button>
                             <button class="task-actions-menu-item" data-onclick="linkNoteToItem({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, {{ item.linked_notes|map(attribute='id')|list|tojson }}); toggleTaskActionsMenu({{ item.id }}, event);">
@@ -559,6 +563,14 @@ Task 3 ::: notes"></textarea>
         <div class="form-group">
             <label for="date-picker-input">Select a date</label>
             <input type="date" id="date-picker-input" class="form-control">
+        </div>
+        <div class="form-group">
+            <label for="date-picker-time-input">Time (optional)</label>
+            <input type="text" id="date-picker-time-input" class="form-control" placeholder="e.g. 10, 12pm, 3:30pm">
+        </div>
+        <div class="form-group">
+            <label for="date-picker-reminder-input">Reminder (optional)</label>
+            <input type="text" id="date-picker-reminder-input" class="form-control" placeholder="e.g. 30m, 2h, 1d">
         </div>
         <div class="modal-actions">
             <button class="btn" data-onclick="closeDatePickerModal()">Cancel</button>

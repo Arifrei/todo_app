@@ -1392,11 +1392,15 @@ def _send_daily_email_digest(target_day=None):
                     CalendarEvent.start_time.is_(None),
                     CalendarEvent.start_time.asc()
                 ).all()
-                todo_tasks = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                linked_task_ids = {task.todo_item_id for task in calendar_tasks if task.todo_item_id}
+                todo_task_query = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
                     TodoList.user_id == user_obj.id,
                     TodoItem.due_date == target_day,
                     TodoItem.is_phase.is_(False)
-                ).order_by(TodoItem.order_index.asc()).all()
+                )
+                if linked_task_ids:
+                    todo_task_query = todo_task_query.filter(~TodoItem.id.in_(linked_task_ids))
+                todo_tasks = todo_task_query.order_by(TodoItem.order_index.asc()).all()
 
                 tasks_for_day = []
                 for task in calendar_tasks:

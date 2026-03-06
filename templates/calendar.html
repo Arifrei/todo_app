@@ -60,7 +60,7 @@
             <textarea id="calendar-month-quick-input" class="form-control" rows="2" placeholder="Type your task and press Enter" disabled aria-label="Month quick add input"></textarea>
         </div>
         <div class="quick-hint">
-            Type your task and press <kbd>Enter</kbd>. Use <strong>$</strong> <strong>#</strong> <strong>></strong> <strong>@</strong> <strong>!</strong> <strong>*</strong> <strong>?</strong> <strong>&amp;</strong> <strong>-</strong>
+            Type your task and press <kbd>Enter</kbd>. Use <strong>$</strong> <strong>#</strong> <strong>></strong> <strong>@</strong> <strong>!</strong> <strong>*</strong> <strong>::</strong> <strong>?</strong> <strong>&amp;</strong> <strong>-</strong>
             <button class="link-btn" id="calendar-quick-help-toggle" type="button" aria-controls="calendar-quick-syntax-guide" aria-expanded="false">Show syntax guide</button>
         </div>
         <div class="calendar-syntax-guide is-hidden" id="calendar-quick-syntax-guide">
@@ -70,6 +70,7 @@
             <div class="syntax-guide-row"><strong>@</strong> Time (e.g., <code>@3pm-5pm</code>)</div>
             <div class="syntax-guide-row"><strong>!</strong> Priority (e.g., <code>!h</code> !m !l)</div>
             <div class="syntax-guide-row"><strong>*</strong> Reminder (e.g., <code>*30m</code>, <code>*2h</code>, <code>*1d</code>)</div>
+            <div class="syntax-guide-row"><strong>::</strong> Quick note (e.g., <code>Call dentist :: Ask about the refill</code>)</div>
             <div class="syntax-guide-row"><strong>?</strong> Overlap (events allow overlap; tasks disallow overlap)</div>
             <div class="syntax-guide-row"><strong>&amp;</strong> Timeline only (hide from list view)</div>
             <div class="syntax-guide-row"><strong>-</strong> Disable rollover (prevents task from rolling to next day)</div>
@@ -446,18 +447,18 @@
     <!-- Calendar Item Note Modal -->
     <div class="modal" id="calendar-item-note-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-item-note-title">
         <div class="modal-content" tabindex="-1">
-            <h2 id="calendar-item-note-title">Item Note</h2>
+            <h2 id="calendar-item-note-title">Quick Note</h2>
             <p id="calendar-item-note-label" class="u-text-muted u-mt-neg-025"></p>
             <div id="calendar-item-note-view" class="calendar-item-note-view"></div>
             <div id="calendar-item-note-editor" class="form-group is-hidden">
-                <label for="calendar-item-note-input">Note</label>
+                <label for="calendar-item-note-input">Quick note</label>
                 <textarea id="calendar-item-note-input" class="form-control" rows="6" maxlength="{{ item_note_max_chars }}"></textarea>
                 <div class="calendar-item-note-counter" id="calendar-item-note-counter"></div>
             </div>
             <div class="modal-actions" id="calendar-item-note-view-actions">
                 <button class="btn" id="calendar-item-note-close">Close</button>
                 <button class="btn btn-secondary" id="calendar-item-note-edit">Edit</button>
-                <button class="btn btn-secondary" id="calendar-item-note-convert">Convert to note</button>
+                <button class="btn btn-secondary" id="calendar-item-note-convert">Convert to linked note</button>
                 <button class="btn btn-danger" id="calendar-item-note-delete">Delete</button>
             </div>
             <div class="modal-actions is-hidden" id="calendar-item-note-edit-actions">

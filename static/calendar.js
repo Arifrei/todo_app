@@ -3848,9 +3848,14 @@ function parseCalendarQuickInput(text) {
     const raw = text.trim();
     if (!raw) return null;
 
+    const quickNoteSeparator = '::';
+    const quickNoteParts = raw.split(quickNoteSeparator);
+    const rawMain = quickNoteParts.shift().trim();
+    const itemNote = quickNoteParts.length ? quickNoteParts.join(quickNoteSeparator).trim() || null : null;
+
     // Phase creation with task
-    if (raw.startsWith('#')) {
-        const afterSymbol = raw.substring(1).trim();
+    if (rawMain.startsWith('#')) {
+        const afterSymbol = rawMain.substring(1).trim();
         let phaseName, taskText;
 
         // Check for comma separator for multi-word phase names
@@ -3863,7 +3868,7 @@ function parseCalendarQuickInput(text) {
             const firstSpaceIndex = afterSymbol.indexOf(' ');
             if (firstSpaceIndex === -1) {
                 // No space, just create the phase
-                return { is_phase: true, title: afterSymbol || 'Untitled Phase' };
+                return { is_phase: true, title: afterSymbol || 'Untitled Phase', item_note: itemNote };
             }
             phaseName = afterSymbol.substring(0, firstSpaceIndex).trim();
             taskText = afterSymbol.substring(firstSpaceIndex + 1).trim();
@@ -3871,20 +3876,21 @@ function parseCalendarQuickInput(text) {
 
         if (!taskText) {
             // No task text, just create phase
-            return { is_phase: true, title: phaseName };
+            return { is_phase: true, title: phaseName, item_note: itemNote };
         }
 
         // Return indicator to create both phase and task
         return {
             create_phase_with_task: true,
             phase_name: phaseName,
-            task_text: taskText
+            task_text: taskText,
+            task_item_note: itemNote
         };
     }
 
     // Group creation with task
-    if (raw.startsWith('>')) {
-        const afterSymbol = raw.substring(1).trim();
+    if (rawMain.startsWith('>')) {
+        const afterSymbol = rawMain.substring(1).trim();
         let groupName, taskText;
 
         // Check for comma separator for multi-word group names
@@ -3897,7 +3903,7 @@ function parseCalendarQuickInput(text) {
             const firstSpaceIndex = afterSymbol.indexOf(' ');
             if (firstSpaceIndex === -1) {
                 // No space, just create the group
-                return { is_group: true, title: afterSymbol || 'Untitled Group' };
+                return { is_group: true, title: afterSymbol || 'Untitled Group', item_note: itemNote };
             }
             groupName = afterSymbol.substring(0, firstSpaceIndex).trim();
             taskText = afterSymbol.substring(firstSpaceIndex + 1).trim();
@@ -3905,18 +3911,19 @@ function parseCalendarQuickInput(text) {
 
         if (!taskText) {
             // No task text, just create group
-            return { is_group: true, title: groupName };
+            return { is_group: true, title: groupName, item_note: itemNote };
         }
 
         // Return indicator to create both group and task
         return {
             create_group_with_task: true,
             group_name: groupName,
-            task_text: taskText
+            task_text: taskText,
+            task_item_note: itemNote
         };
     }
 
-    const protectedLinks = protectCalendarMarkdownLinks(raw);
+    const protectedLinks = protectCalendarMarkdownLinks(rawMain);
     let working = protectedLinks.maskedText;
     let startTime = null;
     let endTime = null;
@@ -4018,6 +4025,7 @@ function parseCalendarQuickInput(text) {
         phase_name: phaseName,
         group_name: groupName,
         display_mode: displayMode,
-        rollover_enabled: rollover
+        rollover_enabled: rollover,
+        item_note: itemNote
     };
 }

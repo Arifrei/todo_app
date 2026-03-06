@@ -1809,6 +1809,12 @@ function getSyntaxSuggestions(text, cursorPosition) {
         example: '*30m or *2h'
     });
 
+    suggestions.push({
+        syntax: '::',
+        description: 'Attach a quick note to the item',
+        example: 'Plan trip :: Book the hotel tonight'
+    });
+
     // Timeline-only visibility
     suggestions.push({
         syntax: '&',

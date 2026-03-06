@@ -29,6 +29,7 @@ function initListEditorPage() {
     const stack = document.getElementById('list-pill-stack');
     const selectToggle = document.getElementById('list-select-toggle');
     const bulkMoveBtn = document.getElementById('list-bulk-move-btn');
+    const bulkDateBtn = document.getElementById('list-bulk-date-btn');
     const bulkSectionBtn = document.getElementById('list-bulk-section-btn');
     const bulkDeleteBtn = document.getElementById('list-bulk-delete-btn');
     const bulkDoneBtn = document.getElementById('list-bulk-done-btn');
@@ -52,6 +53,8 @@ function initListEditorPage() {
     const itemNoteClearBtn = document.getElementById('list-item-note-clear-btn');
     const itemDateModal = document.getElementById('list-item-date-modal');
     const itemDateInput = document.getElementById('list-item-date-input');
+    const itemTimeInput = document.getElementById('list-item-time-input');
+    const itemReminderInput = document.getElementById('list-item-reminder-input');
     const itemDateSaveBtn = document.getElementById('list-item-date-save-btn');
     const itemDateCancelBtn = document.getElementById('list-item-date-cancel-btn');
     const itemDateClearBtn = document.getElementById('list-item-date-clear-btn');
@@ -91,6 +94,13 @@ function initListEditorPage() {
             e.stopPropagation();
             if (bulkMoreMenu) bulkMoreMenu.classList.remove('open');
             openListBulkMoveMenu(bulkMoveBtn);
+        });
+    }
+    if (bulkDateBtn) {
+        bulkDateBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (bulkMoreMenu) bulkMoreMenu.classList.remove('open');
+            openBulkListItemDateModal();
         });
     }
     if (bulkSectionBtn) {
@@ -304,8 +314,8 @@ function initListEditorPage() {
             document.execCommand('insertHTML', false, markdownHtml);
         });
     }
-    if (itemDateInput) {
-        itemDateInput.addEventListener('keydown', (e) => {
+    [itemDateInput, itemTimeInput, itemReminderInput].filter(Boolean).forEach((field) => {
+        field.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 saveListItemScheduledDate();
@@ -314,7 +324,7 @@ function initListEditorPage() {
                 closeListItemDateModal();
             }
         });
-    }
+    });
     document.addEventListener('keydown', handleListEditorModalKeydown);
 
     // Check PIN status
@@ -1015,7 +1025,7 @@ let listSectionReorderState = {
     dragPreviewEl: null
 };
 let listItemNoteModalState = { itemId: null };
-let listItemDateModalState = { itemId: null, itemTitle: '' };
+let listItemDateModalState = { itemId: null, itemIds: [], itemTitle: '', startTime: '', reminderMinutes: null };
 let activeListItemMenuAnchor = null;
 
 function ensureCollapsedSectionSet() {
@@ -1331,7 +1341,10 @@ function closeListItemDateModal() {
     const modal = document.getElementById('list-item-date-modal');
     if (modal) modal.classList.remove('active');
     listItemDateModalState.itemId = null;
+    listItemDateModalState.itemIds = [];
     listItemDateModalState.itemTitle = '';
+    listItemDateModalState.startTime = '';
+    listItemDateModalState.reminderMinutes = null;
 }
 
 function openListItemDateModal(itemId) {
@@ -1343,33 +1356,94 @@ function openListItemDateModal(itemId) {
     const modal = document.getElementById('list-item-date-modal');
     const subtitleEl = document.getElementById('list-item-date-subtitle');
     const input = document.getElementById('list-item-date-input');
+    const timeInput = document.getElementById('list-item-time-input');
+    const reminderInput = document.getElementById('list-item-reminder-input');
     if (!item || !modal || !subtitleEl || !input) return;
 
     listItemDateModalState.itemId = itemId;
+    listItemDateModalState.itemIds = [itemId];
     listItemDateModalState.itemTitle = (item.text || '').trim();
+    listItemDateModalState.startTime = typeof normalizeDatePickerTimeValue === 'function'
+        ? normalizeDatePickerTimeValue(item.start_time)
+        : '';
+    listItemDateModalState.reminderMinutes = item.reminder_minutes_before ?? null;
     subtitleEl.textContent = (item.text || '').trim() || 'Untitled item';
     input.value = normalizeListDateValue(item.scheduled_date) || '';
+    if (timeInput) timeInput.value = listItemDateModalState.startTime;
+    if (reminderInput) {
+        reminderInput.value = typeof formatDatePickerReminderMinutes === 'function'
+            ? formatDatePickerReminderMinutes(item.reminder_minutes_before)
+            : '';
+    }
     modal.classList.add('active');
-    setTimeout(() => input.focus(), 0);
+    setTimeout(() => (timeInput || input).focus(), 0);
+}
+
+function openBulkListItemDateModal() {
+    if (listState.isArchived) {
+        showReadOnlyToast();
+        return;
+    }
+    const itemIds = getSelectedListItemIds();
+    const modal = document.getElementById('list-item-date-modal');
+    const subtitleEl = document.getElementById('list-item-date-subtitle');
+    const input = document.getElementById('list-item-date-input');
+    const timeInput = document.getElementById('list-item-time-input');
+    const reminderInput = document.getElementById('list-item-reminder-input');
+    if (!itemIds.length || !modal || !subtitleEl || !input) return;
+
+    listItemDateModalState.itemId = itemIds[0];
+    listItemDateModalState.itemIds = itemIds;
+    listItemDateModalState.itemTitle = '';
+    listItemDateModalState.startTime = '';
+    listItemDateModalState.reminderMinutes = null;
+    subtitleEl.textContent = itemIds.length === 1
+        ? 'Apply date, time, and reminder to 1 selected item.'
+        : `Apply date, time, and reminder to ${itemIds.length} selected items.`;
+    input.value = '';
+    if (timeInput) timeInput.value = '';
+    if (reminderInput) reminderInput.value = '';
+    modal.classList.add('active');
+    setTimeout(() => (timeInput || input).focus(), 0);
 }
 
 async function saveListItemScheduledDate() {
-    const itemId = listItemDateModalState.itemId;
+    const itemIds = listItemDateModalState.itemIds.length
+        ? listItemDateModalState.itemIds.slice()
+        : (listItemDateModalState.itemId ? [listItemDateModalState.itemId] : []);
     const itemTitle = listItemDateModalState.itemTitle || '';
     const input = document.getElementById('list-item-date-input');
-    if (!itemId || !input) return;
+    const timeInput = document.getElementById('list-item-time-input');
+    const reminderInput = document.getElementById('list-item-reminder-input');
+    if (!itemIds.length || !input) return;
     if (listState.isArchived) {
         showReadOnlyToast();
         return;
     }
     const dateValue = (input.value || '').trim();
+    const timeValue = timeInput && timeInput.value ? timeInput.value.trim() : '';
+    const reminderRaw = reminderInput && reminderInput.value ? reminderInput.value.trim() : '';
+    const reminderMinutes = reminderRaw && typeof parseDatePickerReminderMinutes === 'function'
+        ? parseDatePickerReminderMinutes(reminderRaw)
+        : null;
+    if (reminderRaw && reminderMinutes === null) {
+        showToast('Use 30m, 2h, or 1d for reminders.', 'error');
+        return;
+    }
     const persistDate = async () => {
-        await updateListItem(itemId, { scheduled_date: dateValue || null }, { refresh: true });
+        await Promise.all(itemIds.map((itemId) => updateListItem(itemId, {
+            scheduled_date: dateValue || null,
+            start_time: timeValue || null,
+            reminder_minutes_before: reminderMinutes
+        })));
+        await loadListItems();
         closeListItemDateModal();
-        showToast('Date saved', 'success', 1400);
+        showToast(itemIds.length === 1 ? 'Date saved' : 'Dates saved', 'success', 1400);
     };
     if (dateValue && typeof openCalendarMovePreviewModal === 'function') {
-        const movingLabel = itemTitle ? `"${itemTitle}"` : 'this list item';
+        const movingLabel = itemIds.length > 1
+            ? `${itemIds.length} selected list items`
+            : (itemTitle ? `"${itemTitle}"` : 'this list item');
         await openCalendarMovePreviewModal({
             targetDay: dateValue,
             movingLabel,
@@ -1395,16 +1469,19 @@ async function saveListItemScheduledDate() {
 }
 
 async function clearListItemScheduledDate() {
-    const itemId = listItemDateModalState.itemId;
-    if (!itemId) return;
+    const itemIds = listItemDateModalState.itemIds.length
+        ? listItemDateModalState.itemIds.slice()
+        : (listItemDateModalState.itemId ? [listItemDateModalState.itemId] : []);
+    if (!itemIds.length) return;
     if (listState.isArchived) {
         showReadOnlyToast();
         return;
     }
     try {
-        await updateListItem(itemId, { scheduled_date: null }, { refresh: true });
+        await Promise.all(itemIds.map((itemId) => updateListItem(itemId, { scheduled_date: null })));
+        await loadListItems();
         closeListItemDateModal();
-        showToast('Date cleared', 'success', 1400);
+        showToast(itemIds.length === 1 ? 'Date cleared' : 'Dates cleared', 'success', 1400);
     } catch (err) {
         console.error('Clear item date failed:', err);
         showToast('Could not clear date', 'error');
@@ -1826,11 +1903,13 @@ function updateListBulkBar() {
     const countEl = document.getElementById('list-bulk-count');
     if (countEl) countEl.textContent = `${count} selected`;
     const moveBtn = document.getElementById('list-bulk-move-btn');
+    const dateBtn = document.getElementById('list-bulk-date-btn');
     const sectionBtn = document.getElementById('list-bulk-section-btn');
     const deleteBtn = document.getElementById('list-bulk-delete-btn');
     const selectAll = document.getElementById('list-select-all');
     const disabled = count === 0;
     if (moveBtn) moveBtn.disabled = disabled;
+    if (dateBtn) dateBtn.disabled = disabled;
     if (sectionBtn) sectionBtn.disabled = disabled;
     if (deleteBtn) deleteBtn.disabled = disabled;
     // Note: moreToggle (dropdown button) is kept enabled so users can see options

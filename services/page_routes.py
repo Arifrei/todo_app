@@ -266,6 +266,28 @@ def list_view(list_id):
         if blocked_ids:
             blocked_items = [i for i in todo_list.items if i.id in blocked_ids]
 
+    linked_calendar_events = {}
+    task_due_dates = {
+        item.id: item.due_date
+        for item in todo_list.items
+        if not is_phase_header(item)
+    }
+    task_ids = list(task_due_dates.keys())
+    if task_ids:
+        linked_events = CalendarEvent.query.filter(
+            CalendarEvent.user_id == user.id,
+            CalendarEvent.todo_item_id.in_(task_ids)
+        ).all()
+        for linked_event in linked_events:
+            if not linked_event.todo_item_id:
+                continue
+            current = linked_calendar_events.get(linked_event.todo_item_id)
+            if current is None:
+                linked_calendar_events[linked_event.todo_item_id] = linked_event
+                continue
+            if current.day != linked_event.day and linked_event.day == task_due_dates.get(linked_event.todo_item_id):
+                linked_calendar_events[linked_event.todo_item_id] = linked_event
+
     # Use items in their order_index order (no re-sorting by completion status)
     return render_template(
         'list_view.html',
@@ -274,6 +296,7 @@ def list_view(list_id):
         items=todo_list.items,
         blocked_ids=blocked_ids,
         blocked_items=blocked_items,
+        linked_calendar_events=linked_calendar_events,
         default_timezone=app.config.get('DEFAULT_TIMEZONE')
     )
 

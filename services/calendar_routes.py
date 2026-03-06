@@ -1,5 +1,28 @@
 """Extracted heavy route handlers from app.py."""
 
+def _build_linked_task_payload(item, linked_event, synthetic_id, day_key):
+    return {
+        'id': synthetic_id,
+        'title': item.content,
+        'status': item.status,
+        'is_task_link': True,
+        'task_id': item.id,
+        'task_list_id': item.list_id,
+        'task_list_title': item.list.title if item.list else '',
+        'calendar_event_id': linked_event.id if linked_event else None,
+        'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
+        'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
+        'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
+        'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
+        'allow_overlap': linked_event.allow_overlap if linked_event else False,
+        'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
+        'priority': linked_event.priority if linked_event else 'medium',
+        'item_note': linked_event.item_note if linked_event else None,
+        'day': day_key,
+        'order_index': linked_event.order_index if linked_event else abs(int(synthetic_id))
+    }
+
+
 def calendar_search():
     import app as a
     CalendarEvent = a.CalendarEvent
@@ -183,29 +206,43 @@ def calendar_events():
             TodoItem.due_date <= end_day,
             TodoItem.is_phase.is_(False)
         ).all()
-        for idx, item in enumerate(due_items):
+        task_lookup = {item.id: item for item in due_items}
+        linked_task_ids = {ev.todo_item_id for ev in events if ev.todo_item_id}
+        missing_task_ids = linked_task_ids.difference(task_lookup.keys())
+        if missing_task_ids:
+            missing_tasks = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                TodoList.user_id == user.id,
+                TodoItem.id.in_(missing_task_ids)
+            ).all()
+            for item in missing_tasks:
+                task_lookup[item.id] = item
+
+        emitted_task_keys = set()
+        task_link_idx = 0
+        for item in due_items:
             day_key = item.due_date.isoformat()
             linked_event = linked_event_map.get(day_key, {}).get(item.id)
-            by_day.setdefault(day_key, []).append({
-                'id': -100000 - idx,
-                'title': item.content,
-                'status': item.status,
-                'is_task_link': True,
-                'task_id': item.id,
-                'task_list_id': item.list_id,
-                'task_list_title': item.list.title if item.list else '',
-                'calendar_event_id': linked_event.id if linked_event else None,
-                'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
-                'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
-                'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
-                'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
-                'allow_overlap': linked_event.allow_overlap if linked_event else False,
-                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
-                'priority': linked_event.priority if linked_event else 'medium',
-                'item_note': linked_event.item_note if linked_event else None,
-                'day': day_key,
-                'order_index': 100000 + idx
-            })
+            emitted_task_keys.add((day_key, item.id))
+            by_day.setdefault(day_key, []).append(
+                _build_linked_task_payload(item, linked_event, -100000 - task_link_idx, day_key)
+            )
+            task_link_idx += 1
+
+        for ev in events:
+            if not ev.todo_item_id:
+                continue
+            day_key = ev.day.isoformat()
+            emitted_key = (day_key, ev.todo_item_id)
+            if emitted_key in emitted_task_keys:
+                continue
+            item = task_lookup.get(ev.todo_item_id)
+            if not item:
+                continue
+            emitted_task_keys.add(emitted_key)
+            by_day.setdefault(day_key, []).append(
+                _build_linked_task_payload(item, ev, -100000 - task_link_idx, day_key)
+            )
+            task_link_idx += 1
 
         # Include scheduled notes list items
         note_list_idx = 0
@@ -324,28 +361,38 @@ def calendar_events():
             TodoItem.due_date == day_obj,
             TodoItem.is_phase.is_(False)
         ).all()
-        for idx, item in enumerate(due_items):
+        task_lookup = {item.id: item for item in due_items}
+        linked_task_ids = set(linked_event_map.keys())
+        missing_task_ids = linked_task_ids.difference(task_lookup.keys())
+        if missing_task_ids:
+            missing_tasks = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
+                TodoList.user_id == user.id,
+                TodoItem.id.in_(missing_task_ids)
+            ).all()
+            for item in missing_tasks:
+                task_lookup[item.id] = item
+
+        emitted_task_ids = set()
+        task_link_idx = 0
+        for item in due_items:
             linked_event = linked_event_map.get(item.id)
-            payload.append({
-                'id': -100000 - idx,  # synthetic id to avoid collisions
-                'title': item.content,
-                'status': item.status,
-                'is_task_link': True,
-                'task_id': item.id,
-                'task_list_id': item.list_id,
-                'task_list_title': item.list.title if item.list else '',
-                'calendar_event_id': linked_event.id if linked_event else None,
-                'start_time': linked_event.start_time.isoformat() if linked_event and linked_event.start_time else None,
-                'end_time': linked_event.end_time.isoformat() if linked_event and linked_event.end_time else None,
-                'reminder_minutes_before': linked_event.reminder_minutes_before if linked_event else None,
-                'rollover_enabled': linked_event.rollover_enabled if linked_event else False,
-                'allow_overlap': linked_event.allow_overlap if linked_event else False,
-                'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
-                'priority': linked_event.priority if linked_event else 'medium',
-                'item_note': linked_event.item_note if linked_event else None,
-                'day': day_obj.isoformat(),
-                'order_index': 100000 + idx
-            })
+            emitted_task_ids.add(item.id)
+            payload.append(
+                _build_linked_task_payload(item, linked_event, -100000 - task_link_idx, day_obj.isoformat())
+            )
+            task_link_idx += 1
+
+        for task_id, linked_event in linked_event_map.items():
+            if task_id in emitted_task_ids:
+                continue
+            item = task_lookup.get(task_id)
+            if not item:
+                continue
+            emitted_task_ids.add(task_id)
+            payload.append(
+                _build_linked_task_payload(item, linked_event, -100000 - task_link_idx, day_obj.isoformat())
+            )
+            task_link_idx += 1
 
         # Include scheduled notes list items for this day
         note_list_items = db.session.query(NoteListItem, Note).join(

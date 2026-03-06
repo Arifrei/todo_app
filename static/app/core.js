@@ -81,7 +81,7 @@ const calendarSelection = { active: false, ids: new Set(), longPressTimer: null,
 let calendarReminderTimers = {};
 let calendarNotifyEnabled = false;
 let calendarPrompt = { resolve: null, reject: null, onSubmit: null };
-let datePickerState = { itemId: null, itemTitle: '' };
+let datePickerState = { itemIds: [], itemTitle: '', startTime: '', reminderMinutes: null };
 let linkNoteModalState = {
     targetType: 'task',
     targetId: null,
@@ -487,8 +487,28 @@ async function createItem(listId, listType) {
     }
 }
 
-function setItemDate(itemId, currentDate, itemTitle) {
-    openDatePickerModal(itemId, currentDate, itemTitle);
+function setItemDate(itemId, currentDate, itemTitle, currentStartTime = '', currentReminderMinutes = '') {
+    openDatePickerModal({
+        itemIds: [itemId],
+        currentDate,
+        itemTitle,
+        currentStartTime,
+        currentReminderMinutes,
+        labelText: itemTitle ? `For "${itemTitle}"` : ''
+    });
+}
+
+function openBulkTaskDatePicker() {
+    const itemIds = Array.from(selectedItems || []).map(id => parseInt(id, 10)).filter(Number.isFinite);
+    if (!itemIds.length) return;
+    openDatePickerModal({
+        itemIds,
+        currentDate: '',
+        itemTitle: '',
+        currentStartTime: '',
+        currentReminderMinutes: '',
+        labelText: itemIds.length === 1 ? 'For 1 selected task' : `For ${itemIds.length} selected tasks`
+    });
 }
 
 // --- Notifications ---
@@ -568,46 +588,114 @@ function toggleNotificationsPanel(forceOpen = null) {
     }
 }
 
-function openDatePickerModal(itemId, currentDate, itemTitle) {
+function normalizeDatePickerTimeValue(value) {
+    if (!value) return '';
+    const parts = String(value).trim().split(':');
+    if (parts.length < 2) return '';
+    const rawHour = parseInt(parts[0], 10);
+    const rawMinute = parseInt(parts[1], 10);
+    if (!Number.isFinite(rawHour) || !Number.isFinite(rawMinute)) return String(value).trim();
+    const suffix = rawHour >= 12 ? 'PM' : 'AM';
+    let hour = rawHour % 12;
+    if (hour === 0) hour = 12;
+    return `${hour}:${String(rawMinute).padStart(2, '0')} ${suffix}`;
+}
+
+function parseDatePickerReminderMinutes(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return null;
+    const match = raw.match(/^(\d+)\s*([mhd])?$/);
+    if (!match) return null;
+    const amount = parseInt(match[1], 10);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+    const unit = match[2] || 'm';
+    if (unit === 'h') return amount * 60;
+    if (unit === 'd') return amount * 1440;
+    return amount;
+}
+
+function formatDatePickerReminderMinutes(minutes) {
+    if (minutes === null || minutes === undefined || minutes === '') return '';
+    const numeric = Number(minutes);
+    if (!Number.isFinite(numeric) || numeric <= 0) return '';
+    if (numeric % 1440 === 0) return `${numeric / 1440}d`;
+    if (numeric % 60 === 0) return `${numeric / 60}h`;
+    return `${numeric}m`;
+}
+
+function openDatePickerModal({
+    itemIds = [],
+    currentDate = '',
+    itemTitle = '',
+    currentStartTime = '',
+    currentReminderMinutes = '',
+    labelText = ''
+} = {}) {
     const modal = document.getElementById('date-picker-modal');
     const input = document.getElementById('date-picker-input');
+    const timeInput = document.getElementById('date-picker-time-input');
+    const reminderInput = document.getElementById('date-picker-reminder-input');
     const label = document.getElementById('date-picker-task-label');
     if (!modal || !input) return;
-    datePickerState.itemId = itemId;
+    datePickerState.itemIds = itemIds;
     datePickerState.itemTitle = itemTitle || '';
+    datePickerState.startTime = normalizeDatePickerTimeValue(currentStartTime);
+    datePickerState.reminderMinutes = currentReminderMinutes === '' ? null : currentReminderMinutes;
     input.value = currentDate || '';
-    if (label) label.textContent = itemTitle ? `For "${itemTitle}"` : '';
+    if (timeInput) timeInput.value = datePickerState.startTime;
+    if (reminderInput) reminderInput.value = formatDatePickerReminderMinutes(currentReminderMinutes);
+    if (label) label.textContent = labelText || (itemTitle ? `For "${itemTitle}"` : '');
     modal.classList.add('active');
-    input.focus();
+    (timeInput || input).focus();
 }
 
 function closeDatePickerModal() {
     const modal = document.getElementById('date-picker-modal');
     if (modal) modal.classList.remove('active');
-    datePickerState = { itemId: null, itemTitle: '' };
+    datePickerState = { itemIds: [], itemTitle: '', startTime: '', reminderMinutes: null };
 }
 
 async function saveDatePickerSelection(remove = false) {
     const input = document.getElementById('date-picker-input');
-    if (!datePickerState.itemId || !input) return;
-    const itemId = datePickerState.itemId;
+    const timeInput = document.getElementById('date-picker-time-input');
+    const reminderInput = document.getElementById('date-picker-reminder-input');
+    if (!datePickerState.itemIds.length || !input) return;
+    const itemIds = datePickerState.itemIds.slice();
     const itemTitle = datePickerState.itemTitle || '';
     const dueDate = remove ? null : (input.value || null);
+    const timeValue = remove ? null : ((timeInput && timeInput.value) ? timeInput.value.trim() : null);
+    const reminderRaw = remove ? '' : ((reminderInput && reminderInput.value) ? reminderInput.value.trim() : '');
+    const reminderMinutes = reminderRaw ? parseDatePickerReminderMinutes(reminderRaw) : null;
+    if (reminderRaw && reminderMinutes === null) {
+        showToast('Use 30m, 2h, or 1d for reminders.', 'error');
+        return;
+    }
     const payload = { due_date: dueDate };
+    if (!remove) {
+        payload.start_time = timeValue || null;
+        payload.reminder_minutes_before = reminderMinutes;
+    }
 
     const persistDate = async () => {
-        const res = await fetch(`/api/items/${itemId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (!res.ok) throw new Error('Failed to set date');
+        await Promise.all(itemIds.map(async (itemId) => {
+            const res = await fetch(`/api/items/${itemId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Failed to set date');
+            }
+        }));
         closeDatePickerModal();
         window.location.reload();
     };
 
     if (dueDate && typeof openCalendarMovePreviewModal === 'function') {
-        const movingLabel = itemTitle ? `"${itemTitle}"` : 'this task';
+        const movingLabel = itemIds.length > 1
+            ? `${itemIds.length} selected tasks`
+            : (itemTitle ? `"${itemTitle}"` : 'this task');
         await openCalendarMovePreviewModal({
             targetDay: dueDate,
             movingLabel,
@@ -617,7 +705,7 @@ async function saveDatePickerSelection(remove = false) {
                     await persistDate();
                 } catch (e) {
                     console.error('Error setting date:', e);
-                    showToast('Could not set date. Please try again.', 'error');
+                    showToast(e && e.message ? e.message : 'Could not set date. Please try again.', 'error');
                     throw e;
                 }
             }
@@ -629,7 +717,7 @@ async function saveDatePickerSelection(remove = false) {
         await persistDate();
     } catch (e) {
         console.error('Error setting date:', e);
-        showToast('Could not set date. Please try again.', 'error');
+        showToast(e && e.message ? e.message : 'Could not set date. Please try again.', 'error');
     }
 }
 
@@ -933,12 +1021,12 @@ function showCalendarNoteChoiceInDropdown(dropdown, ev) {
     };
 
     const notes = ev.linked_notes || [];
-    dropdown.appendChild(makeOption('fa-solid fa-note-sticky', 'Notes note', () => {
+    dropdown.appendChild(makeOption('fa-solid fa-note-sticky', 'Linked note', () => {
         restoreCalendarNoteChoiceDropdown(dropdown);
         dropdown.classList.remove('active');
         openLinkNoteModal('calendar', ev.id, ev.title, notes.map(n => n.id));
     }));
-    dropdown.appendChild(makeOption('fa-solid fa-pen', 'Item note', () => {
+    dropdown.appendChild(makeOption('fa-solid fa-pen', 'Quick note', () => {
         restoreCalendarNoteChoiceDropdown(dropdown);
         dropdown.classList.remove('active');
         openCalendarItemNoteModal(ev, 'edit');
@@ -1047,7 +1135,7 @@ function renderCalendarItemNoteContent(text) {
     const view = document.getElementById('calendar-item-note-view');
     if (!view) return;
     const content = (text || '').trim();
-    view.innerHTML = content ? escapeHtml(content).replace(/\n/g, '<br>') : '<em>No note yet.</em>';
+    view.innerHTML = content ? escapeHtml(content).replace(/\n/g, '<br>') : '<em>No quick note yet.</em>';
 }
 
 async function openCalendarItemNoteModal(ev, mode = 'view') {
@@ -1083,7 +1171,7 @@ async function saveCalendarItemNote() {
     if (!calendarItemNoteState.event || !input) return;
     const text = input.value || '';
     if (text.length > CALENDAR_ITEM_NOTE_MAX_CHARS) {
-        showToast(`Item note is limited to ${CALENDAR_ITEM_NOTE_MAX_CHARS} characters.`, 'warning');
+        showToast(`Quick note is limited to ${CALENDAR_ITEM_NOTE_MAX_CHARS} characters.`, 'warning');
         return;
     }
     await updateCalendarEvent(calendarItemNoteState.event.id, { item_note: text });
@@ -1092,7 +1180,7 @@ async function saveCalendarItemNote() {
 
 async function deleteCalendarItemNote() {
     if (!calendarItemNoteState.event) return;
-    openConfirmModal('Delete this item note?', async () => {
+    openConfirmModal('Delete this quick note?', async () => {
         await updateCalendarEvent(calendarItemNoteState.event.id, { item_note: null });
         closeCalendarItemNoteModal();
     });
@@ -1102,12 +1190,12 @@ async function convertCalendarItemNote() {
     if (!calendarItemNoteState.event) return;
     const rawText = (calendarItemNoteState.event.item_note || '').trim();
     if (!rawText) {
-        showToast('Item note is empty.', 'warning');
+        showToast('Quick note is empty.', 'warning');
         return;
     }
     const title = calendarItemNoteState.event.title
         ? `${calendarItemNoteState.event.title} note`
-        : 'Item note';
+        : 'Quick note';
     const content = escapeHtml(rawText).replace(/\n/g, '<br>');
     try {
         const res = await fetch('/api/notes', {
@@ -1124,10 +1212,10 @@ async function convertCalendarItemNote() {
         }
         await updateCalendarEvent(calendarItemNoteState.event.id, { item_note: null });
         closeCalendarItemNoteModal();
-        showToast('Converted to a note.', 'success');
+        showToast('Converted to a linked note.', 'success');
     } catch (err) {
         console.error('Error converting item note:', err);
-        showToast('Could not convert note.', 'error');
+        showToast('Could not convert quick note.', 'error');
     }
 }
 
@@ -1136,8 +1224,8 @@ function appendCalendarItemNoteChip(container, ev) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'meta-chip note item-note';
-    chip.title = 'Item note';
-    chip.setAttribute('aria-label', 'Item note');
+    chip.title = 'Quick note';
+    chip.setAttribute('aria-label', 'Quick note');
     chip.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
     chip.onclick = (e) => {
         e.stopPropagation();

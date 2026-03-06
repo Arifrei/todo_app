@@ -17,6 +17,23 @@ function resizeDayQuickInput(inputEl) {
     inputEl.style.overflowY = inputEl.scrollHeight > maxHeight ? 'auto' : 'hidden';
 }
 
+function buildQuickAddCalendarPayload(parsed, overrides = {}) {
+    return {
+        title: parsed.title,
+        is_phase: false,
+        is_event: parsed.is_event || false,
+        allow_overlap: parsed.allow_overlap,
+        start_time: parsed.start_time,
+        end_time: parsed.end_time,
+        priority: parsed.priority,
+        reminder_minutes_before: parsed.reminder_minutes_before,
+        display_mode: parsed.display_mode,
+        rollover_enabled: parsed.rollover_enabled,
+        item_note: parsed.item_note,
+        ...overrides
+    };
+}
+
 let priorityMenuEl = null;
 const calendarDebugLog = (...args) => {
     if (window.DEBUG_CALENDAR === true) console.log(...args);
@@ -147,20 +164,11 @@ async function handleCalendarQuickAdd() {
         // Parse task text for all properties
         const taskParsed = parseCalendarQuickInput(parsed.task_text);
         if (taskParsed && !taskParsed.is_phase && !taskParsed.is_group && !taskParsed.create_phase_with_task && !taskParsed.create_group_with_task) {
-            const createdTask = await createCalendarEvent({
-                title: taskParsed.title,
-                is_phase: false,
-                is_event: taskParsed.is_event || false,
-                allow_overlap: taskParsed.allow_overlap,
+            const createdTask = await createCalendarEvent(buildQuickAddCalendarPayload(taskParsed, {
                 phase_id: phaseId,
-                start_time: taskParsed.start_time,
-                end_time: taskParsed.end_time,
-                priority: taskParsed.priority,
-                reminder_minutes_before: taskParsed.reminder_minutes_before,
-                display_mode: taskParsed.display_mode,
                 group_id: taskParsed.group_name ? (await getOrCreateGroup(taskParsed.group_name)) : null,
-                rollover_enabled: taskParsed.rollover_enabled
-            });
+                item_note: taskParsed.item_note || parsed.task_item_note
+            }));
             if (!createdTask) {
                 restoreInput();
                 return;
@@ -198,20 +206,11 @@ async function handleCalendarQuickAdd() {
                 phaseId = await getOrCreatePhase(taskParsed.phase_name);
             }
 
-            const createdTask = await createCalendarEvent({
-                title: taskParsed.title,
-                is_phase: false,
-                is_event: taskParsed.is_event || false,
-                allow_overlap: taskParsed.allow_overlap,
+            const createdTask = await createCalendarEvent(buildQuickAddCalendarPayload(taskParsed, {
                 group_id: groupId,
                 phase_id: phaseId,
-                start_time: taskParsed.start_time,
-                end_time: taskParsed.end_time,
-                priority: taskParsed.priority,
-                reminder_minutes_before: taskParsed.reminder_minutes_before,
-                display_mode: taskParsed.display_mode,
-                rollover_enabled: taskParsed.rollover_enabled
-            });
+                item_note: taskParsed.item_note || parsed.task_item_note
+            }));
             if (!createdTask) {
                 restoreInput();
                 return;
@@ -229,7 +228,7 @@ async function handleCalendarQuickAdd() {
 
     const isEvent = parsed.is_event || false;
     if (parsed.is_phase) {
-        const created = await createCalendarEvent({ title: parsed.title, is_phase: true });
+        const created = await createCalendarEvent({ title: parsed.title, is_phase: true, item_note: parsed.item_note });
         if (!created) {
             restoreInput();
             return;
@@ -244,7 +243,7 @@ async function handleCalendarQuickAdd() {
     }
 
     if (parsed.is_group) {
-        const created = await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
+        const created = await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false, item_note: parsed.item_note });
         if (!created) {
             restoreInput();
             return;
@@ -286,20 +285,10 @@ async function handleCalendarQuickAdd() {
         }
     }
 
-    const created = await createCalendarEvent({
-        title: parsed.title,
-        is_phase: false,
-        is_event: isEvent,
-        allow_overlap: parsed.allow_overlap,
+    const created = await createCalendarEvent(buildQuickAddCalendarPayload(parsed, {
         group_id: finalGroupId,
-        start_time: parsed.start_time,
-        end_time: parsed.end_time,
-        priority: parsed.priority,
-        reminder_minutes_before: parsed.reminder_minutes_before,
-        display_mode: parsed.display_mode,
         phase_id: isEvent ? null : phaseId,
-        rollover_enabled: parsed.rollover_enabled
-    });
+    }));
     if (!created) {
         restoreInput();
         return;
@@ -367,20 +356,11 @@ async function handleMonthQuickAdd() {
                 }
             }
 
-            const createdTask = await createCalendarEvent({
-                title: taskParsed.title,
-                is_phase: false,
-                is_event: taskParsed.is_event || false,
-                allow_overlap: taskParsed.allow_overlap,
+            const createdTask = await createCalendarEvent(buildQuickAddCalendarPayload(taskParsed, {
                 phase_id: phaseId,
                 group_id: groupId,
-                start_time: taskParsed.start_time,
-                end_time: taskParsed.end_time,
-                priority: taskParsed.priority,
-                reminder_minutes_before: taskParsed.reminder_minutes_before,
-                display_mode: taskParsed.display_mode,
-                rollover_enabled: taskParsed.rollover_enabled
-            });
+                item_note: taskParsed.item_note || parsed.task_item_note
+            }));
             if (!createdTask) {
                 restoreInput();
                 return;
@@ -429,20 +409,11 @@ async function handleMonthQuickAdd() {
                 }
             }
 
-            const createdTask = await createCalendarEvent({
-                title: taskParsed.title,
-                is_phase: false,
-                is_event: taskParsed.is_event || false,
-                allow_overlap: taskParsed.allow_overlap,
+            const createdTask = await createCalendarEvent(buildQuickAddCalendarPayload(taskParsed, {
                 group_id: groupId,
                 phase_id: phaseId,
-                start_time: taskParsed.start_time,
-                end_time: taskParsed.end_time,
-                priority: taskParsed.priority,
-                reminder_minutes_before: taskParsed.reminder_minutes_before,
-                display_mode: taskParsed.display_mode,
-                rollover_enabled: taskParsed.rollover_enabled
-            });
+                item_note: taskParsed.item_note || parsed.task_item_note
+            }));
             if (!createdTask) {
                 restoreInput();
                 return;
@@ -461,7 +432,7 @@ async function handleMonthQuickAdd() {
     await loadCalendarMonth();
 
     if (parsed.is_phase) {
-        const created = await createCalendarEvent({ title: parsed.title, is_phase: true });
+        const created = await createCalendarEvent({ title: parsed.title, is_phase: true, item_note: parsed.item_note });
         if (!created) {
             restoreInput();
             return;
@@ -473,7 +444,7 @@ async function handleMonthQuickAdd() {
     }
 
     if (parsed.is_group) {
-        const created = await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false });
+        const created = await createCalendarEvent({ title: parsed.title, is_group: true, is_event: false, is_phase: false, item_note: parsed.item_note });
         if (!created) {
             restoreInput();
             return;
@@ -516,20 +487,10 @@ async function handleMonthQuickAdd() {
         }
     }
 
-    const created = await createCalendarEvent({
-        title: parsed.title,
-        is_phase: false,
-        is_event: isEvent,
-        allow_overlap: parsed.allow_overlap,
+    const created = await createCalendarEvent(buildQuickAddCalendarPayload(parsed, {
         group_id: finalGroupId,
-        start_time: parsed.start_time,
-        end_time: parsed.end_time,
-        priority: parsed.priority,
-        reminder_minutes_before: parsed.reminder_minutes_before,
-        display_mode: parsed.display_mode,
         phase_id: isEvent ? null : phaseId,
-        rollover_enabled: parsed.rollover_enabled
-    });
+    }));
     if (!created) {
         restoreInput();
         return;
