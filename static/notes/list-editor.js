@@ -1971,6 +1971,11 @@ function clearListItemActions() {
     activeListItemActionPill = null;
 }
 
+function isMousePointerEvent(event) {
+    if (!event || typeof event.pointerType !== 'string') return true;
+    return event.pointerType === 'mouse';
+}
+
 function positionListItemMenu(menu, anchor) {
     const viewportWidth = Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || 0);
     const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
@@ -3193,9 +3198,26 @@ function createListPill(item) {
         }
         longPressTriggered = false;
     };
+    const handleHoverStart = (event) => {
+        if (!isMousePointerEvent(event) || isListSelectionActive()) return;
+        showListItemActions(pill);
+    };
+    const handleHoverEnd = (event) => {
+        if (!isMousePointerEvent(event)) return;
+        if (activeListItemActionPill !== pill) return;
+        if (activeListItemMenuAnchor && pill.contains(activeListItemMenuAnchor)) return;
+        clearListItemActions();
+    };
     pill.addEventListener('touchstart', handleTouchStart, { passive: true });
     pill.addEventListener('touchend', handleTouchEnd);
     pill.addEventListener('touchcancel', handleTouchEnd);
+    if (window.PointerEvent) {
+        pill.addEventListener('pointerenter', handleHoverStart);
+        pill.addEventListener('pointerleave', handleHoverEnd);
+    } else {
+        pill.addEventListener('mouseenter', handleHoverStart);
+        pill.addEventListener('mouseleave', handleHoverEnd);
+    }
 
     pill.addEventListener('click', () => {
         clearTouchActive();
@@ -3236,11 +3258,11 @@ function createListInputRow(options) {
     const row = document.createElement('div');
     row.className = `list-pill list-pill-input${mode === 'edit' ? ' expanded' : ''}`;
     const input = document.createElement('textarea');
-    input.rows = mode === 'edit' ? 2 : 1;
+    input.rows = 1;
     input.wrap = 'soft';
     input.value = value || '';
     input.placeholder = placeholder || '';
-    resizeListInputTextarea(input, { minRows: mode === 'edit' ? 2 : 1, maxRows: mode === 'edit' ? 2 : 2 });
+    resizeListInputTextarea(input, { minRows: 1, maxRows: 2 });
     let committed = false;
     let noteInput = null;
     const initialNoteValue = noteValue || '';
@@ -3325,7 +3347,7 @@ function createListInputRow(options) {
         }
     });
     input.addEventListener('input', () => {
-        resizeListInputTextarea(input, { minRows: mode === 'edit' ? 2 : 1, maxRows: 2 });
+        resizeListInputTextarea(input, { minRows: 1, maxRows: 2 });
     });
 
     input.addEventListener('paste', async (e) => {
@@ -3426,7 +3448,7 @@ function createListInputRow(options) {
     }
     if (autoFocus) {
         requestAnimationFrame(() => {
-            resizeListInputTextarea(input, { minRows: mode === 'edit' ? 2 : 1, maxRows: 2 });
+            resizeListInputTextarea(input, { minRows: 1, maxRows: 2 });
             input.focus();
             input.setSelectionRange(input.value.length, input.value.length);
         });

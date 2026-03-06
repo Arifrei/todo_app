@@ -1543,20 +1543,6 @@ body.list-section-dragging .list-section-drag-handle {
     pointer-events: auto;
 }
 
-/* Always reveal on keyboard focus. */
-.list-pill:focus-within .list-pill-actions {
-    opacity: 1;
-    pointer-events: auto;
-}
-
-/* Reveal on devices where any input can actually hover. */
-@media (any-hover: hover) {
-    .list-pill:hover .list-pill-actions {
-        opacity: 1;
-        pointer-events: auto;
-    }
-}
-
 .list-pill-content {
     flex: 1;
     display: flex;
@@ -1910,10 +1896,6 @@ body.list-section-dragging .list-section-drag-handle {
     font-size: 1rem;
     font-family: inherit;
     line-height: 1.4;
-}
-
-.list-pill-input.expanded > textarea:not(.list-pill-note-edit) {
-    min-height: calc(1.4em * 2);
 }
 
 .list-pill-input textarea::placeholder {
