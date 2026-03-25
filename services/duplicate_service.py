@@ -20,21 +20,37 @@ def build_list_preview_text(item):
     return base or link_label
 
 
-def detect_note_list_duplicates(items, section_prefix, embed_text_fn):
+def detect_note_list_duplicates(items, section_prefix, embed_text_fn, subsection_prefix=None):
     section_by_id = {}
     current_section = None
+    current_subsection = None
     for item in items:
         text_value = (item.text or "").strip()
         if text_value.startswith(section_prefix):
             title = text_value[len(section_prefix) :].strip()
             current_section = title or "Untitled section"
+            current_subsection = None
             section_by_id[item.id] = current_section
             continue
-        section_by_id[item.id] = current_section
+        if subsection_prefix and text_value.startswith(subsection_prefix):
+            title = text_value[len(subsection_prefix) :].strip()
+            current_subsection = title or "Untitled subsection"
+            label = current_section
+            if current_section and current_subsection:
+                label = f"{current_section} > {current_subsection}"
+            section_by_id[item.id] = label
+            continue
+        label = current_section
+        if current_section and current_subsection:
+            label = f"{current_section} > {current_subsection}"
+        section_by_id[item.id] = label
 
     candidates = []
     for item in items:
-        if (item.text or "").strip().startswith(section_prefix):
+        text_value = (item.text or "").strip()
+        if text_value.startswith(section_prefix) or (
+            subsection_prefix and text_value.startswith(subsection_prefix)
+        ):
             continue
         preview = build_list_preview_text(item).strip()
         if not preview:

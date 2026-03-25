@@ -1186,7 +1186,7 @@
 
 .list-section-header,
 .list-section-body,
-.list-gap {
+.list-insert-slot {
     -webkit-tap-highlight-color: transparent;
 }
 
@@ -1286,6 +1286,41 @@
     display: none;
 }
 
+.list-subsection {
+    margin: 0.45rem 0 0.15rem 1rem;
+    padding-left: 0.8rem;
+    border-left: 2px solid rgba(59, 130, 246, 0.18);
+}
+
+.list-subsection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+    padding: 0.15rem 0 0.35rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.list-subsection-header-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.list-subsection-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.list-subsection.collapsed .list-subsection-body {
+    display: none;
+}
+
 .list-section-reorder-actions {
     display: inline-flex;
     align-items: center;
@@ -1315,6 +1350,19 @@
 .list-section-reorder-btn:disabled {
     opacity: 0.35;
     cursor: default;
+}
+
+.list-insert-trigger {
+    opacity: 0.46;
+}
+
+.list-section-header:hover .list-insert-trigger,
+.list-section-header:focus-within .list-insert-trigger,
+.list-subsection-header:hover .list-insert-trigger,
+.list-subsection-header:focus-within .list-insert-trigger,
+.list-insert-trigger.active,
+.list-insert-trigger:focus-visible {
+    opacity: 1;
 }
 
 
@@ -1428,13 +1476,153 @@ body.list-section-dragging .list-section-drag-handle {
     white-space: nowrap;
 }
 
-.list-gap {
-    height: 4px;
+.list-insert-slot {
+    position: relative;
+    display: block;
+    width: 100%;
+    min-height: 0;
+    height: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    color: #2563eb;
     cursor: text;
+    touch-action: manipulation;
+    z-index: 2;
 }
 
-.list-gap:focus {
+.list-insert-slot::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -8px;
+    height: 16px;
+}
+
+.list-insert-slot.edge {
+    height: 8px;
+    margin: 0.02rem 0 0.08rem;
+}
+
+.list-insert-slot.end {
+    height: 10px;
+    margin-top: 0.12rem;
+}
+
+.list-insert-slot.between {
+    height: 6px;
+    margin: 0;
+}
+
+.list-insert-slot.between::before {
+    top: -4px;
+    height: 14px;
+}
+
+.list-insert-slot-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.26);
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.list-insert-slot.between .list-insert-slot-line {
+    display: none;
+}
+
+.list-insert-slot.quiet .list-insert-slot-line {
+    opacity: 0;
+}
+
+.list-insert-slot-icon {
+    position: absolute;
+    right: 0.55rem;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    border: 1px solid rgba(37, 99, 235, 0.14);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.96);
+    color: #2563eb;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.5rem;
+    opacity: 0;
+    transform: translateY(-50%) scale(0.82);
+    box-shadow: none;
+    transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.list-insert-slot.edge .list-insert-slot-icon {
+    left: 50%;
+    right: auto;
+    transform: translate(-50%, -50%) scale(0.82);
+}
+
+.list-insert-slot:hover,
+.list-insert-slot:focus-visible,
+.list-insert-slot.active,
+.list-insert-slot.force-visible {
     outline: none;
+}
+
+.list-insert-slot.edge:hover .list-insert-slot-line,
+.list-insert-slot.edge:focus-visible .list-insert-slot-line,
+.list-insert-slot.edge.active .list-insert-slot-line,
+.list-insert-slot.edge.force-visible .list-insert-slot-line {
+    opacity: 0.42;
+    background: rgba(37, 99, 235, 0.42);
+}
+
+.list-insert-slot:hover .list-insert-slot-icon,
+.list-insert-slot:focus-visible .list-insert-slot-icon,
+.list-insert-slot.active .list-insert-slot-icon,
+.list-insert-slot.force-visible .list-insert-slot-icon {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+}
+
+.list-insert-slot.edge:hover .list-insert-slot-icon,
+.list-insert-slot.edge:focus-visible .list-insert-slot-icon,
+.list-insert-slot.edge.active .list-insert-slot-icon,
+.list-insert-slot.edge.force-visible .list-insert-slot-icon {
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.list-insert-slot.active .list-insert-slot-icon {
+    border-color: rgba(37, 99, 235, 0.22);
+    background: #ffffff;
+}
+
+.list-pill-input.contextual {
+    flex-wrap: wrap;
+    gap: 0.35rem 0.6rem;
+    padding-top: 0.38rem;
+    border-color: rgba(37, 99, 235, 0.18);
+    box-shadow: none;
+}
+
+.list-insert-context {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 0.08rem 0.4rem;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.07);
+    color: #1d4ed8;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
 }
 
 .list-pill {
@@ -1794,6 +1982,12 @@ body.list-section-dragging .list-section-drag-handle {
     background: var(--bg-hover);
 }
 
+.list-item-menu-option.subsection-option {
+    padding-left: 1.8rem;
+    font-size: 0.84rem;
+    color: var(--text-muted);
+}
+
 /* List editor bulk bar - inherits from .bulk-actions with positioning overrides */
 .list-bulk-bar {
     position: fixed;
@@ -2036,6 +2230,10 @@ body.list-section-dragging .list-section-drag-handle {
 
 /* Notes list editor mobile: title one-line, note stacked below when expanded/editing */
 @media (max-width: 768px) {
+    .list-insert-slot {
+        min-height: 0;
+    }
+
     .list-pill {
         padding: 0.55rem 0.8rem;
         align-items: flex-start;
@@ -2105,5 +2303,9 @@ body.list-section-dragging .list-section-drag-handle {
         width: 0;
         height: 0;
         display: none;
+    }
+
+    .list-pill-input.contextual {
+        padding-top: 0.45rem;
     }
 }

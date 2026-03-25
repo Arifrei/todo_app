@@ -1,5 +1,141 @@
 """Extracted heavy route handlers from app.py."""
 
+LIST_SECTION_PREFIX = '[[section]]'
+LIST_SUBSECTION_PREFIX = '[[subsection]]'
+
+
+def is_note_list_section_text(text):
+    return (text or '').strip().startswith(LIST_SECTION_PREFIX)
+
+
+def is_note_list_subsection_text(text):
+    return (text or '').strip().startswith(LIST_SUBSECTION_PREFIX)
+
+
+def get_note_list_marker_kind(text):
+    if is_note_list_section_text(text):
+        return 'section'
+    if is_note_list_subsection_text(text):
+        return 'subsection'
+    return None
+
+
+def get_note_list_marker_title(text, kind=None):
+    text_value = (text or '').strip()
+    marker_kind = kind or get_note_list_marker_kind(text_value)
+    if marker_kind == 'section':
+        return text_value[len(LIST_SECTION_PREFIX):].strip()
+    if marker_kind == 'subsection':
+        return text_value[len(LIST_SUBSECTION_PREFIX):].strip()
+    return text_value
+
+
+def build_note_list_context(items):
+    context_by_id = {}
+    current_section = None
+    current_subsection = None
+    for item in items:
+        text_value = (getattr(item, 'text', '') or '').strip()
+        kind = get_note_list_marker_kind(text_value)
+        if kind == 'section':
+            current_section = get_note_list_marker_title(text_value, kind) or 'Untitled section'
+            current_subsection = None
+        elif kind == 'subsection':
+            current_subsection = get_note_list_marker_title(text_value, kind) or 'Untitled subsection'
+
+        label = current_section
+        if current_section and current_subsection:
+            label = f'{current_section} > {current_subsection}'
+        context_by_id[getattr(item, 'id', None)] = {
+            'section': current_section,
+            'subsection': current_subsection,
+            'label': label,
+        }
+    return context_by_id
+
+
+def validate_note_list_structure(items):
+    has_section = False
+    for item in items:
+        text_value = (getattr(item, 'text', '') or '').strip()
+        kind = get_note_list_marker_kind(text_value)
+        if kind == 'section':
+            has_section = True
+            continue
+        if kind == 'subsection' and not has_section:
+            return False, 'Subsections must be placed inside a section.'
+    return True, None
+
+
+def build_note_list_order_preview(items, moving_item_id=None, insert_index=None, preserve_position=False):
+    ordered = sorted(
+        items,
+        key=lambda entry: ((getattr(entry, 'order_index', 0) or 0), (getattr(entry, 'id', 0) or 0))
+    )
+    if moving_item_id is not None and preserve_position:
+        return ordered
+    preview = []
+    moving_item = None
+    for item in ordered:
+        item_id = getattr(item, 'id', None)
+        if moving_item_id is not None and item_id == moving_item_id:
+            moving_item = item
+            continue
+        preview.append(item)
+
+    if moving_item_id is not None and moving_item is not None:
+        if insert_index is None:
+            insert_at = len(preview)
+        else:
+            insert_at = max(0, min(int(insert_index), len(preview)))
+        preview.insert(insert_at, moving_item)
+
+    return preview
+
+
+def build_note_list_preview_item_map(items, moving_item_id=None, new_text=None, insert_index=None, preserve_position=False):
+    preview = build_note_list_order_preview(
+        items,
+        moving_item_id=moving_item_id,
+        insert_index=insert_index,
+        preserve_position=preserve_position,
+    )
+    preview_entries = []
+    for item in preview:
+        item_id = getattr(item, 'id', None)
+        text_value = (getattr(item, 'text', '') or '').strip()
+        if moving_item_id is not None and item_id == moving_item_id and new_text is not None:
+            text_value = new_text
+        preview_entries.append(
+            type('PreviewNoteListItem', (), {
+                'id': item_id,
+                'text': text_value,
+                'order_index': getattr(item, 'order_index', 0) or 0,
+            })()
+        )
+    return preview_entries
+
+
+def promote_subsections_after_section_delete(items, deleted_item_id):
+    ordered = sorted(
+        items,
+        key=lambda entry: ((getattr(entry, 'order_index', 0) or 0), (getattr(entry, 'id', 0) or 0))
+    )
+    deleted_index = next(
+        (idx for idx, item in enumerate(ordered) if getattr(item, 'id', None) == deleted_item_id),
+        -1,
+    )
+    if deleted_index == -1:
+        return
+    for item in ordered[deleted_index + 1:]:
+        text_value = (getattr(item, 'text', '') or '').strip()
+        kind = get_note_list_marker_kind(text_value)
+        if kind == 'section':
+            break
+        if kind == 'subsection':
+            title = get_note_list_marker_title(text_value, kind)
+            item.text = f'{LIST_SECTION_PREFIX} {title}'.strip()
+
 def handle_notes():
     import app as a
     CalendarEvent = a.CalendarEvent
@@ -697,17 +833,33 @@ def note_list_items(note_id):
     checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
 
     insert_index = data.get('insert_index')
+    existing_items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+        NoteListItem.order_index.asc(),
+        NoteListItem.id.asc()
+    ).all()
+    insert_index_int = None
+    if insert_index is not None:
+        try:
+            insert_index_int = int(insert_index)
+        except (TypeError, ValueError):
+            insert_index_int = len(existing_items)
+        insert_index_int = max(0, min(insert_index_int, len(existing_items)))
+    preview_entries = list(existing_items)
+    preview_item = type('PreviewNoteListItem', (), {'id': None, 'text': text, 'order_index': 0})()
+    if insert_index_int is None:
+        preview_entries.append(preview_item)
+    else:
+        preview_entries.insert(insert_index_int, preview_item)
+    is_valid, validation_error = validate_note_list_structure(preview_entries)
+    if not is_valid:
+        return jsonify({'error': validation_error}), 400
+
     max_order = db.session.query(db.func.coalesce(db.func.max(NoteListItem.order_index), 0)).filter_by(
         note_id=note.id
     ).scalar() or 0
     if insert_index is None:
         order_index = max_order + 1
     else:
-        try:
-            insert_index_int = int(insert_index)
-        except (TypeError, ValueError):
-            insert_index_int = max_order
-        insert_index_int = max(0, insert_index_int)
         order_index = min(insert_index_int, max_order) + 1
         db.session.query(NoteListItem).filter(
             NoteListItem.note_id == note.id,
@@ -768,6 +920,12 @@ def note_list_item_detail(note_id, item_id):
         return jsonify({'error': 'Not a list note'}), 400
 
     if request.method == 'DELETE':
+        if is_note_list_section_text(item.text):
+            sibling_items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+                NoteListItem.order_index.asc(),
+                NoteListItem.id.asc()
+            ).all()
+            promote_subsections_after_section_delete(sibling_items, item.id)
         linked_events = CalendarEvent.query.filter_by(user_id=user.id, note_list_item_id=item.id).all()
         for linked_event in linked_events:
             _cancel_reminder_job(linked_event)
@@ -804,11 +962,34 @@ def note_list_item_detail(note_id, item_id):
                 parsed_reminder_minutes = int(reminder_raw)
             except (TypeError, ValueError):
                 return jsonify({'error': 'Invalid reminder_minutes_before'}), 400
-    if 'text' in data:
-        text = (data.get('text') or '').strip()
-        if not text:
-            return jsonify({'error': 'Item text required'}), 400
-        item.text = text
+    new_text = (data.get('text') or '').strip() if 'text' in data else item.text
+    if 'text' in data and not new_text:
+        return jsonify({'error': 'Item text required'}), 400
+    insert_index = None
+    if 'insert_index' in data:
+        try:
+            insert_index = int(data.get('insert_index'))
+        except (TypeError, ValueError):
+            insert_index = None
+    if 'text' in data or 'insert_index' in data:
+        items = NoteListItem.query.filter_by(note_id=note.id).order_by(
+            NoteListItem.order_index.asc(),
+            NoteListItem.id.asc()
+        ).all()
+        ordered_ids = [i.id for i in items if i.id != item.id]
+        if insert_index is not None:
+            insert_index = max(0, min(insert_index, len(ordered_ids)))
+        preview_entries = build_note_list_preview_item_map(
+            items,
+            moving_item_id=item.id,
+            new_text=new_text,
+            insert_index=insert_index,
+            preserve_position='insert_index' not in data,
+        )
+        is_valid, validation_error = validate_note_list_structure(preview_entries)
+        if not is_valid:
+            return jsonify({'error': validation_error}), 400
+        item.text = new_text
     if 'note' in data:
         item.note = (data.get('note') or '').strip() or None
     if 'inner_note' in data:
@@ -824,10 +1005,6 @@ def note_list_item_detail(note_id, item_id):
     if 'checked' in data:
         item.checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
     if 'insert_index' in data:
-        try:
-            insert_index = int(data.get('insert_index'))
-        except (TypeError, ValueError):
-            insert_index = None
         if insert_index is not None:
             items = NoteListItem.query.filter_by(note_id=note.id).order_by(
                 NoteListItem.order_index.asc(),

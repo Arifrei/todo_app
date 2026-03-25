@@ -118,7 +118,7 @@ function initListEditorPage() {
     const listBulkClear = document.getElementById('list-bulk-clear');
     if (listSelectAll) {
         listSelectAll.addEventListener('change', (e) => {
-            const selectableItems = (listState.items || []).filter(item => !isListSectionItem(item));
+            const selectableItems = (listState.items || []).filter(item => !isListStructuralItem(item));
             if (e.target.checked) {
                 selectableItems.forEach(item => listSelectionState.ids.add(item.id));
             } else {
@@ -354,18 +354,6 @@ function initListEditorPage() {
         });
     }
     if (stack) {
-        stack.addEventListener('click', (e) => {
-            if (listState.isArchived) {
-                showReadOnlyToast();
-                return;
-            }
-            if (listState.sectionReorderMode) return;
-            if (isListSelectionActive()) return;
-            if (e.target.closest('.list-pill')) return;
-            if (e.target.closest('.list-pill-input')) return;
-            setListInsertionAtPosition(e.clientY);
-        });
-
         const selectionState = {
             pointerId: null,
             moved: false,
@@ -456,35 +444,70 @@ function handleListEditorOutsideClick(e) {
     if (!page) return;
     if (isListSelectionActive()) return;
     if (listState.editingItemId !== null) return;
-    if (listState.insertionIndex === null) return;
+    if (!listState.insertionTarget) return;
     const inputRow = page.querySelector('.list-pill-input');
     if (!inputRow) return;
     if (inputRow.contains(e.target)) return;
     const input = inputRow.querySelector('textarea');
     if (!input) return;
     if (input.value.trim() !== '') return;
-    listState.insertionIndex = null;
+    clearListInsertionTarget();
     listState.editingItemId = null;
     renderListItems();
 }
 
-function setListInsertionAtPosition(clientY) {
-    const stack = document.getElementById('list-pill-stack');
-    if (!stack) return;
-    const pills = Array.from(stack.querySelectorAll('.list-pill:not(.list-pill-input)'));
-    let index = 0;
-    for (const pill of pills) {
-        const rect = pill.getBoundingClientRect();
-        const midpoint = rect.top + rect.height / 2;
-        if (clientY > midpoint) {
-            index += 1;
-        } else {
-            break;
-        }
-    }
-    listState.insertionIndex = index;
-    listState.editingItemId = null;
-    renderListItems();
+function buildListInsertionTargetKey(target) {
+    if (!target) return '';
+    return [
+        target.kind || 'between',
+        target.insertIndex ?? '',
+        target.sectionId ?? '',
+        target.subsectionId ?? '',
+    ].join(':');
+}
+
+function normalizeListInsertionTarget(target) {
+    if (!target || !Number.isFinite(target.insertIndex)) return null;
+    return {
+        kind: target.kind || 'list_between',
+        insertIndex: Math.max(0, target.insertIndex),
+        sectionId: Number.isFinite(target.sectionId) ? target.sectionId : null,
+        subsectionId: Number.isFinite(target.subsectionId) ? target.subsectionId : null,
+    };
+}
+
+function setListInsertionTarget(target) {
+    const normalized = normalizeListInsertionTarget(target);
+    listState.insertionTarget = normalized;
+    listState.insertionIndex = normalized ? normalized.insertIndex : null;
+}
+
+function clearListInsertionTarget() {
+    listState.insertionTarget = null;
+    listState.insertionIndex = null;
+}
+
+function isListInsertionTargetActive(target) {
+    const active = normalizeListInsertionTarget(listState.insertionTarget);
+    const candidate = normalizeListInsertionTarget(target);
+    if (!active || !candidate) return false;
+    return buildListInsertionTargetKey(active) === buildListInsertionTargetKey(candidate);
+}
+
+function getListInsertionPlaceholder(target) {
+    if (!target) return 'Add item...';
+    if (target.kind === 'section_start' || target.kind === 'section_end') return 'Add item to section...';
+    if (target.kind === 'subsection_start' || target.kind === 'subsection_end') return 'Add item to subsection...';
+    if (target.kind === 'list_end') return 'Add item at end...';
+    return 'Add item...';
+}
+
+function getListInsertionLabel(target) {
+    if (!target) return '';
+    if (target.kind === 'section_start' || target.kind === 'section_end') return 'In section';
+    if (target.kind === 'subsection_start' || target.kind === 'subsection_end') return 'In subsection';
+    if (target.kind === 'list_end') return 'At end of list';
+    return 'Between items';
 }
 
 function getListEditorNoteId() {
@@ -550,8 +573,10 @@ async function loadListForEditor(listId) {
         listState.isListed = !!list.is_listed;
         listState.folderId = list.folder_id || null;
         listState.collapsedSectionIds = new Set();
+        listState.collapsedSubsectionIds = new Set();
         listState.sectionReorderMode = false;
         restoreCollapsedListSections();
+        restoreCollapsedListSubsections();
         listState.activeSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode,
@@ -563,7 +588,7 @@ async function loadListForEditor(listId) {
             items: cloneListSnapshotItems(list.items || [])
         };
         listState.dirty = false;
-        listState.insertionIndex = null;
+        clearListInsertionTarget();
         listState.editingItemId = null;
         listState.expandedItemId = null;
         const titleInput = document.getElementById('list-title');
@@ -930,6 +955,12 @@ function buildListShareText(items, checkboxMode) {
             lines.push('');
             return;
         }
+        if (isListSubsectionItem(item)) {
+            const title = getListSubsectionTitle(item);
+            if (lines.length && lines[lines.length - 1] !== '') lines.push('');
+            lines.push(title ? `  ${title}` : '  Untitled subsection');
+            return;
+        }
         const textValue = (item.text || '').trim();
         const linkLabel = (item.link_text || '').trim();
         const linkUrl = (item.link_url || '').trim();
@@ -958,7 +989,7 @@ function buildListShareText(items, checkboxMode) {
 
         if (!line) return '';
         if (checkboxMode) {
-            lines.push(`${item.checked ? '[x]' : '[ ]'} ${line}`);
+            lines.push(`${isListSubsectionItem(item) ? '  ' : ''}${item.checked ? '[x]' : '[ ]'} ${line}`);
             return;
         }
         lines.push(`- ${line}`);
@@ -1014,6 +1045,7 @@ async function shareCurrentList() {
 }
 
 const LIST_SECTION_PREFIX = '[[section]]';
+const LIST_SUBSECTION_PREFIX = '[[subsection]]';
 const SECTION_DRAG_CLICK_SUPPRESS_MS = 250;
 const SECTION_DRAG_AUTOSCROLL_EDGE_PX = 72;
 const SECTION_DRAG_AUTOSCROLL_STEP_PX = 20;
@@ -1035,9 +1067,21 @@ function ensureCollapsedSectionSet() {
     return listState.collapsedSectionIds;
 }
 
+function ensureCollapsedSubsectionSet() {
+    if (!(listState.collapsedSubsectionIds instanceof Set)) {
+        listState.collapsedSubsectionIds = new Set();
+    }
+    return listState.collapsedSubsectionIds;
+}
+
 function getListCollapsedSectionsKey() {
     if (!listState.listId) return '';
     return `notes_list_collapsed_sections_${listState.listId}`;
+}
+
+function getListCollapsedSubsectionsKey() {
+    if (!listState.listId) return '';
+    return `notes_list_collapsed_subsections_${listState.listId}`;
 }
 
 function persistCollapsedListSections() {
@@ -1048,6 +1092,17 @@ function persistCollapsedListSections() {
         sessionStorage.setItem(key, JSON.stringify(values));
     } catch (err) {
         console.warn('Could not persist collapsed sections:', err);
+    }
+}
+
+function persistCollapsedListSubsections() {
+    const key = getListCollapsedSubsectionsKey();
+    if (!key) return;
+    try {
+        const values = Array.from(ensureCollapsedSubsectionSet());
+        sessionStorage.setItem(key, JSON.stringify(values));
+    } catch (err) {
+        console.warn('Could not persist collapsed subsections:', err);
     }
 }
 
@@ -1071,6 +1126,26 @@ function restoreCollapsedListSections() {
     }
 }
 
+function restoreCollapsedListSubsections() {
+    const key = getListCollapsedSubsectionsKey();
+    listState.collapsedSubsectionIds = new Set();
+    if (!key) return;
+    try {
+        const raw = sessionStorage.getItem(key);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return;
+        listState.collapsedSubsectionIds = new Set(
+            parsed
+                .map(value => parseInt(value, 10))
+                .filter(value => Number.isFinite(value) && value > 0)
+        );
+    } catch (err) {
+        console.warn('Could not restore collapsed subsections:', err);
+        listState.collapsedSubsectionIds = new Set();
+    }
+}
+
 function cleanCollapsedListSections(sectionIds) {
     const validIds = new Set(sectionIds || []);
     const collapsed = ensureCollapsedSectionSet();
@@ -1082,6 +1157,19 @@ function cleanCollapsedListSections(sectionIds) {
         }
     }
     if (changed) persistCollapsedListSections();
+}
+
+function cleanCollapsedListSubsections(subsectionIds) {
+    const validIds = new Set(subsectionIds || []);
+    const collapsed = ensureCollapsedSubsectionSet();
+    let changed = false;
+    for (const id of Array.from(collapsed)) {
+        if (!validIds.has(id)) {
+            collapsed.delete(id);
+            changed = true;
+        }
+    }
+    if (changed) persistCollapsedListSubsections();
 }
 
 function toggleListSectionCollapsed(sectionId) {
@@ -1096,16 +1184,126 @@ function toggleListSectionCollapsed(sectionId) {
     renderListItems();
 }
 
-function getListSectionItemCount(sectionId, sortedItems) {
-    const items = sortedItems || getSortedListItems();
-    const sectionIndex = items.findIndex(item => item.id === sectionId);
-    if (sectionIndex === -1) return 0;
-    let count = 0;
-    for (let i = sectionIndex + 1; i < items.length; i += 1) {
-        if (isListSectionItem(items[i])) break;
-        count += 1;
+function toggleListSubsectionCollapsed(subsectionId) {
+    if (!subsectionId || listSearchState.query) return;
+    const collapsed = ensureCollapsedSubsectionSet();
+    if (collapsed.has(subsectionId)) {
+        collapsed.delete(subsectionId);
+    } else {
+        collapsed.add(subsectionId);
     }
-    return count;
+    persistCollapsedListSubsections();
+    renderListItems();
+}
+
+function isListSectionItem(item) {
+    const textValue = (item?.text || '').trim();
+    return textValue.startsWith(LIST_SECTION_PREFIX);
+}
+
+function isListSubsectionItem(item) {
+    const textValue = (item?.text || '').trim();
+    return textValue.startsWith(LIST_SUBSECTION_PREFIX);
+}
+
+function isListStructuralItem(item) {
+    return isListSectionItem(item) || isListSubsectionItem(item);
+}
+
+function getListSectionTitle(item) {
+    const textValue = (item?.text || '').trim();
+    if (!textValue.startsWith(LIST_SECTION_PREFIX)) return '';
+    return textValue.slice(LIST_SECTION_PREFIX.length).trim();
+}
+
+function getListSubsectionTitle(item) {
+    const textValue = (item?.text || '').trim();
+    if (!textValue.startsWith(LIST_SUBSECTION_PREFIX)) return '';
+    return textValue.slice(LIST_SUBSECTION_PREFIX.length).trim();
+}
+
+function buildListSectionText(title) {
+    const trimmed = (title || '').trim();
+    return trimmed ? `${LIST_SECTION_PREFIX} ${trimmed}` : LIST_SECTION_PREFIX;
+}
+
+function buildListSubsectionText(title) {
+    const trimmed = (title || '').trim();
+    return trimmed ? `${LIST_SUBSECTION_PREFIX} ${trimmed}` : LIST_SUBSECTION_PREFIX;
+}
+
+function getListStructure(sortedItems) {
+    const items = sortedItems || getSortedListItems();
+    const sections = [];
+    const prefixItems = [];
+    const sectionById = new Map();
+    const subsectionById = new Map();
+    const itemMeta = new Map();
+    let currentSection = null;
+    let currentSubsection = null;
+
+    items.forEach((item) => {
+        if (isListSectionItem(item)) {
+            currentSection = {
+                id: item.id,
+                item,
+                title: getListSectionTitle(item),
+                directItems: [],
+                subsections: [],
+                allItems: []
+            };
+            sections.push(currentSection);
+            sectionById.set(item.id, currentSection);
+            itemMeta.set(item.id, { sectionId: item.id, subsectionId: null });
+            currentSubsection = null;
+            return;
+        }
+        if (isListSubsectionItem(item)) {
+            if (!currentSection) {
+                prefixItems.push(item);
+                itemMeta.set(item.id, { sectionId: null, subsectionId: null });
+                return;
+            }
+            currentSubsection = {
+                id: item.id,
+                item,
+                title: getListSubsectionTitle(item),
+                items: []
+            };
+            currentSection.subsections.push(currentSubsection);
+            subsectionById.set(item.id, currentSubsection);
+            itemMeta.set(item.id, { sectionId: currentSection.id, subsectionId: item.id });
+            return;
+        }
+        if (!currentSection) {
+            prefixItems.push(item);
+            itemMeta.set(item.id, { sectionId: null, subsectionId: null });
+            return;
+        }
+        currentSection.allItems.push(item);
+        if (currentSubsection) {
+            currentSubsection.items.push(item);
+            itemMeta.set(item.id, { sectionId: currentSection.id, subsectionId: currentSubsection.id });
+        } else {
+            currentSection.directItems.push(item);
+            itemMeta.set(item.id, { sectionId: currentSection.id, subsectionId: null });
+        }
+    });
+
+    return { items, prefixItems, sections, sectionById, subsectionById, itemMeta };
+}
+
+function getListSectionItemCount(sectionId, sortedItems) {
+    const structure = getListStructure(sortedItems);
+    const section = structure.sectionById.get(sectionId);
+    if (!section) return 0;
+    return section.directItems.length + section.subsections.reduce((total, subsection) => total + subsection.items.length, 0);
+}
+
+function getListSubsectionItemCount(subsectionId, sortedItems) {
+    const structure = getListStructure(sortedItems);
+    const subsection = structure.subsectionById.get(subsectionId);
+    return subsection ? subsection.items.length : 0;
 }
 
 function getListItemById(itemId) {
@@ -1503,22 +1701,6 @@ function handleListEditorModalKeydown(event) {
     }
 }
 
-function isListSectionItem(item) {
-    const textValue = (item?.text || '').trim();
-    return textValue.startsWith(LIST_SECTION_PREFIX);
-}
-
-function getListSectionTitle(item) {
-    const textValue = (item?.text || '').trim();
-    if (!textValue.startsWith(LIST_SECTION_PREFIX)) return '';
-    return textValue.slice(LIST_SECTION_PREFIX.length).trim();
-}
-
-function buildListSectionText(title) {
-    const trimmed = (title || '').trim();
-    return trimmed ? `${LIST_SECTION_PREFIX} ${trimmed}` : LIST_SECTION_PREFIX;
-}
-
 function getSortedListItems() {
     return (listState.items || []).slice().sort((a, b) => {
         const aOrder = a.order_index || 0;
@@ -1825,7 +2007,7 @@ function setListSectionReorderMode(active) {
             clearListSelection();
             updateListSelectionUI();
         }
-        listState.insertionIndex = null;
+        clearListInsertionTarget();
         listState.editingItemId = null;
         listState.expandedItemId = null;
     } else {
@@ -1852,7 +2034,7 @@ function setListSelectionMode(active) {
     }
     listSelectionState.active = !!active;
     clearListSelection();
-    listState.insertionIndex = null;
+    clearListInsertionTarget();
     listState.editingItemId = null;
     listState.expandedItemId = null;
     updateListSelectionUI();
@@ -1884,7 +2066,7 @@ function updateListSelectionUI() {
 function toggleListItemSelection(itemId) {
     if (!itemId) return;
     const item = (listState.items || []).find(entry => entry.id === itemId);
-    if (item && isListSectionItem(item)) return;
+    if (item && isListStructuralItem(item)) return;
     if (listSelectionState.ids.has(itemId)) {
         listSelectionState.ids.delete(itemId);
     } else {
@@ -1915,7 +2097,7 @@ function updateListBulkBar() {
     // Note: moreToggle (dropdown button) is kept enabled so users can see options
 
     // Update select-all checkbox state
-    const selectableItems = (listState.items || []).filter(item => !isListSectionItem(item));
+    const selectableItems = (listState.items || []).filter(item => !isListStructuralItem(item));
     const totalSelectable = selectableItems.length;
     if (selectAll) {
         selectAll.checked = totalSelectable > 0 && count === totalSelectable;
@@ -1923,12 +2105,16 @@ function updateListBulkBar() {
     }
 }
 
-function openListSectionModal(onSubmit) {
+function openListSectionModal(onSubmit, options = {}) {
     const modal = document.getElementById('list-section-modal');
     const input = document.getElementById('list-section-title');
+    const title = document.getElementById('list-section-modal-title');
     if (!modal || !input) return;
     listSectionModalState.onSubmit = onSubmit;
+    listSectionModalState.title = options.title || 'New section';
     input.value = '';
+    input.placeholder = options.placeholder || 'Optional';
+    if (title) title.textContent = listSectionModalState.title;
     modal.classList.add('active');
     setTimeout(() => input.focus(), 0);
 }
@@ -1937,6 +2123,7 @@ function closeListSectionModal() {
     const modal = document.getElementById('list-section-modal');
     if (modal) modal.classList.remove('active');
     listSectionModalState.onSubmit = null;
+    listSectionModalState.title = 'New section';
 }
 
 function submitListSectionModal() {
@@ -2017,17 +2204,24 @@ function positionListItemMenu(menu, anchor) {
 }
 
 function getListSectionOptions() {
-    return getSortedListItems()
-        .filter(isListSectionItem)
-        .map(section => ({
-            id: section.id,
-            title: getListSectionTitle(section) || 'Untitled section'
-        }));
+    const structure = getListStructure();
+    return structure.sections.map(section => ({
+        id: section.id,
+        title: section.title || 'Untitled section',
+        subsections: section.subsections.map(subsection => ({
+            id: subsection.id,
+            title: subsection.title || 'Untitled subsection'
+        }))
+    }));
+}
+
+function getListItemContext(itemId) {
+    const structure = getListStructure();
+    return structure.itemMeta.get(itemId) || { sectionId: null, subsectionId: null };
 }
 
 function getListInsertIndexForSection(itemId, sectionId) {
     const items = getSortedListItems();
-    const sectionIds = new Set(items.filter(isListSectionItem).map(item => item.id));
     const ids = items.map(item => item.id);
     const currentIndex = ids.indexOf(itemId);
     if (currentIndex === -1) return null;
@@ -2036,7 +2230,8 @@ function getListInsertIndexForSection(itemId, sectionId) {
     if (sectionIndex === -1) return null;
     let insertIndex = ids.length;
     for (let idx = sectionIndex + 1; idx < ids.length; idx += 1) {
-        if (sectionIds.has(ids[idx])) {
+        const entry = getListItemById(ids[idx]);
+        if (entry && isListSectionItem(entry)) {
             insertIndex = idx;
             break;
         }
@@ -2047,18 +2242,87 @@ function getListInsertIndexForSection(itemId, sectionId) {
 function getListInsertIndexForSectionExcluding(sectionId, excludeIds = []) {
     const excluded = new Set(excludeIds || []);
     const items = getSortedListItems().filter(item => !excluded.has(item.id));
-    const sectionIds = new Set(items.filter(isListSectionItem).map(item => item.id));
     const ids = items.map(item => item.id);
     const sectionIndex = ids.indexOf(sectionId);
     if (sectionIndex === -1) return null;
     let insertIndex = ids.length;
     for (let idx = sectionIndex + 1; idx < ids.length; idx += 1) {
-        if (sectionIds.has(ids[idx])) {
+        if (isListSectionItem(items[idx])) {
             insertIndex = idx;
             break;
         }
     }
     return insertIndex;
+}
+
+function getListInsertIndexForSectionStart(sectionId) {
+    const structure = getListStructure();
+    const section = structure.sectionById.get(sectionId);
+    if (!section) return null;
+    if (section.directItems.length) {
+        return getSortedListItems().findIndex(item => item.id === section.directItems[0].id);
+    }
+    if (section.subsections.length) {
+        return getSortedListItems().findIndex(item => item.id === section.subsections[0].id);
+    }
+    return getListInsertIndexForSectionExcluding(sectionId, []);
+}
+
+function getListAppendIndexForSection(sectionId) {
+    const structure = getListStructure();
+    const section = structure.sectionById.get(sectionId);
+    if (!section) return null;
+    const items = getSortedListItems();
+    if (section.directItems.length) {
+        const lastDirectItem = section.directItems[section.directItems.length - 1];
+        const lastIndex = items.findIndex(item => item.id === lastDirectItem.id);
+        return lastIndex === -1 ? null : lastIndex + 1;
+    }
+    if (section.subsections.length) {
+        return items.findIndex(item => item.id === section.subsections[0].id);
+    }
+    return getListInsertIndexForSectionExcluding(sectionId, []);
+}
+
+function getListInsertIndexForSubsection(itemId, subsectionId) {
+    const items = getSortedListItems();
+    const ids = items.map(item => item.id);
+    const currentIndex = ids.indexOf(itemId);
+    if (currentIndex === -1) return null;
+    ids.splice(currentIndex, 1);
+    const subsectionIndex = ids.indexOf(subsectionId);
+    if (subsectionIndex === -1) return null;
+    let insertIndex = ids.length;
+    for (let idx = subsectionIndex + 1; idx < ids.length; idx += 1) {
+        const entry = getListItemById(ids[idx]);
+        if (entry && isListStructuralItem(entry)) {
+            insertIndex = idx;
+            break;
+        }
+    }
+    return insertIndex;
+}
+
+function getListInsertIndexForSubsectionStart(subsectionId) {
+    const structure = getListStructure();
+    const subsection = structure.subsectionById.get(subsectionId);
+    if (!subsection) return null;
+    if (subsection.items.length) {
+        return getSortedListItems().findIndex(item => item.id === subsection.items[0].id);
+    }
+    return getListAppendIndexForSubsection(subsectionId);
+}
+
+function getListAppendIndexForSubsection(subsectionId) {
+    const items = getSortedListItems();
+    const subsectionIndex = items.findIndex(item => item.id === subsectionId);
+    if (subsectionIndex === -1) return null;
+    for (let idx = subsectionIndex + 1; idx < items.length; idx += 1) {
+        if (isListStructuralItem(items[idx])) {
+            return idx;
+        }
+    }
+    return items.length;
 }
 
 function buildListReorderIdsForSection(selectedIds, sectionId) {
@@ -2071,6 +2335,29 @@ function buildListReorderIdsForSection(selectedIds, sectionId) {
     let insertIndex = remaining.length;
     for (let idx = sectionIndex + 1; idx < remaining.length; idx += 1) {
         if (isListSectionItem(remaining[idx])) {
+            insertIndex = idx;
+            break;
+        }
+    }
+    const remainingIds = remaining.map(item => item.id);
+    const selectedIdsOrdered = selectedItems.map(item => item.id);
+    return [
+        ...remainingIds.slice(0, insertIndex),
+        ...selectedIdsOrdered,
+        ...remainingIds.slice(insertIndex)
+    ];
+}
+
+function buildListReorderIdsForSubsection(selectedIds, subsectionId) {
+    const selectedSet = new Set(selectedIds);
+    const sorted = getSortedListItems();
+    const selectedItems = sorted.filter(item => selectedSet.has(item.id));
+    const remaining = sorted.filter(item => !selectedSet.has(item.id));
+    const subsectionIndex = remaining.findIndex(item => item.id === subsectionId);
+    if (subsectionIndex === -1) return null;
+    let insertIndex = remaining.length;
+    for (let idx = subsectionIndex + 1; idx < remaining.length; idx += 1) {
+        if (isListStructuralItem(remaining[idx])) {
             insertIndex = idx;
             break;
         }
@@ -2112,6 +2399,46 @@ function buildListReorderIdsForNewSection(selectedOrderedIds, newSectionId, targ
     ];
 }
 
+function buildListReorderIdsForSubsectionMove(subsectionId, direction) {
+    const structure = getListStructure();
+    const context = structure.itemMeta.get(subsectionId);
+    if (!context || !context.sectionId) return null;
+    const section = structure.sectionById.get(context.sectionId);
+    if (!section || section.subsections.length < 2) return null;
+    const sourceIndex = section.subsections.findIndex(subsection => subsection.id === subsectionId);
+    if (sourceIndex === -1) return null;
+    const targetIndex = direction === 'up' ? sourceIndex - 1 : sourceIndex + 1;
+    if (targetIndex < 0 || targetIndex >= section.subsections.length) return null;
+
+    const subsectionBlocks = section.subsections.map(subsection => [
+        subsection.id,
+        ...subsection.items.map(item => item.id)
+    ]);
+    const [block] = subsectionBlocks.splice(sourceIndex, 1);
+    subsectionBlocks.splice(targetIndex, 0, block);
+
+    const beforeSectionIds = [];
+    const afterSectionIds = [];
+    let passedSection = false;
+    structure.items.forEach((item) => {
+        if (item.id === section.id) {
+            passedSection = true;
+            return;
+        }
+        const meta = structure.itemMeta.get(item.id);
+        if (meta?.sectionId === section.id) return;
+        if (!passedSection) beforeSectionIds.push(item.id);
+        else afterSectionIds.push(item.id);
+    });
+    return [
+        ...beforeSectionIds,
+        section.id,
+        ...section.directItems.map(item => item.id),
+        ...subsectionBlocks.flat(),
+        ...afterSectionIds
+    ];
+}
+
 function buildListReorderIdsToTop(selectedIds) {
     const selectedSet = new Set(selectedIds);
     const sorted = getSortedListItems();
@@ -2142,6 +2469,13 @@ async function moveListItemToSection(itemId, sectionId) {
     await loadListItems();
 }
 
+async function moveListItemToSubsection(itemId, subsectionId) {
+    const insertIndex = getListInsertIndexForSubsection(itemId, subsectionId);
+    if (insertIndex === null) return;
+    await updateListItem(itemId, { insert_index: insertIndex });
+    await loadListItems();
+}
+
 async function moveListItemToTop(itemId) {
     await updateListItem(itemId, { insert_index: 0 });
     await loadListItems();
@@ -2160,7 +2494,7 @@ function openListItemMoveMenu(itemId, anchor) {
 
     const title = document.createElement('div');
     title.className = 'list-item-menu-title';
-    title.textContent = 'Move to section';
+    title.textContent = 'Move item';
     menu.appendChild(title);
 
     const topBtn = document.createElement('button');
@@ -2183,6 +2517,17 @@ function openListItemMoveMenu(itemId, anchor) {
         label.textContent = section.title;
         btn.appendChild(label);
         menu.appendChild(btn);
+        section.subsections.forEach(subsection => {
+            const subsectionBtn = document.createElement('button');
+            subsectionBtn.type = 'button';
+            subsectionBtn.className = 'list-item-menu-option subsection-option';
+            subsectionBtn.dataset.subsectionId = subsection.id;
+            subsectionBtn.innerHTML = '<i class="fa-solid fa-indent"></i>';
+            const subsectionLabel = document.createElement('span');
+            subsectionLabel.textContent = `${section.title} > ${subsection.title}`;
+            subsectionBtn.appendChild(subsectionLabel);
+            menu.appendChild(subsectionBtn);
+        });
     });
 
     menu.querySelectorAll('.list-item-menu-option').forEach(btn => {
@@ -2191,9 +2536,12 @@ function openListItemMoveMenu(itemId, anchor) {
             closeListItemMenu();
             const action = btn.dataset.action;
             const sectionId = btn.dataset.sectionId ? parseInt(btn.dataset.sectionId, 10) : null;
+            const subsectionId = btn.dataset.subsectionId ? parseInt(btn.dataset.subsectionId, 10) : null;
             try {
                 if (action === 'top') {
                     await moveListItemToTop(itemId);
+                } else if (subsectionId) {
+                    await moveListItemToSubsection(itemId, subsectionId);
                 } else if (sectionId) {
                     await moveListItemToSection(itemId, sectionId);
                 }
@@ -2218,6 +2566,14 @@ async function moveListItemsToSection(itemIds, sectionId) {
     await loadListItems();
 }
 
+async function moveListItemsToSubsection(itemIds, subsectionId) {
+    if (!itemIds.length || !subsectionId) return;
+    const orderIds = buildListReorderIdsForSubsection(itemIds, subsectionId);
+    if (!orderIds) return;
+    await reorderListItems(orderIds);
+    await loadListItems();
+}
+
 function openListBulkMoveMenu(anchor) {
     const selectedIds = getSelectedListItemIds();
     if (!selectedIds.length) return;
@@ -2233,7 +2589,7 @@ function openListBulkMoveMenu(anchor) {
 
     const title = document.createElement('div');
     title.className = 'list-item-menu-title';
-    title.textContent = 'Move selected to section';
+    title.textContent = 'Move selected items';
     menu.appendChild(title);
 
     const topBtn = document.createElement('button');
@@ -2256,6 +2612,17 @@ function openListBulkMoveMenu(anchor) {
         label.textContent = section.title;
         btn.appendChild(label);
         menu.appendChild(btn);
+        section.subsections.forEach(subsection => {
+            const subsectionBtn = document.createElement('button');
+            subsectionBtn.type = 'button';
+            subsectionBtn.className = 'list-item-menu-option subsection-option';
+            subsectionBtn.dataset.subsectionId = subsection.id;
+            subsectionBtn.innerHTML = '<i class="fa-solid fa-indent"></i>';
+            const subsectionLabel = document.createElement('span');
+            subsectionLabel.textContent = `${section.title} > ${subsection.title}`;
+            subsectionBtn.appendChild(subsectionLabel);
+            menu.appendChild(subsectionBtn);
+        });
     });
 
     menu.querySelectorAll('.list-item-menu-option').forEach(btn => {
@@ -2264,11 +2631,14 @@ function openListBulkMoveMenu(anchor) {
             closeListItemMenu();
             const action = btn.dataset.action;
             const sectionId = btn.dataset.sectionId ? parseInt(btn.dataset.sectionId, 10) : null;
+            const subsectionId = btn.dataset.subsectionId ? parseInt(btn.dataset.subsectionId, 10) : null;
             try {
                 if (action === 'top') {
                     const orderIds = buildListReorderIdsToTop(selectedIds);
                     await reorderListItems(orderIds);
                     await loadListItems();
+                } else if (subsectionId) {
+                    await moveListItemsToSubsection(selectedIds, subsectionId);
                 } else if (sectionId) {
                     await moveListItemsToSection(selectedIds, sectionId);
                 }
@@ -2406,19 +2776,44 @@ function deleteListSection(sectionId) {
     const title = getListSectionTitle(section) || 'Untitled section';
     const sectionItemCount = getListSectionItemCount(sectionId);
     const prompt = sectionItemCount > 0
-        ? `Delete section "${title}"? ${sectionItemCount} item(s) in this section will stay in the list.`
+        ? `Delete section "${title}"? ${sectionItemCount} item(s) in this section will stay in the list. Nested subsections will be promoted.`
         : `Delete section "${title}"?`;
 
     openConfirmModal(prompt, async () => {
         try {
             await deleteListItem(sectionId);
             if (listState.editingItemId === sectionId) listState.editingItemId = null;
-            listState.insertionIndex = null;
+            clearListInsertionTarget();
             await loadListItems();
             showToast('Section deleted', 'success', 1800);
         } catch (err) {
             console.error('Delete section failed:', err);
             showToast('Could not delete section', 'error');
+        }
+    });
+}
+
+function deleteListSubsection(subsectionId) {
+    if (!subsectionId) return;
+    const subsection = getListItemById(subsectionId);
+    if (!subsection || !isListSubsectionItem(subsection)) return;
+
+    const title = getListSubsectionTitle(subsection) || 'Untitled subsection';
+    const subsectionItemCount = getListSubsectionItemCount(subsectionId);
+    const prompt = subsectionItemCount > 0
+        ? `Delete subsection "${title}"? ${subsectionItemCount} item(s) in this subsection will stay in the section.`
+        : `Delete subsection "${title}"?`;
+
+    openConfirmModal(prompt, async () => {
+        try {
+            await deleteListItem(subsectionId);
+            if (listState.editingItemId === subsectionId) listState.editingItemId = null;
+            clearListInsertionTarget();
+            await loadListItems();
+            showToast('Subsection deleted', 'success', 1800);
+        } catch (err) {
+            console.error('Delete subsection failed:', err);
+            showToast('Could not delete subsection', 'error');
         }
     });
 }
@@ -2436,19 +2831,22 @@ function renderListItems() {
     const stack = document.getElementById('list-pill-stack');
     if (!stack) return;
     if (listState.isArchived) {
-        listState.insertionIndex = null;
+        clearListInsertionTarget();
         listState.editingItemId = null;
     }
     closeListItemMenu();
     clearListItemActions();
     const items = getSortedListItems();
+    const structure = getListStructure(items);
+    const itemIndexById = new Map(items.map((item, index) => [item.id, index]));
     const searchQuery = (listSearchState.query || '').trim();
     const searchLower = searchQuery.toLowerCase();
-    const sectionIdsOrdered = items.filter(isListSectionItem).map(entry => entry.id);
+    const sectionIdsOrdered = structure.sections.map(section => section.id);
+    const subsectionIdsOrdered = Array.from(structure.subsectionById.keys());
     cleanCollapsedListSections(sectionIdsOrdered);
+    cleanCollapsedListSubsections(subsectionIdsOrdered);
     stack.innerHTML = '';
-    const hasSections = items.some(isListSectionItem);
-    let activeSectionBody = null;
+    const hasSections = structure.sections.length > 0;
     let renderedCount = 0;
 
     const doesListItemMatch = (item) => {
@@ -2456,6 +2854,10 @@ function renderListItems() {
         if (isListSectionItem(item)) {
             const sectionTitle = getListSectionTitle(item) || '';
             return sectionTitle.toLowerCase().includes(searchLower);
+        }
+        if (isListSubsectionItem(item)) {
+            const subsectionTitle = getListSubsectionTitle(item) || '';
+            return subsectionTitle.toLowerCase().includes(searchLower);
         }
         const textValue = (item.text || '').toLowerCase();
         const linkLabel = (item.link_text || '').toLowerCase();
@@ -2474,214 +2876,76 @@ function renderListItems() {
     };
 
     let sectionMatches = null;
+    let subsectionMatches = null;
     if (searchLower && hasSections) {
         sectionMatches = new Map();
-        let currentSectionId = null;
-        let currentSectionMatch = false;
-        for (const item of items) {
-            if (isListSectionItem(item)) {
-                if (currentSectionId !== null) {
-                    sectionMatches.set(currentSectionId, currentSectionMatch);
-                }
-                currentSectionId = item.id;
-                currentSectionMatch = doesListItemMatch(item);
-            } else if (currentSectionId !== null && doesListItemMatch(item)) {
-                currentSectionMatch = true;
-            }
-        }
-        if (currentSectionId !== null) {
-            sectionMatches.set(currentSectionId, currentSectionMatch);
-        }
+        subsectionMatches = new Map();
+        structure.sections.forEach((section) => {
+            let sectionHasMatch = doesListItemMatch(section.item);
+            section.subsections.forEach((subsection) => {
+                let subsectionHasMatch = doesListItemMatch(subsection.item);
+                subsection.items.forEach((item) => {
+                    if (doesListItemMatch(item)) subsectionHasMatch = true;
+                });
+                subsectionMatches.set(subsection.id, subsectionHasMatch);
+                if (subsectionHasMatch) sectionHasMatch = true;
+            });
+            section.directItems.forEach((item) => {
+                if (doesListItemMatch(item)) sectionHasMatch = true;
+            });
+            sectionMatches.set(section.id, sectionHasMatch);
+        });
     }
 
-    const appendInsertionRow = (insertIndex, target) => {
+    const appendInsertionUI = (targetConfig, parent, options = {}) => {
         if (listState.isArchived || searchLower) return;
-        if (listState.insertionIndex !== insertIndex) return;
-        const row = createListInputRow({
+        parent.appendChild(createInsertionSlot(targetConfig, options));
+        if (!isListInsertionTargetActive(targetConfig)) return;
+        parent.appendChild(createListInputRow({
             mode: 'insert',
-            insertIndex,
-            autoFocus: true
-        });
-        target.appendChild(row);
+            insertIndex: targetConfig.insertIndex,
+            placeholder: getListInsertionPlaceholder(targetConfig),
+            autoFocus: true,
+            insertionTarget: targetConfig
+        }));
     };
 
-    items.forEach((item, index) => {
-        const isSection = isListSectionItem(item);
-        if (isSection) {
-            if (searchLower && sectionMatches && !sectionMatches.get(item.id) && !doesListItemMatch(item)) {
-                activeSectionBody = null;
-                return;
-            }
-            const section = document.createElement('div');
-            section.className = 'list-section';
-            const title = getListSectionTitle(item);
-            const isEditing = listState.editingItemId === item.id;
-            const isCollapsed = !searchLower && ensureCollapsedSectionSet().has(item.id);
-            if (isCollapsed && !isEditing) section.classList.add('collapsed');
-            if (!isEditing) {
-                section.classList.add('has-title');
-            } else {
-                section.classList.add('no-title');
-            }
-            if (isEditing) {
-                const row = createListInputRow({
-                    mode: 'edit',
-                    itemId: item.id,
-                    insertIndex: index,
-                    value: title,
-                    placeholder: 'Section title (optional)',
-                    autoFocus: true,
-                    isSection: true
-                });
-                section.appendChild(row);
-            } else {
-                const header = document.createElement('div');
-                header.className = 'list-section-header';
-                section.dataset.sectionId = String(item.id);
-                header.dataset.sectionId = String(item.id);
-                const sectionCount = sectionIdsOrdered.length;
-                const canEditSection = !listState.isArchived && !searchLower && !isListSelectionActive() && !listState.sectionReorderMode;
-                const canReorder = !listState.isArchived && !searchLower && !isListSelectionActive() && listState.sectionReorderMode && sectionCount > 1;
-                const sectionTitle = title || 'Untitled section';
-                const sectionItemCount = getListSectionItemCount(item.id, items);
+    const appendInsertionComposer = (targetConfig, parent) => {
+        if (listState.isArchived || searchLower) return;
+        if (!isListInsertionTargetActive(targetConfig)) return;
+        parent.appendChild(createListInputRow({
+            mode: 'insert',
+            insertIndex: targetConfig.insertIndex,
+            placeholder: getListInsertionPlaceholder(targetConfig),
+            autoFocus: true,
+            insertionTarget: targetConfig
+        }));
+    };
 
-                const main = document.createElement('div');
-                main.className = 'list-section-header-main';
-
-                const toggleBtn = document.createElement('button');
-                toggleBtn.type = 'button';
-                toggleBtn.className = 'list-section-toggle';
-                toggleBtn.title = isCollapsed ? 'Expand section' : 'Collapse section';
-                toggleBtn.innerHTML = `<i class="fa-solid ${isCollapsed ? 'fa-chevron-right' : 'fa-chevron-down'}"></i>`;
-                toggleBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (listState.sectionReorderMode) return;
-                    if (Date.now() < listSectionReorderState.suppressClicksUntil) return;
-                    toggleListSectionCollapsed(item.id);
-                });
-                main.appendChild(toggleBtn);
-
-                const titleEl = document.createElement('span');
-                titleEl.className = 'list-section-header-title';
-                if (title) {
-                    appendHighlightedText(titleEl, title, listState.isArchived ? '' : listSearchState.query);
-                } else {
-                    titleEl.textContent = sectionTitle;
-                }
-                main.appendChild(titleEl);
-
-                if (isCollapsed) {
-                    const summary = document.createElement('span');
-                    summary.className = 'list-section-summary';
-                    summary.textContent = `${sectionItemCount} item${sectionItemCount === 1 ? '' : 's'}`;
-                    main.appendChild(summary);
-                }
-
-                header.appendChild(main);
-
-                const actions = document.createElement('div');
-                actions.className = 'list-section-reorder-actions';
-
-                if (canEditSection) {
-                    const editBtn = document.createElement('button');
-                    editBtn.type = 'button';
-                    editBtn.className = 'list-section-reorder-btn';
-                    editBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
-                    editBtn.title = 'Rename section';
-                    editBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        listState.editingItemId = item.id;
-                        listState.insertionIndex = null;
-                        renderListItems();
-                    });
-                    actions.appendChild(editBtn);
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.type = 'button';
-                    deleteBtn.className = 'list-section-reorder-btn danger';
-                    deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-                    deleteBtn.title = 'Delete section';
-                    deleteBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        deleteListSection(item.id);
-                    });
-                    actions.appendChild(deleteBtn);
-                }
-
-                if (canReorder) {
-                    section.classList.add('reorder-active');
-                    section.classList.add('reorder-target');
-                    section.addEventListener('dragover', handleSectionDragOver);
-                    section.addEventListener('dragleave', handleSectionDragLeave);
-                    section.addEventListener('drop', handleSectionDrop);
-                    const dragHandle = document.createElement('button');
-                    dragHandle.type = 'button';
-                    dragHandle.className = 'list-section-drag-handle';
-                    dragHandle.dataset.sectionId = String(item.id);
-                    dragHandle.dataset.sectionTitle = sectionTitle;
-                    dragHandle.setAttribute('draggable', 'true');
-                    dragHandle.title = `Drag to reorder section "${sectionTitle}"`;
-                    dragHandle.innerHTML = '<i class="fa-solid fa-grip-lines"></i><span>Drag</span>';
-                    dragHandle.addEventListener('click', (e) => e.stopPropagation());
-                    dragHandle.addEventListener('dragstart', handleSectionDragStart);
-                    dragHandle.addEventListener('dragend', handleSectionDragEnd);
-                    actions.appendChild(dragHandle);
-                }
-
-                if (actions.children.length) {
-                    header.appendChild(actions);
-                }
-
-                header.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (listState.sectionReorderMode) return;
-                    if (Date.now() < listSectionReorderState.suppressClicksUntil) return;
-                    if (isListSelectionActive()) return;
-                    toggleListSectionCollapsed(item.id);
-                });
-                section.appendChild(header);
-            }
-            const body = document.createElement('div');
-            body.className = 'list-section-body';
-            section.appendChild(body);
-            stack.appendChild(section);
-            activeSectionBody = body;
-            return;
+    const createHeaderInsertButton = (title, targetConfig) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'list-section-reorder-btn list-insert-trigger';
+        if (isListInsertionTargetActive(targetConfig)) {
+            button.classList.add('active');
         }
+        button.innerHTML = '<i class="fa-solid fa-plus"></i>';
+        button.title = title;
+        button.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setListInsertionTarget(targetConfig);
+            listState.editingItemId = null;
+            listState.expandedItemId = null;
+            renderListItems();
+        });
+        return button;
+    };
 
-        if (hasSections && !activeSectionBody) {
-            const section = document.createElement('div');
-            section.className = 'list-section no-title';
-            // Add clickable header to create a section for these items
-            const header = document.createElement('div');
-            header.className = 'list-section-header empty';
-            header.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                try {
-                    await createListItem({ text: buildListSectionText('') }, 0);
-                    await loadListItems();
-                    // Find the section at the beginning (lowest order_index)
-                    const sections = listState.items.filter(i => isListSectionItem(i));
-                    const firstSection = sections.sort((a, b) => (a.order_index || 0) - (b.order_index || 0))[0];
-                    if (firstSection) {
-                        listState.editingItemId = firstSection.id;
-                        renderListItems();
-                    }
-                } catch (err) {
-                    console.error('Failed to create section:', err);
-                }
-            });
-            section.appendChild(header);
-            const body = document.createElement('div');
-            body.className = 'list-section-body';
-            section.appendChild(body);
-            stack.appendChild(section);
-            activeSectionBody = body;
-        }
-
-        const target = activeSectionBody || stack;
+    const renderRegularItem = (item, target, insertionConfig = null) => {
         if (searchLower && !doesListItemMatch(item)) {
             return;
         }
+        const index = itemIndexById.get(item.id) ?? items.length;
         if (listState.editingItemId === item.id) {
             const row = createListInputRow({
                 mode: 'edit',
@@ -2693,25 +2957,400 @@ function renderListItems() {
             });
             target.appendChild(row);
         } else {
-        target.appendChild(createListPill(item));
+            target.appendChild(createListPill(item));
         }
         renderedCount += 1;
-        const gapIndex = index + 1;
-        if (!listState.isArchived && !searchLower) {
-            target.appendChild(createListGap(gapIndex));
-            appendInsertionRow(gapIndex, target);
+        if (insertionConfig) {
+            appendInsertionUI(
+                {
+                    ...insertionConfig,
+                    insertIndex: index + 1,
+                },
+                target,
+                { kind: 'between' }
+            );
         }
-    });
+    };
 
-    if (!listState.isArchived && !searchLower) {
-        const primaryTarget = activeSectionBody || stack;
-        primaryTarget.appendChild(createListInputRow({
-            mode: 'new',
-            insertIndex: items.length,
-            placeholder: 'Add item... (use /section to split)',
-            isPrimary: true
-        }));
-    }
+    const createSubsectionHeader = (section, subsection, target) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'list-subsection';
+        const subsectionTitle = subsection.title || 'Untitled subsection';
+        const isEditing = listState.editingItemId === subsection.id;
+        const isCollapsed = !searchLower && ensureCollapsedSubsectionSet().has(subsection.id);
+        const subsectionInsertTarget = subsection.items.length
+            ? {
+                kind: 'subsection_end',
+                insertIndex: getListAppendIndexForSubsection(subsection.id),
+                sectionId: section.id,
+                subsectionId: subsection.id,
+            }
+            : {
+                kind: 'subsection_start',
+                insertIndex: getListInsertIndexForSubsectionStart(subsection.id),
+                sectionId: section.id,
+                subsectionId: subsection.id,
+            };
+        if (isCollapsed && !isEditing) wrapper.classList.add('collapsed');
+        if (isEditing) {
+            wrapper.appendChild(createListInputRow({
+                mode: 'edit',
+                itemId: subsection.id,
+                insertIndex: itemIndexById.get(subsection.id) ?? 0,
+                value: subsection.title,
+                placeholder: 'Subsection title (optional)',
+                autoFocus: true,
+                structureType: 'subsection'
+            }));
+            target.appendChild(wrapper);
+            return { wrapper, body: wrapper, isCollapsed: false };
+        }
+
+        const header = document.createElement('div');
+        header.className = 'list-subsection-header';
+        const main = document.createElement('div');
+        main.className = 'list-section-header-main';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'list-section-toggle';
+        toggleBtn.title = isCollapsed ? 'Expand subsection' : 'Collapse subsection';
+        toggleBtn.innerHTML = `<i class="fa-solid ${isCollapsed ? 'fa-chevron-right' : 'fa-chevron-down'}"></i>`;
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleListSubsectionCollapsed(subsection.id);
+        });
+        main.appendChild(toggleBtn);
+
+        const titleEl = document.createElement('span');
+        titleEl.className = 'list-subsection-header-title';
+        appendHighlightedText(titleEl, subsectionTitle, listSearchState.query);
+        main.appendChild(titleEl);
+
+        if (isCollapsed) {
+            const summary = document.createElement('span');
+            summary.className = 'list-section-summary';
+            const count = getListSubsectionItemCount(subsection.id, items);
+            summary.textContent = `${count} item${count === 1 ? '' : 's'}`;
+            main.appendChild(summary);
+        }
+        header.appendChild(main);
+
+        if (!listState.isArchived && !searchLower && !isListSelectionActive() && !listState.sectionReorderMode) {
+            const actions = document.createElement('div');
+            actions.className = 'list-section-reorder-actions';
+
+            actions.appendChild(
+                createHeaderInsertButton('Add item to subsection', subsectionInsertTarget)
+            );
+
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'list-section-reorder-btn';
+            editBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
+            editBtn.title = 'Rename subsection';
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                listState.editingItemId = subsection.id;
+                clearListInsertionTarget();
+                renderListItems();
+            });
+            actions.appendChild(editBtn);
+
+            const upBtn = document.createElement('button');
+            upBtn.type = 'button';
+            upBtn.className = 'list-section-reorder-btn';
+            upBtn.innerHTML = '<i class="fa-solid fa-arrow-up"></i>';
+            upBtn.title = 'Move subsection up';
+            upBtn.disabled = section.subsections[0]?.id === subsection.id;
+            upBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    const orderIds = buildListReorderIdsForSubsectionMove(subsection.id, 'up');
+                    if (!orderIds) return;
+                    await reorderListItems(orderIds);
+                    await loadListItems();
+                } catch (err) {
+                    console.error('Move subsection up failed:', err);
+                    showToast('Could not reorder subsection', 'error');
+                }
+            });
+            actions.appendChild(upBtn);
+
+            const downBtn = document.createElement('button');
+            downBtn.type = 'button';
+            downBtn.className = 'list-section-reorder-btn';
+            downBtn.innerHTML = '<i class="fa-solid fa-arrow-down"></i>';
+            downBtn.title = 'Move subsection down';
+            downBtn.disabled = section.subsections[section.subsections.length - 1]?.id === subsection.id;
+            downBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    const orderIds = buildListReorderIdsForSubsectionMove(subsection.id, 'down');
+                    if (!orderIds) return;
+                    await reorderListItems(orderIds);
+                    await loadListItems();
+                } catch (err) {
+                    console.error('Move subsection down failed:', err);
+                    showToast('Could not reorder subsection', 'error');
+                }
+            });
+            actions.appendChild(downBtn);
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'list-section-reorder-btn danger';
+            deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            deleteBtn.title = 'Delete subsection';
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteListSubsection(subsection.id);
+            });
+            actions.appendChild(deleteBtn);
+
+            header.appendChild(actions);
+        }
+
+        header.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (isListSelectionActive()) return;
+            toggleListSubsectionCollapsed(subsection.id);
+        });
+        wrapper.appendChild(header);
+        if (isCollapsed) {
+            appendInsertionComposer(subsectionInsertTarget, wrapper);
+        }
+        const body = document.createElement('div');
+        body.className = 'list-subsection-body';
+        wrapper.appendChild(body);
+        target.appendChild(wrapper);
+        renderedCount += 1;
+        return { wrapper, body, isCollapsed };
+    };
+
+    const renderSection = (section) => {
+        if (searchLower && sectionMatches && !sectionMatches.get(section.id)) return;
+        const sectionEl = document.createElement('div');
+        sectionEl.className = 'list-section';
+        const title = section.title;
+        const isEditing = listState.editingItemId === section.id;
+        const isCollapsed = !searchLower && ensureCollapsedSectionSet().has(section.id);
+        const sectionInsertTarget = section.directItems.length
+            ? {
+                kind: 'section_end',
+                insertIndex: getListAppendIndexForSection(section.id),
+                sectionId: section.id,
+            }
+            : {
+                kind: 'section_start',
+                insertIndex: getListInsertIndexForSectionStart(section.id),
+                sectionId: section.id,
+            };
+        if (isCollapsed && !isEditing) sectionEl.classList.add('collapsed');
+        sectionEl.classList.add(isEditing ? 'no-title' : 'has-title');
+
+        if (isEditing) {
+            sectionEl.appendChild(createListInputRow({
+                mode: 'edit',
+                itemId: section.id,
+                insertIndex: itemIndexById.get(section.id) ?? 0,
+                value: title,
+                placeholder: 'Section title (optional)',
+                autoFocus: true,
+                structureType: 'section'
+            }));
+        } else {
+            const header = document.createElement('div');
+            header.className = 'list-section-header';
+            sectionEl.dataset.sectionId = String(section.id);
+            header.dataset.sectionId = String(section.id);
+            const sectionCount = sectionIdsOrdered.length;
+            const canEditSection = !listState.isArchived && !searchLower && !isListSelectionActive() && !listState.sectionReorderMode;
+            const canReorder = !listState.isArchived && !searchLower && !isListSelectionActive() && listState.sectionReorderMode && sectionCount > 1;
+            const sectionTitle = title || 'Untitled section';
+            const sectionItemCount = getListSectionItemCount(section.id, items);
+
+            const main = document.createElement('div');
+            main.className = 'list-section-header-main';
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'list-section-toggle';
+            toggleBtn.title = isCollapsed ? 'Expand section' : 'Collapse section';
+            toggleBtn.innerHTML = `<i class="fa-solid ${isCollapsed ? 'fa-chevron-right' : 'fa-chevron-down'}"></i>`;
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (listState.sectionReorderMode) return;
+                if (Date.now() < listSectionReorderState.suppressClicksUntil) return;
+                toggleListSectionCollapsed(section.id);
+            });
+            main.appendChild(toggleBtn);
+
+            const titleEl = document.createElement('span');
+            titleEl.className = 'list-section-header-title';
+            appendHighlightedText(titleEl, sectionTitle, listState.isArchived ? '' : listSearchState.query);
+            main.appendChild(titleEl);
+
+            if (isCollapsed) {
+                const summary = document.createElement('span');
+                summary.className = 'list-section-summary';
+                summary.textContent = `${sectionItemCount} item${sectionItemCount === 1 ? '' : 's'}`;
+                main.appendChild(summary);
+            }
+            header.appendChild(main);
+
+            const actions = document.createElement('div');
+            actions.className = 'list-section-reorder-actions';
+            if (canEditSection) {
+                actions.appendChild(
+                    createHeaderInsertButton('Add item to section', sectionInsertTarget)
+                );
+
+                const addSubsectionBtn = document.createElement('button');
+                addSubsectionBtn.type = 'button';
+                addSubsectionBtn.className = 'list-section-reorder-btn';
+                addSubsectionBtn.innerHTML = '<i class="fa-solid fa-indent"></i>';
+                addSubsectionBtn.title = 'Add subsection';
+                addSubsectionBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    openListSectionModal(async (value) => {
+                        try {
+                            const insertIndex = getListInsertIndexForSectionExcluding(section.id, []);
+                            await createListItem({ text: buildListSubsectionText(value || '') }, insertIndex);
+                            await loadListItems();
+                        } catch (err) {
+                            console.error('Create subsection failed:', err);
+                            showToast('Could not create subsection', 'error');
+                        }
+                    }, { title: 'New subsection', placeholder: 'Optional' });
+                });
+                actions.appendChild(addSubsectionBtn);
+
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.className = 'list-section-reorder-btn';
+                editBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
+                editBtn.title = 'Rename section';
+                editBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    listState.editingItemId = section.id;
+                    clearListInsertionTarget();
+                    renderListItems();
+                });
+                actions.appendChild(editBtn);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.className = 'list-section-reorder-btn danger';
+                deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                deleteBtn.title = 'Delete section';
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteListSection(section.id);
+                });
+                actions.appendChild(deleteBtn);
+            }
+
+            if (canReorder) {
+                sectionEl.classList.add('reorder-active', 'reorder-target');
+                sectionEl.addEventListener('dragover', handleSectionDragOver);
+                sectionEl.addEventListener('dragleave', handleSectionDragLeave);
+                sectionEl.addEventListener('drop', handleSectionDrop);
+                const dragHandle = document.createElement('button');
+                dragHandle.type = 'button';
+                dragHandle.className = 'list-section-drag-handle';
+                dragHandle.dataset.sectionId = String(section.id);
+                dragHandle.dataset.sectionTitle = sectionTitle;
+                dragHandle.setAttribute('draggable', 'true');
+                dragHandle.title = `Drag to reorder section "${sectionTitle}"`;
+                dragHandle.innerHTML = '<i class="fa-solid fa-grip-lines"></i><span>Drag</span>';
+                dragHandle.addEventListener('click', (e) => e.stopPropagation());
+                dragHandle.addEventListener('dragstart', handleSectionDragStart);
+                dragHandle.addEventListener('dragend', handleSectionDragEnd);
+                actions.appendChild(dragHandle);
+            }
+
+            if (actions.children.length) header.appendChild(actions);
+            header.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (listState.sectionReorderMode) return;
+                if (Date.now() < listSectionReorderState.suppressClicksUntil) return;
+                if (isListSelectionActive()) return;
+                toggleListSectionCollapsed(section.id);
+            });
+            sectionEl.appendChild(header);
+        }
+
+        if (isCollapsed && !isEditing) {
+            appendInsertionComposer(sectionInsertTarget, sectionEl);
+        }
+
+        const body = document.createElement('div');
+        body.className = 'list-section-body';
+        sectionEl.appendChild(body);
+        stack.appendChild(sectionEl);
+        renderedCount += 1;
+
+        if (!isCollapsed && section.directItems.length === 0) {
+            appendInsertionComposer(sectionInsertTarget, body);
+        }
+
+        section.directItems.forEach((item) =>
+            renderRegularItem(item, body, {
+                kind: 'section_end',
+                sectionId: section.id,
+            })
+        );
+        section.subsections.forEach((subsection) => {
+            if (searchLower && subsectionMatches && !subsectionMatches.get(subsection.id) && !doesListItemMatch(subsection.item)) {
+                return;
+            }
+            const subsectionInsertTarget = subsection.items.length
+                ? {
+                    kind: 'subsection_end',
+                    insertIndex: getListAppendIndexForSubsection(subsection.id),
+                    sectionId: section.id,
+                    subsectionId: subsection.id,
+                }
+                : {
+                    kind: 'subsection_start',
+                    insertIndex: getListInsertIndexForSubsectionStart(subsection.id),
+                    sectionId: section.id,
+                    subsectionId: subsection.id,
+                };
+            const renderedSubsection = createSubsectionHeader(section, subsection, body);
+            if (!renderedSubsection.isCollapsed && subsection.items.length === 0) {
+                appendInsertionComposer(subsectionInsertTarget, renderedSubsection.body);
+            }
+            subsection.items.forEach((item) =>
+                renderRegularItem(item, renderedSubsection.body, {
+                    kind: 'subsection_end',
+                    sectionId: section.id,
+                    subsectionId: subsection.id,
+                })
+            );
+        });
+    };
+
+    appendInsertionUI(
+        { kind: 'list_between', insertIndex: 0 },
+        stack,
+        { kind: 'edge', quiet: !items.length, forceVisible: !items.length }
+    );
+
+    structure.prefixItems.forEach((item) =>
+        renderRegularItem(item, stack, {
+            kind: 'list_between',
+        })
+    );
+
+    structure.sections.forEach(renderSection);
+
+    appendInsertionUI(
+        { kind: 'list_end', insertIndex: items.length },
+        stack,
+        { kind: 'edge', end: true, forceVisible: !items.length }
+    );
 
     if (searchLower && renderedCount === 0) {
         const empty = document.createElement('div');
@@ -2721,23 +3360,36 @@ function renderListItems() {
     }
 }
 
-function createListGap(insertIndex) {
-    const gap = document.createElement('div');
-    gap.className = 'list-gap';
-    gap.tabIndex = 0;
-    const activate = () => {
-        listState.insertionIndex = insertIndex;
+function createInsertionSlot(targetConfig, options = {}) {
+    const slot = document.createElement('button');
+    slot.type = 'button';
+    slot.className = 'list-insert-slot';
+    if (options.kind === 'between') slot.classList.add('between');
+    if (options.kind === 'edge') slot.classList.add('edge');
+    if (options.end) slot.classList.add('end');
+    if (options.quiet) slot.classList.add('quiet');
+    if (options.forceVisible) slot.classList.add('force-visible');
+    if (isListInsertionTargetActive(targetConfig)) slot.classList.add('active');
+    slot.setAttribute('aria-label', getListInsertionLabel(targetConfig) || 'Insert item');
+    slot.title = getListInsertionLabel(targetConfig) || 'Insert item';
+
+    const line = document.createElement('span');
+    line.className = 'list-insert-slot-line';
+    slot.appendChild(line);
+
+    const icon = document.createElement('span');
+    icon.className = 'list-insert-slot-icon';
+    icon.innerHTML = '<i class="fa-solid fa-plus"></i>';
+    slot.appendChild(icon);
+
+    slot.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setListInsertionTarget(targetConfig);
         listState.editingItemId = null;
+        listState.expandedItemId = null;
         renderListItems();
-    };
-    gap.addEventListener('click', activate);
-    gap.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            activate();
-        }
     });
-    return gap;
+    return slot;
 }
 
 function resizeListInputTextarea(textarea, options = {}) {
@@ -3031,7 +3683,7 @@ function createListPill(item) {
             if (isListSelectionActive()) return;
             listState.expandedItemId = listState.expandedItemId === item.id ? null : item.id;
             listState.editingItemId = null;
-            listState.insertionIndex = null;
+            clearListInsertionTarget();
             renderListItems();
         });
         content.appendChild(toggleBtn);
@@ -3080,7 +3732,7 @@ function createListPill(item) {
     const moveBtn = document.createElement('button');
     moveBtn.type = 'button';
     moveBtn.className = 'list-pill-action';
-    moveBtn.title = 'Move to section';
+    moveBtn.title = 'Move item';
     moveBtn.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
     moveBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -3230,7 +3882,7 @@ function createListPill(item) {
             if (hasNote) {
                 listState.expandedItemId = listState.expandedItemId === item.id ? null : item.id;
                 listState.editingItemId = null;
-                listState.insertionIndex = null;
+                clearListInsertionTarget();
                 renderListItems();
             } else {
                 showReadOnlyToast();
@@ -3240,13 +3892,13 @@ function createListPill(item) {
         if (hasNote && listState.expandedItemId !== item.id) {
             listState.expandedItemId = item.id;
             listState.editingItemId = null;
-            listState.insertionIndex = null;
+            clearListInsertionTarget();
             renderListItems();
             return;
         }
         listState.expandedItemId = null;
         listState.editingItemId = item.id;
-        listState.insertionIndex = null;
+        clearListInsertionTarget();
         renderListItems();
     });
 
@@ -3254,7 +3906,7 @@ function createListPill(item) {
 }
 
 function createListInputRow(options) {
-    const { mode, itemId, insertIndex, value, placeholder, autoFocus, noteValue, isSection, isPrimary } = options;
+    const { mode, itemId, insertIndex, value, placeholder, autoFocus, noteValue, isSection, structureType, insertionTarget } = options;
     const row = document.createElement('div');
     row.className = `list-pill list-pill-input${mode === 'edit' ? ' expanded' : ''}`;
     const input = document.createElement('textarea');
@@ -3267,12 +3919,14 @@ function createListInputRow(options) {
     let noteInput = null;
     const initialNoteValue = noteValue || '';
     const hasExistingNote = initialNoteValue.trim().length > 0;
+    const itemStructureType = structureType || (isSection ? 'section' : null);
+    const isStructuralInput = itemStructureType === 'section' || itemStructureType === 'subsection';
 
     const commit = async (continueInserting = false) => {
         if (committed) return;
         committed = true;
         const raw = input.value.trim();
-        if (!raw && !isSection) {
+        if (!raw && !isStructuralInput) {
             if (mode === 'edit' && itemId) {
                 await deleteListItem(itemId);
             }
@@ -3280,8 +3934,10 @@ function createListInputRow(options) {
             return;
         }
         let parsed;
-        if (isSection) {
+        if (itemStructureType === 'section') {
             parsed = { text: buildListSectionText(raw) };
+        } else if (itemStructureType === 'subsection') {
+            parsed = { text: buildListSubsectionText(raw) };
         } else if (mode === 'edit') {
             parsed = hasExistingNote ? parseListItemMainInput(raw) : parseListItemInput(raw);
         } else {
@@ -3291,7 +3947,7 @@ function createListInputRow(options) {
             resetListInputState();
             return;
         }
-        if (mode === 'edit' && noteInput && !isSection) {
+        if (mode === 'edit' && noteInput && !isStructuralInput) {
             const currentNote = noteInput.value;
             const noteEdited = currentNote !== initialNoteValue;
             if (noteEdited) {
@@ -3314,25 +3970,27 @@ function createListInputRow(options) {
         }
         // For insert mode with Enter, continue inserting at next position
         if (continueInserting && mode === 'insert') {
-            listState.insertionIndex = insertIndex + 1;
+            if (insertionTarget) {
+                setListInsertionTarget({
+                    ...insertionTarget,
+                    insertIndex: insertIndex + 1,
+                });
+            } else {
+                clearListInsertionTarget();
+            }
             listState.editingItemId = null;
             await loadListItems();
-        } else if (isPrimary) {
-            // Primary input at bottom - stay there
-            listState.insertionIndex = null;
-            listState.editingItemId = null;
-            await loadListItems({ focusPrimary: true });
         } else {
             resetListInputState();
         }
     };
 
     const resetListInputState = () => {
-          listState.insertionIndex = null;
-          listState.editingItemId = null;
-          listState.expandedItemId = null;
-          loadListItems();
-      };
+        clearListInsertionTarget();
+        listState.editingItemId = null;
+        listState.expandedItemId = null;
+        loadListItems();
+    };
 
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -3341,7 +3999,7 @@ function createListInputRow(options) {
         }
         if (e.key === 'Escape') {
             e.preventDefault();
-            listState.insertionIndex = null;
+            clearListInsertionTarget();
             listState.editingItemId = null;
             renderListItems();
         }
@@ -3351,7 +4009,7 @@ function createListInputRow(options) {
     });
 
     input.addEventListener('paste', async (e) => {
-        if (mode === 'edit' || isSection) return;
+        if (mode === 'edit' || isStructuralInput) return;
         const pasteText = (e.clipboardData || window.clipboardData)?.getData('text') || '';
         if (!pasteText.includes('\n')) return;
         const validation = validateBulkListLines(pasteText);
@@ -3373,7 +4031,14 @@ function createListInputRow(options) {
                     await createListItem(parsed, idx);
                     idx += 1;
                 }
-                listState.insertionIndex = insertIndex + lines.length;
+                if (insertionTarget) {
+                    setListInsertionTarget({
+                        ...insertionTarget,
+                        insertIndex: insertIndex + lines.length,
+                    });
+                } else {
+                    clearListInsertionTarget();
+                }
                 listState.editingItemId = null;
                 await loadListItems();
                 return;
@@ -3384,13 +4049,7 @@ function createListInputRow(options) {
                 if (!parsed.text) continue;
                 await createListItem(parsed, null);
             }
-            if (isPrimary) {
-                listState.insertionIndex = null;
-                listState.editingItemId = null;
-                await loadListItems({ focusPrimary: true });
-            } else {
-                resetListInputState();
-            }
+            resetListInputState();
         } catch (err) {
             console.error('Bulk paste failed:', err);
             showToast('Could not add pasted items.', 'error');
@@ -3399,18 +4058,18 @@ function createListInputRow(options) {
 
     const handleBlurCommit = () => {
         // Handle section title editing - always save on blur
-        if (mode === 'edit' && isSection) {
+        if (mode === 'edit' && isStructuralInput) {
             setTimeout(() => {
                 if (row.contains(document.activeElement)) return;
                 commit(false);
             }, 0);
             return;
         }
-        if (mode !== 'new' && mode !== 'insert') return;
+        if (mode !== 'insert') return;
         if (input.value.trim() === '') {
             setTimeout(() => {
                 if (row.contains(document.activeElement)) return;
-                listState.insertionIndex = null;
+                clearListInsertionTarget();
                 listState.editingItemId = null;
                 renderListItems();
             }, 0);
@@ -3425,7 +4084,7 @@ function createListInputRow(options) {
     input.addEventListener('blur', handleBlurCommit);
 
     row.appendChild(input);
-    if (mode === 'edit' && !isSection) {
+    if (mode === 'edit' && !isStructuralInput) {
         noteInput = document.createElement('textarea');
         noteInput.className = 'list-pill-note-edit';
         noteInput.rows = 1;
@@ -3438,7 +4097,7 @@ function createListInputRow(options) {
             }
             if (e.key === 'Escape') {
                 e.preventDefault();
-                listState.insertionIndex = null;
+                clearListInsertionTarget();
                 listState.editingItemId = null;
                 renderListItems();
             }
@@ -3460,6 +4119,9 @@ function getListItemMainText(item) {
     if (isListSectionItem(item)) {
         return getListSectionTitle(item);
     }
+    if (isListSubsectionItem(item)) {
+        return getListSubsectionTitle(item);
+    }
     const textValue = (item.text || '').trim();
     const linkLabel = (item.link_text || '').trim();
     const linkUrl = (item.link_url || '').trim();
@@ -3479,6 +4141,11 @@ function parseListItemInput(raw) {
     if (sectionMatch) {
         const title = sectionMatch[1] || '';
         return { text: buildListSectionText(title) };
+    }
+    const subsectionMatch = raw.match(/^\/subsection(?:\s+(.*))?$/i);
+    if (subsectionMatch) {
+        const title = subsectionMatch[1] || '';
+        return { text: buildListSubsectionText(title) };
     }
     const noteSplit = raw.indexOf('::');
     let main = raw;
@@ -3564,8 +4231,7 @@ function validateBulkListLines(rawText) {
     return { ok: true, lines: cleanedLines };
 }
 
-async function loadListItems(options = {}) {
-    const { focusPrimary = false } = options;
+async function loadListItems() {
     if (!listState.listId) return;
     try {
         const res = await fetch(`/api/notes/${listState.listId}/list-items`);
@@ -3574,11 +4240,6 @@ async function loadListItems(options = {}) {
         updateListSectionReorderUI();
         renderListItems();
         updateListSessionActionState();
-        if (focusPrimary) {
-            const inputs = document.querySelectorAll('.list-pill-input textarea');
-            const last = inputs[inputs.length - 1];
-            if (last) last.focus();
-        }
     } catch (err) {
         console.error('Error loading list items:', err);
     }

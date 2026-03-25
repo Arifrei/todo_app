@@ -33,7 +33,7 @@ let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true, activePlannerContext: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, insertionIndex: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null, collapsedSectionIds: new Set(), sectionReorderMode: false };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, insertionIndex: null, insertionTarget: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null, collapsedSectionIds: new Set(), collapsedSubsectionIds: new Set(), sectionReorderMode: false };
 let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
@@ -61,7 +61,7 @@ let activeListItemMenu = null;
 let activeListItemActionPill = null;
 let listSelectionState = { active: false, ids: new Set() };
 let listSearchState = { query: '' };
-let listSectionModalState = { onSubmit: null };
+let listSectionModalState = { onSubmit: null, title: 'New section' };
 let recallState = {
     items: [],
     modalRecallId: null,

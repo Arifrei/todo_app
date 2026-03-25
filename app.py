@@ -98,6 +98,7 @@ NOTE_LIST_CONVERSION_MAX_CHARS = 80
 NOTE_LIST_CONVERSION_MAX_WORDS = 12
 NOTE_LIST_CONVERSION_SENTENCE_WORD_LIMIT = 8
 LIST_SECTION_PREFIX = '[[section]]'
+LIST_SUBSECTION_PREFIX = '[[subsection]]'
 PLANNER_FEED_FOLDER_NAME = 'Feed'
 ALLOWED_PRIORITIES = {'low', 'medium', 'high'}
 ALLOWED_STATUSES = {'not_started', 'in_progress', 'done', 'canceled'}
@@ -1030,3 +1031,4 @@ if __name__ == '__main__':
         port = 5000
     debug = os.environ.get('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes', 'on')
     app.run(host=host, port=port, debug=True)
+

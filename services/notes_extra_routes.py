@@ -1,6 +1,7 @@
 """Extracted route handlers grouped by domain for readability."""
 
 import app as _app_module
+from services.notes_routes import validate_note_list_structure
 
 # Keep access to shared app context, models, helpers, and constants.
 for _name, _value in vars(_app_module).items():
@@ -204,6 +205,7 @@ def note_list_item_duplicates(note_id):
     payload = detect_note_list_duplicates(
         items=items,
         section_prefix=LIST_SECTION_PREFIX,
+        subsection_prefix=LIST_SUBSECTION_PREFIX,
         embed_text_fn=embed_text,
     )
     return jsonify(payload)
@@ -232,6 +234,11 @@ def reorder_note_list_items(note_id):
     item_map = {item.id: item for item in items}
     if len(ids) != len(item_map) or set(ids) != set(item_map.keys()):
         return jsonify({'error': 'ids must include every item'}), 400
+
+    ordered_items = [item_map[item_id] for item_id in ids]
+    is_valid, validation_error = validate_note_list_structure(ordered_items)
+    if not is_valid:
+        return jsonify({'error': validation_error}), 400
 
     for idx, item_id in enumerate(ids, start=1):
         item_map[item_id].order_index = idx
