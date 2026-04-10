@@ -1274,14 +1274,25 @@ function initCalendarPage() {
               }
         });
 
-        // Update dropdown positions on scroll instead of closing them
-          window.addEventListener('scroll', () => {
-              document.querySelectorAll('.calendar-item-dropdown.active').forEach(dropdown => {
-                  if (dropdown.updatePosition && typeof dropdown.updatePosition === 'function') {
-                      dropdown.updatePosition();
-                  }
-              });
-          }, true);
+        // Keep body-level task menus anchored to their trigger as the viewport changes.
+        const repositionCalendarItemDropdowns = () => {
+            if (typeof repositionOpenCalendarItemDropdowns === 'function') {
+                repositionOpenCalendarItemDropdowns();
+                return;
+            }
+            document.querySelectorAll('.calendar-item-dropdown.active').forEach(dropdown => {
+                if (dropdown.updatePosition && typeof dropdown.updatePosition === 'function') {
+                    dropdown.updatePosition();
+                }
+            });
+        };
+
+        window.addEventListener('scroll', repositionCalendarItemDropdowns, true);
+        window.addEventListener('resize', repositionCalendarItemDropdowns, { passive: true });
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', repositionCalendarItemDropdowns, { passive: true });
+            window.visualViewport.addEventListener('scroll', repositionCalendarItemDropdowns, { passive: true });
+        }
 
     }
 

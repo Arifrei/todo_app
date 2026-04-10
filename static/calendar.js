@@ -362,8 +362,11 @@ function appendCalendarEditableTitle(titleWrap, options) {
         });
     };
 
-    titleRich.addEventListener('dblclick', (event) => {
+    titleRich.addEventListener('click', (event) => {
+        if (event.target && event.target.closest('a.calendar-inline-link')) return;
+        if (calendarSelection.active || event.metaKey || event.ctrlKey || event.shiftKey) return;
         event.stopPropagation();
+        event.preventDefault();
         openEditor();
     });
     titleRich.addEventListener('keydown', (event) => {
@@ -1622,6 +1625,108 @@ function createDisplayModeMenuItem(ev, dropdown) {
     return item;
 }
 
+function getCalendarDropdownViewportSize() {
+    const viewport = window.visualViewport;
+    return {
+        width: Math.floor((viewport && viewport.width) || window.innerWidth || document.documentElement.clientWidth || 0),
+        height: Math.floor((viewport && viewport.height) || window.innerHeight || document.documentElement.clientHeight || 0)
+    };
+}
+
+function closeCalendarItemDropdown(dropdown) {
+    if (!dropdown) return;
+    restoreCalendarNoteChoiceDropdown(dropdown);
+    dropdown.classList.remove('active');
+    dropdown.style.visibility = '';
+}
+
+function closeOtherCalendarItemDropdowns(exceptDropdown = null) {
+    document.querySelectorAll('.calendar-item-dropdown.active').forEach((dropdown) => {
+        if (dropdown === exceptDropdown) return;
+        closeCalendarItemDropdown(dropdown);
+    });
+}
+
+function positionCalendarItemDropdown(dropdown, anchor) {
+    if (!dropdown || !anchor) return;
+
+    const { width: viewportWidth, height: viewportHeight } = getCalendarDropdownViewportSize();
+    const padding = 8;
+    const gap = 8;
+    const fallbackWidth = Math.max(parseFloat(window.getComputedStyle(dropdown).minWidth) || 0, 180);
+    const fallbackHeight = 150;
+
+    dropdown.style.position = 'fixed';
+    dropdown.style.right = '';
+    dropdown.style.bottom = '';
+    dropdown.style.overflowY = 'auto';
+
+    if (viewportWidth > 0) {
+        dropdown.style.maxWidth = `${Math.max(0, viewportWidth - (padding * 2))}px`;
+    } else {
+        dropdown.style.maxWidth = '';
+    }
+    if (viewportHeight > 0) {
+        dropdown.style.maxHeight = `${Math.max(0, viewportHeight - (padding * 2))}px`;
+    } else {
+        dropdown.style.maxHeight = '';
+    }
+
+    const rect = anchor.getBoundingClientRect();
+    const dropdownRect = dropdown.getBoundingClientRect();
+    const usableWidth = Math.max(0, viewportWidth - (padding * 2));
+    const usableHeight = Math.max(0, viewportHeight - (padding * 2));
+    const dropdownWidth = Math.min(dropdownRect.width || fallbackWidth, usableWidth || dropdownRect.width || fallbackWidth);
+    const dropdownHeight = Math.min(dropdownRect.height || fallbackHeight, usableHeight || dropdownRect.height || fallbackHeight);
+
+    const spaceBelow = viewportHeight - rect.bottom - gap - padding;
+    const spaceAbove = rect.top - gap - padding;
+    let topPos = rect.bottom + gap;
+    if (spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
+        topPos = rect.top - dropdownHeight - gap;
+    }
+    const maxTop = Math.max(padding, viewportHeight - dropdownHeight - padding);
+    topPos = Math.max(padding, Math.min(topPos, maxTop));
+
+    let leftPos = rect.right - dropdownWidth;
+    const maxLeft = Math.max(padding, viewportWidth - dropdownWidth - padding);
+    leftPos = Math.max(padding, Math.min(leftPos, maxLeft));
+
+    dropdown.style.top = `${Math.round(topPos)}px`;
+    dropdown.style.left = `${Math.round(leftPos)}px`;
+}
+
+function openCalendarItemDropdown(dropdown, anchor) {
+    if (!dropdown || !anchor) return;
+    closeOtherCalendarItemDropdowns(dropdown);
+    dropdown.style.visibility = 'hidden';
+    dropdown.classList.add('active');
+    positionCalendarItemDropdown(dropdown, anchor);
+    window.requestAnimationFrame(() => {
+        if (!dropdown.classList.contains('active')) return;
+        positionCalendarItemDropdown(dropdown, anchor);
+        dropdown.style.visibility = '';
+    });
+}
+
+function toggleCalendarItemDropdown(dropdown, anchor) {
+    if (!dropdown || !anchor) return;
+    restoreCalendarNoteChoiceDropdown(dropdown);
+    if (dropdown.classList.contains('active')) {
+        closeCalendarItemDropdown(dropdown);
+        return;
+    }
+    openCalendarItemDropdown(dropdown, anchor);
+}
+
+function repositionOpenCalendarItemDropdowns() {
+    document.querySelectorAll('.calendar-item-dropdown.active').forEach((dropdown) => {
+        if (dropdown.updatePosition && typeof dropdown.updatePosition === 'function') {
+            dropdown.updatePosition();
+        }
+    });
+}
+
 function renderDayTimelinePanel(allItems) {
     const layout = document.getElementById('calendar-day-layout');
     const wrap = document.getElementById('calendar-timeline-wrap');
@@ -1903,7 +2008,6 @@ function renderCalendarEvents() {
     const timeline = listEvents.filter(ev => !ev.is_task_link);
     const groupMap = new Map();
     const rootItems = [];
-    const rootNonGroup = [];
 
     timeline.forEach(ev => {
         if (ev.is_group) {
@@ -1919,20 +2023,14 @@ function renderCalendarEvents() {
             groupMap.get(ev.group_id).children.push(ev);
         } else {
             rootItems.push(ev);
-            rootNonGroup.push(ev);
         }
     });
 
-    const groupsList = sortCalendarItems(timeline.filter(ev => ev.is_group), sortMode);
     groupMap.forEach(group => {
         group.children = sortCalendarItems(group.children, sortMode);
     });
 
-    const phasesAndTasks = [
-        ...sortCalendarItems(rootNonGroup.filter(ev => !ev.is_event && !ev.is_group), sortMode),
-        ...sortCalendarItems(tasksDue, sortMode)
-    ];
-    const dayEvents = sortCalendarItems(rootNonGroup.filter(ev => ev.is_event && !ev.is_group), sortMode);
+    const combinedRootItems = sortCalendarItems([...rootItems, ...tasksDue], sortMode);
 
     const renderPhaseOrTask = (ev, isChild = false) => {
         const row = document.createElement('div');
@@ -2098,38 +2196,13 @@ function renderCalendarEvents() {
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
-        const positionDropdown = () => {
-            const rect = overflowBtn.getBoundingClientRect();
-            const dropdownWidth = overflowDropdown.offsetWidth || 200;
-            const dropdownHeight = overflowDropdown.offsetHeight || 120;
-            const screenWidth = window.innerWidth;
-            const screenHeight = window.innerHeight;
-            const padding = 8;
-            overflowDropdown.style.position = 'fixed';
-            let topPos = rect.bottom + 8;
-            if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
-                topPos = rect.top - dropdownHeight - 8;
-            }
-            const maxTop = screenHeight - dropdownHeight - padding;
-            const minTop = padding;
-            topPos = Math.max(minTop, Math.min(topPos, maxTop));
-            let leftPos = rect.right - dropdownWidth;
-            if (leftPos < padding) leftPos = padding;
-            if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
-            overflowDropdown.style.top = `${topPos}px`;
-            overflowDropdown.style.left = `${leftPos}px`;
-        };
+        overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
+        overflowDropdown.triggerButton = overflowBtn;
 
         overflowBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
-            overflowDropdown.classList.toggle('active');
-            positionDropdown();
+            toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
         });
-
-        window.addEventListener('scroll', () => {
-            if (overflowDropdown.classList.contains('active')) positionDropdown();
-        }, { passive: true });
 
           if (noteChips.childNodes.length) actions.append(noteChips);
           actions.append(priorityDot, overflowMenuContainer);
@@ -2299,38 +2372,13 @@ function renderCalendarEvents() {
             overflowMenuContainer.append(overflowBtn);
             document.body.appendChild(overflowDropdown);
 
-            const positionDropdown = () => {
-                const rect = overflowBtn.getBoundingClientRect();
-                const dropdownWidth = overflowDropdown.offsetWidth || 200;
-                const dropdownHeight = overflowDropdown.offsetHeight || 120;
-                const screenWidth = window.innerWidth;
-                const screenHeight = window.innerHeight;
-                const padding = 8;
-                overflowDropdown.style.position = 'fixed';
-                let topPos = rect.bottom + 8;
-                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
-                    topPos = rect.top - dropdownHeight - 8;
-                }
-                const maxTop = screenHeight - dropdownHeight - padding;
-                const minTop = padding;
-                topPos = Math.max(minTop, Math.min(topPos, maxTop));
-                let leftPos = rect.right - dropdownWidth;
-                if (leftPos < padding) leftPos = padding;
-                if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
-                overflowDropdown.style.top = `${topPos}px`;
-                overflowDropdown.style.left = `${leftPos}px`;
-            };
+            overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
+            overflowDropdown.triggerButton = overflowBtn;
 
             overflowBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
-                overflowDropdown.classList.toggle('active');
-                positionDropdown();
+                toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
             });
-
-            window.addEventListener('scroll', () => {
-                if (overflowDropdown.classList.contains('active')) positionDropdown();
-            }, { passive: true });
 
             if (noteChips.childNodes.length) actions.append(noteChips);
             actions.append(priorityDot, overflowMenuContainer);
@@ -2520,38 +2568,13 @@ function renderCalendarEvents() {
             overflowMenuContainer.append(overflowBtn);
             document.body.appendChild(overflowDropdown);
 
-            const positionDropdown = () => {
-                const rect = overflowBtn.getBoundingClientRect();
-                const dropdownWidth = overflowDropdown.offsetWidth || 200;
-                const dropdownHeight = overflowDropdown.offsetHeight || 120;
-                const screenWidth = window.innerWidth;
-                const screenHeight = window.innerHeight;
-                const padding = 8;
-                overflowDropdown.style.position = 'fixed';
-                let topPos = rect.bottom + 8;
-                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
-                    topPos = rect.top - dropdownHeight - 8;
-                }
-                const maxTop = screenHeight - dropdownHeight - padding;
-                const minTop = padding;
-                topPos = Math.max(minTop, Math.min(topPos, maxTop));
-                let leftPos = rect.right - dropdownWidth;
-                if (leftPos < padding) leftPos = padding;
-                if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
-                overflowDropdown.style.top = `${topPos}px`;
-                overflowDropdown.style.left = `${leftPos}px`;
-            };
+            overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
+            overflowDropdown.triggerButton = overflowBtn;
 
             overflowBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
-                overflowDropdown.classList.toggle('active');
-                positionDropdown();
+                toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
             });
-
-            window.addEventListener('scroll', () => {
-                if (overflowDropdown.classList.contains('active')) positionDropdown();
-            }, { passive: true });
 
             if (noteChips.childNodes.length) actions.append(noteChips);
             actions.append(priorityDot, overflowMenuContainer);
@@ -2724,38 +2747,13 @@ function renderCalendarEvents() {
             overflowMenuContainer.append(overflowBtn);
             document.body.appendChild(overflowDropdown);
 
-            const positionDropdown = () => {
-                const rect = overflowBtn.getBoundingClientRect();
-                const dropdownWidth = overflowDropdown.offsetWidth || 200;
-                const dropdownHeight = overflowDropdown.offsetHeight || 120;
-                const screenWidth = window.innerWidth;
-                const screenHeight = window.innerHeight;
-                const padding = 8;
-                overflowDropdown.style.position = 'fixed';
-                let topPos = rect.bottom + 8;
-                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
-                    topPos = rect.top - dropdownHeight - 8;
-                }
-                const maxTop = screenHeight - dropdownHeight - padding;
-                const minTop = padding;
-                topPos = Math.max(minTop, Math.min(topPos, maxTop));
-                let leftPos = rect.right - dropdownWidth;
-                if (leftPos < padding) leftPos = padding;
-                if (leftPos + dropdownWidth > screenWidth - padding) leftPos = screenWidth - dropdownWidth - padding;
-                overflowDropdown.style.top = `${topPos}px`;
-                overflowDropdown.style.left = `${leftPos}px`;
-            };
+            overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
+            overflowDropdown.triggerButton = overflowBtn;
 
             overflowBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => d.classList.remove('active'));
-                overflowDropdown.classList.toggle('active');
-                positionDropdown();
+                toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
             });
-
-            window.addEventListener('scroll', () => {
-                if (overflowDropdown.classList.contains('active')) positionDropdown();
-            }, { passive: true });
 
             if (noteChips.childNodes.length) actions.append(noteChips);
             actions.append(priorityDot, overflowMenuContainer);
@@ -2827,49 +2825,13 @@ function renderCalendarEvents() {
             overflowMenuContainer.append(overflowBtn);
             document.body.appendChild(overflowDropdown);
 
-            const positionDropdown = () => {
-                const rect = overflowBtn.getBoundingClientRect();
-                const dropdownWidth = 180;
-                const dropdownHeight = overflowDropdown.offsetHeight || 120;
-                const screenWidth = window.innerWidth;
-                const screenHeight = window.innerHeight;
-                const padding = 8;
-
-                overflowDropdown.style.position = 'fixed';
-                let topPos = rect.bottom + 8;
-                if (screenHeight - rect.bottom < dropdownHeight + padding && rect.top > screenHeight - rect.bottom) {
-                    topPos = rect.top - dropdownHeight - 8;
-                }
-                const maxTop = screenHeight - dropdownHeight - padding;
-                const minTop = padding;
-                topPos = Math.max(minTop, Math.min(topPos, maxTop));
-
-                let leftPos = rect.right - dropdownWidth;
-                if (leftPos < padding) leftPos = padding;
-                if (leftPos + dropdownWidth > screenWidth - padding) {
-                    leftPos = screenWidth - dropdownWidth - padding;
-                }
-
-                overflowDropdown.style.top = `${topPos}px`;
-                overflowDropdown.style.left = `${leftPos}px`;
-            };
+            overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
+            overflowDropdown.triggerButton = overflowBtn;
 
             overflowBtn.onclick = (e) => {
                 e.stopPropagation();
-                const isOpen = overflowDropdown.classList.contains('active');
-                document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
-                    if (d !== overflowDropdown) d.classList.remove('active');
-                });
-                if (!isOpen) {
-                    positionDropdown();
-                    overflowDropdown.classList.add('active');
-                } else {
-                    overflowDropdown.classList.remove('active');
-                }
+                toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
             };
-
-            overflowDropdown.updatePosition = positionDropdown;
-            overflowDropdown.triggerButton = overflowBtn;
 
             actions.append(overflowMenuContainer);
             row.append(left, titleWrap, actions);
@@ -3066,71 +3028,12 @@ function renderCalendarEvents() {
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
-        // Function to position dropdown relative to button
-        const positionDropdown = () => {
-            const rect = overflowBtn.getBoundingClientRect();
-            const dropdownWidth = 180;
-            const dropdownHeight = overflowDropdown.offsetHeight || 150; // Estimate if not rendered yet
-            const screenWidth = window.innerWidth;
-            const screenHeight = window.innerHeight;
-            const padding = 8;
-
-            overflowDropdown.style.position = 'fixed';
-
-            // Determine vertical position - flip up if would spill below screen
-            let topPos;
-            const spaceBelow = screenHeight - rect.bottom;
-            const spaceAbove = rect.top;
-
-            if (spaceBelow < dropdownHeight + padding && spaceAbove > spaceBelow) {
-                // Not enough space below, but more space above - position above button
-                topPos = rect.top - dropdownHeight - 8;
-            } else {
-                // Position below button (default)
-                topPos = rect.bottom + 8;
-            }
-
-            overflowDropdown.style.top = `${topPos}px`;
-
-            // Calculate left position, ensuring it stays on screen
-            let leftPos = rect.right - dropdownWidth;
-
-            // If dropdown would go off left edge, align to left edge with padding
-            if (leftPos < padding) {
-                leftPos = padding;
-            }
-
-            // If dropdown would go off right edge, align to right edge with padding
-            if (leftPos + dropdownWidth > screenWidth - padding) {
-                leftPos = screenWidth - dropdownWidth - padding;
-            }
-
-            overflowDropdown.style.left = `${leftPos}px`;
-        };
-
-        // Store reference for scroll update
-        overflowDropdown.updatePosition = positionDropdown;
+        overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
         overflowDropdown.triggerButton = overflowBtn;
 
           overflowBtn.onclick = (e) => {
             e.stopPropagation();
-            restoreCalendarNoteChoiceDropdown(overflowDropdown);
-
-            const isOpen = overflowDropdown.classList.contains('active');
-
-            // Close all other dropdowns first
-            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
-                if (d !== overflowDropdown) {
-                    d.classList.remove('active');
-                }
-            });
-
-            if (!isOpen) {
-                positionDropdown();
-                overflowDropdown.classList.add('active');
-            } else {
-                overflowDropdown.classList.remove('active');
-            }
+            toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
         };
 
         if (noteChips.childNodes.length) actions.append(noteChips);
@@ -3189,6 +3092,7 @@ function renderCalendarEvents() {
             link.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
             noteChips.appendChild(link);
         });
+        appendCalendarItemNoteChip(noteChips, ev);
 
         const actions = document.createElement('div');
         actions.className = 'calendar-actions-row';
@@ -3324,57 +3228,12 @@ function renderCalendarEvents() {
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
-        const positionDropdown = () => {
-            const rect = overflowBtn.getBoundingClientRect();
-            const dropdownWidth = 180;
-            const dropdownHeight = overflowDropdown.offsetHeight || 150;
-            const screenWidth = window.innerWidth;
-            const screenHeight = window.innerHeight;
-            const padding = 8;
-
-            overflowDropdown.style.position = 'fixed';
-
-            let topPos;
-            const spaceBelow = screenHeight - rect.bottom;
-            const spaceAbove = rect.top;
-
-            if (spaceBelow < dropdownHeight + padding && spaceAbove > spaceBelow) {
-                topPos = rect.top - dropdownHeight - 8;
-            } else {
-                topPos = rect.bottom + 8;
-            }
-
-            overflowDropdown.style.top = `${topPos}px`;
-
-            let leftPos = rect.right - dropdownWidth;
-            if (leftPos < padding) {
-                leftPos = padding;
-            }
-            if (leftPos + dropdownWidth > screenWidth - padding) {
-                leftPos = screenWidth - dropdownWidth - padding;
-            }
-
-            overflowDropdown.style.left = `${leftPos}px`;
-        };
-
-        overflowDropdown.updatePosition = positionDropdown;
+        overflowDropdown.updatePosition = () => positionCalendarItemDropdown(overflowDropdown, overflowBtn);
         overflowDropdown.triggerButton = overflowBtn;
 
           overflowBtn.onclick = (e) => {
             e.stopPropagation();
-            restoreCalendarNoteChoiceDropdown(overflowDropdown);
-            const isOpen = overflowDropdown.classList.contains('active');
-            document.querySelectorAll('.calendar-item-dropdown.active').forEach(d => {
-                if (d !== overflowDropdown) {
-                    d.classList.remove('active');
-                }
-            });
-            if (!isOpen) {
-                positionDropdown();
-                overflowDropdown.classList.add('active');
-            } else {
-                overflowDropdown.classList.remove('active');
-            }
+            toggleCalendarItemDropdown(overflowDropdown, overflowBtn);
         };
 
         if (noteChips.childNodes.length) actions.append(noteChips);
@@ -3446,59 +3305,13 @@ function renderCalendarEvents() {
         });
     };
 
-    const eventItems = dayEvents;
-    const taskItems = sortCalendarItems([...groupsList, ...phasesAndTasks], sortMode);
-
-    const toggleSection = (sectionId) => {
-        const section = document.getElementById(`calendar-section-${sectionId}`);
-        const divider = document.querySelector(`[data-section="${sectionId}"]`);
-        if (section && divider) {
-            section.classList.toggle('collapsed');
-            divider.classList.toggle('collapsed');
+    combinedRootItems.forEach((ev) => {
+        if (ev.is_group) {
+            renderGroup(ev);
+            return;
         }
-    };
-
-    const addDivider = (label, count, sectionId) => {
-        const d = document.createElement('div');
-        d.className = 'calendar-event-divider';
-        d.dataset.section = sectionId;
-        d.innerHTML = `
-            <span>
-                ${label}
-                <span class="count-badge">${count}</span>
-            </span>
-            <i class="fa-solid fa-chevron-down divider-icon"></i>
-        `;
-        d.onclick = () => toggleSection(sectionId);
-        container.appendChild(d);
-    };
-
-    const createSection = (id) => {
-        const section = document.createElement('div');
-        section.id = `calendar-section-${id}`;
-        section.className = 'calendar-section';
-        return section;
-    };
-
-    if (eventItems.length) {
-        addDivider('Events', eventItems.length, 'events');
-        const eventSection = createSection('events');
-        eventItems.forEach(ev => eventSection.appendChild(renderEvent(ev)));
-        container.appendChild(eventSection);
-    }
-
-    if (taskItems.length) {
-        addDivider('Tasks', taskItems.length, 'tasks');
-        const taskSection = createSection('tasks');
-        taskItems.forEach(ev => {
-            if (ev.is_group) {
-                renderGroup(ev);
-            } else {
-                taskSection.appendChild(renderPhaseOrTask(ev));
-            }
-        });
-        container.appendChild(taskSection);
-    }
+        container.appendChild(ev.is_event ? renderEvent(ev) : renderPhaseOrTask(ev));
+    });
 
     enableCalendarDragAndDrop(container);
 

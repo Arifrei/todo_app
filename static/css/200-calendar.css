@@ -1345,7 +1345,7 @@ section.card.calendar-board,
 }
 
 .calendar-row.event.selected {
-    border-left-color: rgba(139, 92, 246, 0.6);
+    border-left-color: rgba(59, 130, 246, 0.8);
 }
 
 .calendar-select-indicator {
@@ -1422,8 +1422,17 @@ section.card.calendar-board,
 
 .calendar-row.event {
     grid-template-columns: 24px 1fr auto;
-    background: linear-gradient(135deg, rgba(147, 197, 253, 0.08) 0%, rgba(147, 197, 253, 0.02) 100%);
-    border-left: 3px solid rgba(147, 197, 253, 0.5);
+    background: linear-gradient(135deg, rgba(147, 197, 253, 0.14) 0%, rgba(191, 219, 254, 0.06) 100%);
+    border-color: rgba(96, 165, 250, 0.16);
+    border-left: 4px solid rgba(59, 130, 246, 0.68);
+    box-shadow: 0 1px 4px rgba(59, 130, 246, 0.06);
+}
+
+.calendar-row.event:hover {
+    background: linear-gradient(135deg, rgba(147, 197, 253, 0.18) 0%, rgba(191, 219, 254, 0.08) 100%);
+    border-color: rgba(59, 130, 246, 0.22);
+    border-left-color: rgba(59, 130, 246, 0.82);
+    box-shadow: 0 5px 14px rgba(59, 130, 246, 0.12);
 }
 
 .calendar-row.group {
@@ -1668,9 +1677,12 @@ section.card.calendar-board,
     border-radius: 12px;
     box-shadow: 0 6px 14px rgba(0,0,0,0.12);
     min-width: 180px;
+    max-width: calc(100vw - 16px);
+    max-width: calc(100dvw - 16px);
     max-height: calc(100vh - 16px);
     max-height: calc(100dvh - 16px);
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 0.5rem;
     z-index: 9999;
     display: none;
