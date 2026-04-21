@@ -152,6 +152,7 @@ def handle_notes():
     get_current_user = a.get_current_user
     is_note_linked = a.is_note_linked
     jsonify = a.jsonify
+    normalize_note_list_mode = a.normalize_note_list_mode
     normalize_note_type = a.normalize_note_type
     or_ = a.or_
     parse_bool = a.parse_bool
@@ -178,6 +179,7 @@ def handle_notes():
         raw_title = (data.get('title') or '').strip()
         content = data.get('content') or ''
         note_type = normalize_note_type(data.get('note_type') or data.get('type'))
+        list_mode = normalize_note_list_mode(data.get('list_mode'))
         title = raw_title or ('Untitled List' if note_type == 'list' else 'Untitled Note')
         checkbox_mode = parse_bool(data.get('checkbox_mode'))
         has_is_listed = 'is_listed' in data
@@ -240,7 +242,8 @@ def handle_notes():
             planner_multi_line_id=planner_line_id,
             folder_id=folder_id_value,
             note_type=note_type,
-            checkbox_mode=checkbox_mode if note_type == 'list' else False,
+            checkbox_mode=(checkbox_mode or list_mode == 'revolving') if note_type == 'list' else False,
+            list_mode=list_mode if note_type == 'list' else 'standard',
             is_listed=is_listed
         )
         db.session.add(note)
@@ -320,6 +323,7 @@ def resolve_note_link():
     get_current_user = a.get_current_user
     jsonify = a.jsonify
     normalize_note_type = a.normalize_note_type
+    normalize_note_list_mode = a.normalize_note_list_mode
     parse_bool = a.parse_bool
     request = a.request
     """Resolve or create a linked note from a note editor."""
@@ -395,6 +399,7 @@ def resolve_note_link():
         folder_id=folder_id_value,
         note_type=note_type,
         checkbox_mode=False,
+        list_mode='standard',
         is_listed=is_listed
     )
     db.session.add(note)
@@ -609,6 +614,7 @@ def handle_note(note_id):
     get_current_user = a.get_current_user
     is_note_linked = a.is_note_linked
     jsonify = a.jsonify
+    normalize_note_list_mode = a.normalize_note_list_mode
     or_ = a.or_
     parse_bool = a.parse_bool
     pytz = a.pytz
@@ -661,6 +667,10 @@ def handle_note(note_id):
             note.content = data.get('content', note.content)
         if 'checkbox_mode' in data and note.note_type == 'list':
             note.checkbox_mode = parse_bool(data.get('checkbox_mode'))
+        if 'list_mode' in data and note.note_type == 'list':
+            note.list_mode = normalize_note_list_mode(data.get('list_mode'))
+        if note.note_type == 'list' and normalize_note_list_mode(note.list_mode) == 'revolving':
+            note.checkbox_mode = True
         if 'is_listed' in data:
             note.is_listed = parse_bool(data.get('is_listed'), True)
         note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
@@ -739,6 +749,8 @@ def handle_note(note_id):
             'is_pin_protected': True,
             'locked': True,
             'note_type': note.note_type,
+            'checkbox_mode': bool(note.checkbox_mode) if note.note_type == 'list' else False,
+            'list_mode': normalize_note_list_mode(note.list_mode) if note.note_type == 'list' else 'standard',
             'pinned': note.pinned,
             'folder_id': note.folder_id,
             'planner_multi_item_id': note.planner_multi_item_id,
@@ -769,6 +781,7 @@ def note_list_items(note_id):
     db = a.db
     get_current_user = a.get_current_user
     jsonify = a.jsonify
+    normalize_note_list_mode = a.normalize_note_list_mode
     parse_day_value = a.parse_day_value
     pytz = a.pytz
     request = a.request
@@ -831,6 +844,8 @@ def note_list_items(note_id):
     link_url = (data.get('link_url') or '').strip() or None
     scheduled_date = parse_day_value(data.get('scheduled_date')) if 'scheduled_date' in data else None
     checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
+    if normalize_note_list_mode(note.list_mode) == 'revolving':
+        checked = False
 
     insert_index = data.get('insert_index')
     existing_items = NoteListItem.query.filter_by(note_id=note.id).order_by(
@@ -901,6 +916,7 @@ def note_list_item_detail(note_id, item_id):
     delete_embedding = a.delete_embedding
     get_current_user = a.get_current_user
     jsonify = a.jsonify
+    normalize_note_list_mode = a.normalize_note_list_mode
     parse_day_value = a.parse_day_value
     parse_time_str = a.parse_time_str
     pytz = a.pytz
@@ -919,7 +935,7 @@ def note_list_item_detail(note_id, item_id):
     if note.note_type != 'list':
         return jsonify({'error': 'Not a list note'}), 400
 
-    if request.method == 'DELETE':
+    def delete_current_item():
         if is_note_list_section_text(item.text):
             sibling_items = NoteListItem.query.filter_by(note_id=note.id).order_by(
                 NoteListItem.order_index.asc(),
@@ -935,7 +951,10 @@ def note_list_item_detail(note_id, item_id):
         _reindex_note_list_items(note.id)
         note.updated_at = datetime.now(pytz.UTC).replace(tzinfo=None)
         db.session.commit()
-        return '', 204
+        return jsonify({'deleted': True, 'id': item.id})
+
+    if request.method == 'DELETE':
+        return delete_current_item()
 
     data = request.json or {}
     old_text = item.text
@@ -1002,8 +1021,16 @@ def note_list_item_detail(note_id, item_id):
     if 'scheduled_date' in data:
         item.scheduled_date = parse_day_value(data.get('scheduled_date'))
     checked_updated = 'checked' in data
+    requested_checked = None
     if 'checked' in data:
-        item.checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
+        requested_checked = str(data.get('checked') or '').lower() in ['1', 'true', 'yes', 'on']
+        if (
+            requested_checked
+            and normalize_note_list_mode(note.list_mode) == 'revolving'
+            and not get_note_list_marker_kind(item.text)
+        ):
+            return delete_current_item()
+        item.checked = requested_checked
     if 'insert_index' in data:
         if insert_index is not None:
             items = NoteListItem.query.filter_by(note_id=note.id).order_by(
@@ -1140,6 +1167,7 @@ def duplicate_note(note_id):
         folder_id=note.folder_id,
         note_type=note.note_type or 'note',
         checkbox_mode=bool(note.checkbox_mode) if note.note_type == 'list' else False,
+        list_mode=(note.list_mode or 'standard') if note.note_type == 'list' else 'standard',
         is_listed=bool(note.is_listed)
     )
     db.session.add(copy_note)
@@ -1194,6 +1222,7 @@ def convert_note_to_list(note_id):
     NoteListItem.query.filter_by(note_id=note.id).delete(synchronize_session=False)
     note.note_type = 'list'
     note.checkbox_mode = False
+    note.list_mode = 'standard'
     note.content = ''
     note.updated_at = _now_local()
 

@@ -1750,6 +1750,19 @@ _jobs_bootstrapped = False
 
 
 
+def _sync_teamwork_calendar_tasks():
+    with app.app_context():
+        try:
+            from services.teamwork_sync import sync_all_assigned_tasks, teamwork_enabled
+
+            if not teamwork_enabled():
+                return {'disabled': True}
+            return sync_all_assigned_tasks()
+        except Exception as e:
+            app.logger.error(f"Error syncing Teamwork calendar tasks: {e}")
+            return {'error': str(e)}
+
+
 def _start_scheduler():
     """Start background scheduler for rollover and optional digest."""
     global scheduler
@@ -1779,6 +1792,20 @@ def _start_scheduler():
         id='daily_email_digest',
         replace_existing=True
     )
+    try:
+        from services.teamwork_sync import get_teamwork_sync_interval_minutes, teamwork_enabled
+
+        if teamwork_enabled() and os.environ.get('ENABLE_TEAMWORK_SYNC', '1') == '1':
+            scheduler.add_job(
+                _sync_teamwork_calendar_tasks,
+                'interval',
+                minutes=get_teamwork_sync_interval_minutes(),
+                id='teamwork_calendar_sync',
+                replace_existing=True,
+                max_instances=1,
+            )
+    except Exception as e:
+        app.logger.error(f"Error scheduling Teamwork calendar sync: {e}")
     # Note: Calendar reminders now use server-scheduled jobs (scheduled per-event)
     # Legacy minute-polling has been replaced with precise scheduling
     scheduler.start()

@@ -268,8 +268,12 @@ async function openListCreateModal() {
     if (!modal) return;
     const titleInput = document.getElementById('note-list-title');
     const checkboxToggle = document.getElementById('note-list-checkbox-toggle');
+    const revolvingToggle = document.getElementById('note-list-revolving-toggle');
     if (titleInput) titleInput.value = '';
     if (checkboxToggle) checkboxToggle.checked = false;
+    if (revolvingToggle) revolvingToggle.checked = false;
+    bindListCreateModeControls();
+    syncListCreateModeControls();
     if (!noteFolderState.folders.length) {
         await loadNoteFolders();
     }
@@ -281,6 +285,27 @@ async function openListCreateModal() {
 function closeListCreateModal() {
     const modal = document.getElementById('note-list-modal');
     if (modal) modal.classList.remove('active');
+}
+
+function syncListCreateModeControls() {
+    const checkboxToggle = document.getElementById('note-list-checkbox-toggle');
+    const revolvingToggle = document.getElementById('note-list-revolving-toggle');
+    if (!checkboxToggle || !revolvingToggle) return;
+    if (revolvingToggle.checked) {
+        checkboxToggle.checked = true;
+        checkboxToggle.disabled = true;
+        return;
+    }
+    checkboxToggle.disabled = false;
+}
+
+function bindListCreateModeControls() {
+    const revolvingToggle = document.getElementById('note-list-revolving-toggle');
+    if (!revolvingToggle || revolvingToggle.dataset.bound === '1') return;
+    revolvingToggle.dataset.bound = '1';
+    revolvingToggle.addEventListener('change', () => {
+        syncListCreateModeControls();
+    });
 }
 
 function populateListFolderSelect() {
@@ -311,12 +336,14 @@ function populateListFolderSelect() {
 async function createListFromModal() {
     const titleInput = document.getElementById('note-list-title');
     const checkboxToggle = document.getElementById('note-list-checkbox-toggle');
+    const revolvingToggle = document.getElementById('note-list-revolving-toggle');
     const folderSelect = document.getElementById('note-list-folder');
     const title = titleInput ? titleInput.value.trim() : '';
     if (!title) {
         showToast('List title required', 'warning');
         return;
     }
+    const listMode = revolvingToggle && revolvingToggle.checked ? 'revolving' : 'standard';
     const checkboxMode = checkboxToggle ? checkboxToggle.checked : false;
     const folderId = folderSelect ? folderSelect.value : '';
     try {
@@ -326,7 +353,8 @@ async function createListFromModal() {
             body: JSON.stringify({
                 title,
                 note_type: 'list',
-                checkbox_mode: checkboxMode,
+                checkbox_mode: checkboxMode || listMode === 'revolving',
+                list_mode: listMode,
                 folder_id: folderId || null
             })
         });

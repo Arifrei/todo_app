@@ -227,16 +227,21 @@ def handle_item(item_id):
 
 def create_item(list_id):
     import app as a
+    CalendarEvent = a.CalendarEvent
+    ENTITY_CALENDAR = a.ENTITY_CALENDAR
     ENTITY_TODO_ITEM = a.ENTITY_TODO_ITEM
     ENTITY_TODO_LIST = a.ENTITY_TODO_LIST
     TodoItem = a.TodoItem
     TodoList = a.TodoList
+    _next_calendar_order = a._next_calendar_order
+    _schedule_reminder_job = a._schedule_reminder_job
     datetime = a.datetime
     db = a.db
     get_current_user = a.get_current_user
     insert_item_in_order = a.insert_item_in_order
     jsonify = a.jsonify
     parse_day_value = a.parse_day_value
+    parse_time_str = a.parse_time_str
     pytz = a.pytz
     request = a.request
     start_embedding_job = a.start_embedding_job
@@ -259,6 +264,22 @@ def create_item(list_id):
     is_phase_item = bool(data.get('is_phase')) or status == 'phase'
     due_date_raw = data.get('due_date')
     due_date = parse_day_value(due_date_raw) if due_date_raw else None
+    start_time_raw = data.get('start_time')
+    parsed_start_time = None
+    if start_time_raw:
+        parsed_start_time = parse_time_str(start_time_raw)
+        if parsed_start_time is None:
+            return jsonify({'error': 'Invalid start_time'}), 400
+    reminder_raw = data.get('reminder_minutes_before')
+    if reminder_raw in (None, ''):
+        parsed_reminder_minutes = None
+    else:
+        try:
+            parsed_reminder_minutes = int(reminder_raw)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid reminder_minutes_before'}), 400
+    if due_date is None and (parsed_start_time is not None or parsed_reminder_minutes is not None):
+        return jsonify({'error': 'Choose a due date before adding time or a reminder'}), 400
     allowed_statuses = {'not_started', 'in_progress', 'done'}
     if status not in allowed_statuses:
         status = 'not_started'
@@ -311,10 +332,33 @@ def create_item(list_id):
     else:
         insert_item_in_order(todo_list, new_item)
 
+    created_calendar_event = None
+    if due_date and (not is_project) and (not is_phase_item) and (parsed_start_time is not None or parsed_reminder_minutes is not None):
+        created_calendar_event = CalendarEvent(
+            user_id=user.id,
+            title=new_item.content,
+            day=due_date,
+            start_time=parsed_start_time,
+            status=new_item.status,
+            priority='medium',
+            order_index=_next_calendar_order(due_date, user.id),
+            reminder_minutes_before=parsed_reminder_minutes,
+            reminder_sent=(new_item.status == 'done'),
+            reminder_snoozed_until=None,
+            todo_item_id=new_item.id,
+            rollover_enabled=True
+        )
+        db.session.add(created_calendar_event)
+        db.session.flush()
+
     db.session.commit()
+    if created_calendar_event and created_calendar_event.reminder_minutes_before is not None and created_calendar_event.start_time and created_calendar_event.status not in {'done', 'canceled'}:
+        _schedule_reminder_job(created_calendar_event)
     start_embedding_job(user.id, ENTITY_TODO_ITEM, new_item.id)
     if is_project and new_item.linked_list_id:
         start_embedding_job(user.id, ENTITY_TODO_LIST, new_item.linked_list_id)
+    if created_calendar_event:
+        start_embedding_job(user.id, ENTITY_CALENDAR, created_calendar_event.id)
     return jsonify(new_item.to_dict()), 201
 
 def move_item(item_id):

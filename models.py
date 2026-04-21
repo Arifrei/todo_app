@@ -249,6 +249,7 @@ class Note(db.Model):
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
     note_type = db.Column(db.String(20), nullable=False, default='note')  # note | list
     checkbox_mode = db.Column(db.Boolean, default=False)
+    list_mode = db.Column(db.String(20), nullable=False, default='standard')  # standard | revolving
     pinned = db.Column(db.Boolean, default=False)
     pin_order = db.Column(db.Integer, default=0)
     archived_at = db.Column(db.DateTime, nullable=True)
@@ -262,6 +263,9 @@ class Note(db.Model):
 
     def to_dict(self):
         note_type = self.note_type or 'note'
+        list_mode = (self.list_mode or 'standard').lower()
+        if list_mode not in {'standard', 'revolving'}:
+            list_mode = 'standard'
         return {
             'id': self.id,
             'title': self.title,
@@ -273,6 +277,7 @@ class Note(db.Model):
             'folder_id': self.folder_id,
             'note_type': note_type,
             'checkbox_mode': bool(self.checkbox_mode) if note_type == 'list' else False,
+            'list_mode': list_mode if note_type == 'list' else 'standard',
             'pinned': bool(self.pinned),
             'pin_order': self.pin_order or 0,
             'archived_at': self.archived_at.isoformat() if self.archived_at else None,
@@ -432,9 +437,18 @@ class CalendarEvent(db.Model):
     do_feed_item_id = db.Column(db.Integer, db.ForeignKey('do_feed_item.id'), nullable=True)
     recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
     item_note = db.Column(db.Text, nullable=True)
+    external_source = db.Column(db.String(50), nullable=True)
+    external_id = db.Column(db.String(100), nullable=True)
+    external_url = db.Column(db.String(500), nullable=True)
+    external_updated_at = db.Column(db.DateTime, nullable=True)
+    external_payload_hash = db.Column(db.String(64), nullable=True)
     notes = db.relationship('Note', backref='calendar_event', lazy=True, foreign_keys='Note.calendar_event_id')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('idx_calendar_event_external', 'user_id', 'external_source', 'external_id'),
+    )
 
     def is_phase_header(self):
         return self.is_phase
@@ -469,6 +483,10 @@ class CalendarEvent(db.Model):
             'note_list_item_id': self.note_list_item_id,
             'do_feed_item_id': self.do_feed_item_id,
             'item_note': self.item_note,
+            'external_source': self.external_source,
+            'external_id': self.external_id,
+            'external_url': self.external_url,
+            'external_updated_at': self.external_updated_at.isoformat() if self.external_updated_at else None,
             'linked_notes': [{'id': n.id, 'title': n.title} for n in (self.notes or [])]
         }
 

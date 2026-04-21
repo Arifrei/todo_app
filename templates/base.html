@@ -344,6 +344,17 @@
             </div>
         </nav>
         <div class="sidebar-overlay" id="sidebar-overlay"></div>
+        <div class="desktop-quick-access" id="desktop-quick-access">
+            <div class="desktop-quick-access-panel" id="desktop-quick-access-panel" aria-label="Quick Access items">
+                <div class="desktop-quick-access-panel-header">
+                    <span>Quick Access</span>
+                    <a href="/quick-access">Manage</a>
+                </div>
+                <div class="desktop-quick-access-list" id="desktop-quick-access-list">
+                    <div class="desktop-quick-access-state">Loading...</div>
+                </div>
+            </div>
+        </div>
 
         <main class="content" id="main-content">
             {% block content %}{% endblock %}

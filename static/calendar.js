@@ -289,6 +289,192 @@ function setCalendarLinkedText(element, text, options = {}) {
     }
 }
 
+const TEAMWORK_OPEN_LINK_PATTERN = /\[Open in Teamwork\]\(([^)]+)\)/i;
+let teamworkInfoPopover = null;
+let teamworkInfoPopoverDismissalsBound = false;
+
+function isTeamworkCalendarItem(ev) {
+    return String((ev && ev.external_source) || '').toLowerCase() === 'teamwork';
+}
+
+function getTeamworkDescriptionLine(ev, label) {
+    const prefix = `${label}:`;
+    const lines = String((ev && ev.description) || '').split(/\r?\n/);
+    const found = lines.find(line => line.trim().toLowerCase().startsWith(prefix.toLowerCase()));
+    return found ? found.trim().slice(prefix.length).trim() : '';
+}
+
+function getTeamworkTaskLink(ev) {
+    const direct = normalizeCalendarLinkHref(ev && ev.external_url);
+    if (direct) return direct;
+    const match = String((ev && ev.description) || '').match(TEAMWORK_OPEN_LINK_PATTERN);
+    return normalizeCalendarLinkHref(match && match[1]);
+}
+
+function getTeamworkInfo(ev) {
+    return {
+        title: (ev && ev.title) || 'Teamwork task',
+        project: getTeamworkDescriptionLine(ev, 'Project'),
+        taskList: getTeamworkDescriptionLine(ev, 'Task list'),
+        parent: getTeamworkDescriptionLine(ev, 'Parent task'),
+        url: getTeamworkTaskLink(ev)
+    };
+}
+
+function bindTeamworkInfoPopoverDismissals() {
+    if (teamworkInfoPopoverDismissalsBound) return;
+    teamworkInfoPopoverDismissalsBound = true;
+    document.addEventListener('click', (event) => {
+        if (!teamworkInfoPopover || teamworkInfoPopover.hidden) return;
+        if (teamworkInfoPopover.contains(event.target)) return;
+        closeTeamworkInfoPopover();
+    }, true);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeTeamworkInfoPopover();
+        }
+    });
+    window.addEventListener('resize', closeTeamworkInfoPopover);
+    document.addEventListener('scroll', closeTeamworkInfoPopover, true);
+}
+
+function ensureTeamworkInfoPopover() {
+    if (teamworkInfoPopover) return teamworkInfoPopover;
+    teamworkInfoPopover = document.createElement('div');
+    teamworkInfoPopover.id = 'teamwork-info-popover';
+    teamworkInfoPopover.className = 'teamwork-info-popover';
+    teamworkInfoPopover.hidden = true;
+    teamworkInfoPopover.setAttribute('role', 'dialog');
+    teamworkInfoPopover.setAttribute('aria-label', 'Teamwork task details');
+    document.body.appendChild(teamworkInfoPopover);
+    bindTeamworkInfoPopoverDismissals();
+    return teamworkInfoPopover;
+}
+
+function closeTeamworkInfoPopover() {
+    if (!teamworkInfoPopover) return;
+    teamworkInfoPopover.hidden = true;
+    teamworkInfoPopover.classList.remove('active');
+}
+
+function appendTeamworkInfoDetail(container, label, value, iconClass) {
+    if (!value) return;
+    const row = document.createElement('div');
+    row.className = 'teamwork-info-detail';
+    const icon = document.createElement('i');
+    icon.className = iconClass;
+    icon.setAttribute('aria-hidden', 'true');
+    const textWrap = document.createElement('div');
+    const labelEl = document.createElement('span');
+    labelEl.className = 'teamwork-info-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'teamwork-info-value';
+    valueEl.textContent = value;
+    textWrap.append(labelEl, valueEl);
+    row.append(icon, textWrap);
+    container.appendChild(row);
+}
+
+function positionTeamworkInfoPopover(popover, anchor) {
+    if (!popover || !anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const gap = 8;
+    const margin = 12;
+    const width = popover.offsetWidth || 320;
+    const height = popover.offsetHeight || 180;
+    let left = rect.left;
+    let top = rect.bottom + gap;
+    if (left + width > window.innerWidth - margin) {
+        left = window.innerWidth - width - margin;
+    }
+    if (top + height > window.innerHeight - margin) {
+        top = rect.top - height - gap;
+    }
+    popover.style.left = `${Math.max(margin, left)}px`;
+    popover.style.top = `${Math.max(margin, top)}px`;
+}
+
+function openTeamworkInfoPopover(ev, anchor) {
+    if (!isTeamworkCalendarItem(ev)) return;
+    const info = getTeamworkInfo(ev);
+    const popover = ensureTeamworkInfoPopover();
+    popover.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'teamwork-info-header';
+    const heading = document.createElement('div');
+    heading.className = 'teamwork-info-source';
+    heading.innerHTML = '<i class="fa-solid fa-briefcase"></i><span>Teamwork</span>';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'teamwork-info-close';
+    closeBtn.setAttribute('aria-label', 'Close Teamwork details');
+    closeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+    closeBtn.onclick = (event) => {
+        event.stopPropagation();
+        closeTeamworkInfoPopover();
+    };
+    header.append(heading, closeBtn);
+
+    const title = document.createElement('div');
+    title.className = 'teamwork-info-title';
+    title.textContent = info.title;
+
+    const details = document.createElement('div');
+    details.className = 'teamwork-info-details';
+    appendTeamworkInfoDetail(details, 'Project', info.project, 'fa-solid fa-folder-tree');
+    appendTeamworkInfoDetail(details, 'Task list', info.taskList, 'fa-solid fa-list-check');
+    appendTeamworkInfoDetail(details, 'Parent task', info.parent, 'fa-solid fa-code-branch');
+
+    if (info.url) {
+        const link = document.createElement('a');
+        link.className = 'teamwork-info-link';
+        link.href = info.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.innerHTML = '<i class="fa-solid fa-arrow-up-right-from-square"></i><span>Open in Teamwork</span>';
+        details.appendChild(link);
+    }
+
+    popover.append(header, title, details);
+    popover.hidden = false;
+    popover.classList.add('active');
+    positionTeamworkInfoPopover(popover, anchor);
+}
+
+function appendTeamworkInfoChip(container, ev) {
+    if (!container || !isTeamworkCalendarItem(ev)) return;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'meta-chip teamwork-info-trigger';
+    chip.title = 'Teamwork details';
+    chip.setAttribute('aria-label', 'Teamwork details');
+    chip.innerHTML = '<i class="fa-solid fa-briefcase"></i><span>Teamwork</span>';
+    chip.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openTeamworkInfoPopover(ev, chip);
+    };
+    container.appendChild(chip);
+}
+
+function handleTeamworkInfoRowClick(event, ev, anchor) {
+    if (!isTeamworkCalendarItem(ev)) return false;
+    if (shouldIgnoreCalendarSelection(event.target)) return false;
+    const selectionActive = typeof calendarSelection !== 'undefined' && calendarSelection.active;
+    if (selectionActive || event.metaKey || event.ctrlKey) return false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openTeamworkInfoPopover(ev, anchor);
+    return true;
+}
+
+function attachTeamworkInfoRowClick(row, ev) {
+    if (!row || !isTeamworkCalendarItem(ev)) return;
+    row.addEventListener('click', (event) => handleTeamworkInfoRowClick(event, ev, row));
+}
+
 function protectCalendarMarkdownLinks(text) {
     const matches = [];
     CALENDAR_MARKDOWN_LINK_PATTERN.lastIndex = 0;
@@ -1851,7 +2037,7 @@ function renderDayTimelinePanel(allItems) {
             : (ev.is_task_link
                 ? 'task-link'
                 : (ev.is_feed_item ? 'feed' : (ev.is_planner_item ? 'planner' : 'task')));
-        block.className = `calendar-timeline-block ${typeClass} ${isTimelineOnly ? 'timeline-only' : ''}`;
+        block.className = `calendar-timeline-block ${typeClass} ${isTimelineOnly ? 'timeline-only' : ''} ${isTeamworkCalendarItem(ev) ? 'teamwork-source' : ''}`;
         const overlapCols = ev.overlap_columns || 1;
         const rawLane = ev.lane || 0;
         const bucketCount = ev.hour_bucket_count || 1;
@@ -1897,7 +2083,15 @@ function renderDayTimelinePanel(allItems) {
         title.className = 'title';
         setCalendarLinkedText(title, ev.title || 'Untitled', { stopPropagation: true });
         block.append(time, title);
-        block.onclick = () => openTimelineItemTimeEditor(ev);
+        block.onclick = (event) => {
+            if (isTeamworkCalendarItem(ev)) {
+                event.preventDefault();
+                event.stopPropagation();
+                openTeamworkInfoPopover(ev, block);
+                return;
+            }
+            openTimelineItemTimeEditor(ev);
+        };
         track.appendChild(block);
     });
 
@@ -1913,15 +2107,23 @@ function renderDayTimelinePanel(allItems) {
         const row = document.createElement('button');
         row.type = 'button';
         const isTimelineOnly = getCalendarDisplayMode(ev) === 'timeline_only';
-        row.className = `calendar-unscheduled-item ${isTimelineOnly ? 'timeline-only' : ''}`;
+        row.className = `calendar-unscheduled-item ${isTimelineOnly ? 'timeline-only' : ''} ${isTeamworkCalendarItem(ev) ? 'teamwork-source' : ''}`;
         const title = document.createElement('span');
         title.className = 'title';
         setCalendarLinkedText(title, ev.title || 'Untitled', { stopPropagation: true });
         const hint = document.createElement('span');
         hint.className = 'hint';
-        hint.textContent = isTimelineOnly ? 'timeline only' : 'tap to add time';
+        hint.textContent = isTeamworkCalendarItem(ev) ? 'Teamwork' : (isTimelineOnly ? 'timeline only' : 'tap to add time');
         row.append(title, hint);
-        row.onclick = () => openTimelineItemTimeEditor(ev);
+        row.onclick = (event) => {
+            if (isTeamworkCalendarItem(ev)) {
+                event.preventDefault();
+                event.stopPropagation();
+                openTeamworkInfoPopover(ev, row);
+                return;
+            }
+            openTimelineItemTimeEditor(ev);
+        };
         unscheduledEl.appendChild(row);
     });
 }
@@ -2035,7 +2237,7 @@ function renderCalendarEvents() {
     const renderPhaseOrTask = (ev, isChild = false) => {
         const row = document.createElement('div');
         const doneClass = (!ev.is_phase && ev.status === 'done') ? 'done' : '';
-        row.className = `calendar-row ${ev.is_phase ? 'phase' : ''} ${doneClass} ${isChild ? 'child-row' : ''}`;
+        row.className = `calendar-row ${ev.is_phase ? 'phase' : ''} ${doneClass} ${isChild ? 'child-row' : ''} ${isTeamworkCalendarItem(ev) ? 'teamwork-row' : ''}`;
         row.dataset.id = ev.id;
         row.dataset.groupId = ev.group_id || '';
         row.dataset.type = ev.is_phase ? 'phase' : 'task';
@@ -2883,6 +3085,7 @@ function renderCalendarEvents() {
             chip.textContent = ev.phase_title ? `# ${ev.phase_title}` : 'Phase';
             meta.appendChild(chip);
         }
+        appendTeamworkInfoChip(meta, ev);
         const noteChips = document.createElement('div');
         noteChips.className = 'calendar-note-chips';
         (ev.linked_notes || []).forEach(note => {
@@ -3039,6 +3242,7 @@ function renderCalendarEvents() {
         if (noteChips.childNodes.length) actions.append(noteChips);
         actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
+        attachTeamworkInfoRowClick(row, ev);
         attachCalendarRowSelection(row, ev);
         return row;
     };
@@ -3046,7 +3250,7 @@ function renderCalendarEvents() {
     const renderEvent = (ev, isChild = false) => {
         const row = document.createElement('div');
         const canceledClass = ev.status === 'canceled' ? 'canceled' : '';
-        row.className = `calendar-row event ${canceledClass} ${isChild ? 'child-row' : ''}`;
+        row.className = `calendar-row event ${canceledClass} ${isChild ? 'child-row' : ''} ${isTeamworkCalendarItem(ev) ? 'teamwork-row' : ''}`;
         row.dataset.id = ev.id;
         row.dataset.groupId = ev.group_id || '';
         row.dataset.type = 'event';
@@ -3080,6 +3284,11 @@ function renderCalendarEvents() {
         timeBtn.title = timeLabel || 'Add time';
         timeBtn.onclick = () => openCalendarTimeModal(ev);
         titleWrap.appendChild(timeBtn);
+
+        const meta = document.createElement('div');
+        meta.className = 'calendar-meta-lite';
+        appendTeamworkInfoChip(meta, ev);
+        if (meta.childNodes.length) titleWrap.appendChild(meta);
 
         const noteChips = document.createElement('div');
         noteChips.className = 'calendar-note-chips';
@@ -3239,6 +3448,7 @@ function renderCalendarEvents() {
         if (noteChips.childNodes.length) actions.append(noteChips);
         actions.append(priorityDot, overflowMenuContainer);
         row.append(left, titleWrap, actions);
+        attachTeamworkInfoRowClick(row, ev);
         attachCalendarRowSelection(row, ev);
         return row;
     };

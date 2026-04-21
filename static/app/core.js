@@ -33,7 +33,7 @@ let touchDragIsPhase = false;
 let touchDragPhaseId = null;
 let notesState = { notes: [], archivedNotes: [], activeNoteId: null, dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, activeFolderId: null, activeNoteIsArchived: false, activeNoteIsListed: true, activePlannerContext: null };
 let pinState = { hasPin: false, hasNotesPin: false, settingNotesPin: false, pendingNoteId: null, pendingFolderId: null, pendingAction: null };
-let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, insertionIndex: null, insertionTarget: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null, collapsedSectionIds: new Set(), collapsedSubsectionIds: new Set(), sectionReorderMode: false };
+let listState = { listId: null, items: [], dirty: false, activeSnapshot: null, sessionSnapshot: null, checkboxMode: false, listMode: 'standard', insertionIndex: null, insertionTarget: null, editingItemId: null, expandedItemId: null, isArchived: false, isListed: true, folderId: null, collapsedSectionIds: new Set(), collapsedSubsectionIds: new Set(), sectionReorderMode: false };
 let listDuplicateState = { groups: [], method: null, threshold: null, selectedIds: new Set() };
 let listAutoSaveTimer = null;
 let listAutoSaveInFlight = false;
@@ -442,7 +442,6 @@ async function createItem(listId, listType) {
     const descriptionInput = document.getElementById('item-description');
     const notesInput = document.getElementById('item-notes');
     const tagsInput = document.getElementById('item-tags');
-    const dueDateInput = document.getElementById('item-due-date');
     const phaseSelect = document.getElementById('item-phase-select');
     const projectTypeSelect = document.getElementById('project-type-select');
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -453,21 +452,25 @@ async function createItem(listId, listType) {
     const isPhase = modeInput && modeInput.value === 'phase';
     const phaseId = isPhase ? null : (phaseSelect && phaseSelect.value ? parseInt(phaseSelect.value, 10) : (hiddenPhase && hiddenPhase.value ? parseInt(hiddenPhase.value, 10) : null));
     const projectType = projectTypeSelect ? projectTypeSelect.value : 'list';
+    const scheduling = readTaskSchedulingForm('add');
+    if (!scheduling) return;
 
     try {
         const res = await fetch(`/api/lists/${listId}/items`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content,
-                    description: descriptionInput ? descriptionInput.value.trim() : '',
-                    notes: notesInput ? notesInput.value.trim() : '',
-                    tags: tagsInput ? tagsInput.value.trim() : '',
-                    due_date: dueDateInput && dueDateInput.value ? dueDateInput.value : null,
-                    is_project: listType === 'hub',
-                    project_type: projectType, // Pass the selected type
-                    phase_id: phaseId,
-                    status: isPhase ? 'phase' : 'not_started'
+            body: JSON.stringify({
+                content,
+                description: descriptionInput ? descriptionInput.value.trim() : '',
+                notes: notesInput ? notesInput.value.trim() : '',
+                tags: tagsInput ? tagsInput.value.trim() : '',
+                due_date: scheduling.due_date,
+                start_time: scheduling.start_time,
+                reminder_minutes_before: scheduling.reminder_minutes_before,
+                is_project: listType === 'hub',
+                project_type: projectType, // Pass the selected type
+                phase_id: phaseId,
+                status: isPhase ? 'phase' : 'not_started'
             })
         });
 
@@ -481,9 +484,13 @@ async function createItem(listId, listType) {
             } else {
                 window.location.reload(); // Simple reload to refresh state
             }
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Could not create item. Please try again.', 'error');
         }
     } catch (e) {
         console.error('Error creating item:', e);
+        showToast('Could not create item. Please try again.', 'error');
     }
 }
 
@@ -623,6 +630,121 @@ function formatDatePickerReminderMinutes(minutes) {
     return `${numeric}m`;
 }
 
+function getTaskSchedulingRefs(mode = 'add') {
+    if (mode === 'edit') {
+        return {
+            toggleGroup: document.getElementById('edit-item-schedule-toggle-group'),
+            toggleButton: document.getElementById('edit-item-schedule-toggle'),
+            toggleLabel: document.getElementById('edit-item-schedule-toggle-label'),
+            fields: document.getElementById('edit-item-scheduling-fields'),
+            dueDateInput: document.getElementById('edit-item-due-date'),
+            timeInput: document.getElementById('edit-item-start-time'),
+            reminderInput: document.getElementById('edit-item-reminder')
+        };
+    }
+    return {
+        toggleGroup: document.getElementById('item-schedule-toggle-group'),
+        toggleButton: document.getElementById('item-schedule-toggle'),
+        toggleLabel: document.getElementById('item-schedule-toggle-label'),
+        fields: document.getElementById('item-scheduling-fields'),
+        dueDateInput: document.getElementById('item-due-date'),
+        timeInput: document.getElementById('item-start-time'),
+        reminderInput: document.getElementById('item-reminder')
+    };
+}
+
+function taskSchedulingHasValues(mode = 'add') {
+    const refs = getTaskSchedulingRefs(mode);
+    const dueDate = refs.dueDateInput && refs.dueDateInput.value ? refs.dueDateInput.value.trim() : '';
+    const timeValue = refs.timeInput && refs.timeInput.value ? refs.timeInput.value.trim() : '';
+    const reminderValue = refs.reminderInput && refs.reminderInput.value ? refs.reminderInput.value.trim() : '';
+    return Boolean(dueDate || timeValue || reminderValue);
+}
+
+function updateTaskSchedulingToggle(mode = 'add') {
+    const refs = getTaskSchedulingRefs(mode);
+    if (!refs.toggleButton || !refs.toggleLabel || !refs.fields) return;
+    const expanded = !refs.fields.classList.contains('u-hidden');
+    let label = 'Add date';
+    if (expanded) {
+        label = 'Hide date options';
+    } else if (taskSchedulingHasValues(mode)) {
+        label = 'Edit date';
+    }
+    refs.toggleLabel.textContent = label;
+    refs.toggleButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+}
+
+function setTaskSchedulingExpanded(mode = 'add', expanded = false) {
+    const refs = getTaskSchedulingRefs(mode);
+    if (!refs.fields) return;
+    refs.fields.classList.toggle('u-hidden', !expanded);
+    updateTaskSchedulingToggle(mode);
+}
+
+function toggleTaskSchedulingFields(mode = 'add') {
+    const refs = getTaskSchedulingRefs(mode);
+    if (!refs.fields) return;
+    setTaskSchedulingExpanded(mode, refs.fields.classList.contains('u-hidden'));
+}
+
+function resetTaskSchedulingFields(mode = 'add') {
+    const refs = getTaskSchedulingRefs(mode);
+    if (refs.dueDateInput) refs.dueDateInput.value = '';
+    if (refs.timeInput) refs.timeInput.value = '';
+    if (refs.reminderInput) refs.reminderInput.value = '';
+    setTaskSchedulingExpanded(mode, false);
+}
+
+function populateTaskSchedulingFields(mode = 'add', { dueDate = '', startTime = '', reminderMinutes = '' } = {}) {
+    const refs = getTaskSchedulingRefs(mode);
+    if (refs.dueDateInput) refs.dueDateInput.value = dueDate || '';
+    if (refs.timeInput) refs.timeInput.value = startTime ? normalizeDatePickerTimeValue(startTime) : '';
+    if (refs.reminderInput) refs.reminderInput.value = formatDatePickerReminderMinutes(reminderMinutes);
+    setTaskSchedulingExpanded(mode, Boolean((dueDate || '').trim() || (startTime || '').trim() || !(reminderMinutes === null || reminderMinutes === undefined || reminderMinutes === '')));
+}
+
+function readTaskSchedulingForm(mode = 'add') {
+    const refs = getTaskSchedulingRefs(mode);
+    if (!refs.dueDateInput && !refs.timeInput && !refs.reminderInput) {
+        return {
+            due_date: undefined,
+            start_time: undefined,
+            reminder_minutes_before: undefined
+        };
+    }
+    if (refs.toggleGroup && refs.toggleGroup.style.display === 'none') {
+        return {
+            due_date: undefined,
+            start_time: undefined,
+            reminder_minutes_before: undefined
+        };
+    }
+    const dueDate = refs.dueDateInput && refs.dueDateInput.value ? refs.dueDateInput.value.trim() : null;
+    const timeValue = refs.timeInput && refs.timeInput.value ? refs.timeInput.value.trim() : null;
+    const reminderRaw = refs.reminderInput && refs.reminderInput.value ? refs.reminderInput.value.trim() : '';
+    const reminderMinutes = reminderRaw ? parseDatePickerReminderMinutes(reminderRaw) : null;
+
+    if (!dueDate && (timeValue || reminderRaw)) {
+        showToast('Choose a date before adding time or a reminder.', 'error');
+        return null;
+    }
+    if (reminderRaw && reminderMinutes === null) {
+        showToast('Use 30m, 2h, or 1d for reminders.', 'error');
+        return null;
+    }
+    if (reminderRaw && !timeValue) {
+        showToast('Add a time to use reminders.', 'error');
+        return null;
+    }
+
+    return {
+        due_date: dueDate,
+        start_time: timeValue || null,
+        reminder_minutes_before: reminderMinutes
+    };
+}
+
 function openDatePickerModal({
     itemIds = [],
     currentDate = '',
@@ -668,6 +790,14 @@ async function saveDatePickerSelection(remove = false) {
     const reminderMinutes = reminderRaw ? parseDatePickerReminderMinutes(reminderRaw) : null;
     if (reminderRaw && reminderMinutes === null) {
         showToast('Use 30m, 2h, or 1d for reminders.', 'error');
+        return;
+    }
+    if (!remove && !dueDate && (timeValue || reminderRaw)) {
+        showToast('Choose a date before adding time or a reminder.', 'error');
+        return;
+    }
+    if (!remove && reminderRaw && !timeValue) {
+        showToast('Add a time to use reminders.', 'error');
         return;
     }
     const payload = { due_date: dueDate };
@@ -1135,7 +1265,22 @@ function renderCalendarItemNoteContent(text) {
     const view = document.getElementById('calendar-item-note-view');
     if (!view) return;
     const content = (text || '').trim();
-    view.innerHTML = content ? escapeHtml(content).replace(/\n/g, '<br>') : '<em>No quick note yet.</em>';
+    view.innerHTML = content ? renderSafeMarkdownLinks(content).replace(/\n/g, '<br>') : '<em>No quick note yet.</em>';
+}
+
+function renderSafeMarkdownLinks(text) {
+    const raw = String(text || '');
+    const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    let html = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(raw)) !== null) {
+        html += escapeHtml(raw.slice(lastIndex, match.index));
+        html += `<a href="${escapeHtml(match[2])}" target="_blank" rel="noopener noreferrer">${escapeHtml(match[1])}</a>`;
+        lastIndex = pattern.lastIndex;
+    }
+    html += escapeHtml(raw.slice(lastIndex));
+    return html;
 }
 
 async function openCalendarItemNoteModal(ev, mode = 'view') {
@@ -2513,8 +2658,7 @@ function openAddItemModal(phaseId = null, mode = 'task') {
     const phaseSelectGroup = document.getElementById('phase-select-group');
     const projectTypeGroup = document.getElementById('project-type-select-group');
     const projectTypeSelect = document.getElementById('project-type-select');
-    const dueDateGroup = document.getElementById('item-due-date-group');
-    const dueDateInput = document.getElementById('item-due-date');
+    const scheduleToggleGroup = document.getElementById('item-schedule-toggle-group');
 
     if (modeInput) modeInput.value = mode || 'task';
 
@@ -2540,8 +2684,8 @@ function openAddItemModal(phaseId = null, mode = 'task') {
     }
     if (phaseSelectGroup) phaseSelectGroup.style.display = mode === 'phase' ? 'none' : 'block';
     const isTaskMode = mode === 'task';
-    if (dueDateGroup) dueDateGroup.style.display = isTaskMode ? 'block' : 'none';
-    if (!isTaskMode && dueDateInput) dueDateInput.value = '';
+    if (scheduleToggleGroup) scheduleToggleGroup.style.display = isTaskMode ? 'block' : 'none';
+    resetTaskSchedulingFields('add');
 }
 
 function closeAddItemModal() {
@@ -2558,8 +2702,6 @@ function closeAddItemModal() {
         tagsInput.value = '';
         hideTaskTagDropdown(tagsInput);
     }
-    const dueDateInput = document.getElementById('item-due-date');
-    if (dueDateInput) dueDateInput.value = '';
     const phaseSelect = document.getElementById('item-phase-select');
     if (phaseSelect) phaseSelect.value = '';
     const hiddenPhase = document.getElementById('item-phase-id');
@@ -2574,8 +2716,9 @@ function closeAddItemModal() {
     
     const phaseSelectGroup = document.getElementById('phase-select-group');
     if (phaseSelectGroup) phaseSelectGroup.style.display = 'block';
-    const dueDateGroup = document.getElementById('item-due-date-group');
-    if (dueDateGroup) dueDateGroup.style.display = 'block';
+    const scheduleToggleGroup = document.getElementById('item-schedule-toggle-group');
+    if (scheduleToggleGroup) scheduleToggleGroup.style.display = 'block';
+    resetTaskSchedulingFields('add');
 }
 
 function openBulkImportModal() {
@@ -2772,7 +2915,7 @@ async function moveItem() {
     }
 }
 
-function openEditItemModal(itemId, content, description, notes, tags, dueDate) {
+function openEditItemModal(itemId, content, description, notes, tags, dueDate, allowScheduling = true, currentStartTime = '', currentReminderMinutes = '') {
     const modal = document.getElementById('edit-item-modal');
     document.getElementById('edit-item-id').value = itemId;
     document.getElementById('edit-item-content').value = content;
@@ -2780,8 +2923,17 @@ function openEditItemModal(itemId, content, description, notes, tags, dueDate) {
     document.getElementById('edit-item-notes').value = notes || '';
     const tagsInput = document.getElementById('edit-item-tags');
     if (tagsInput) tagsInput.value = tags || '';
-    const dueDateInput = document.getElementById('edit-item-due-date');
-    if (dueDateInput) dueDateInput.value = dueDate || '';
+    const scheduleToggleGroup = document.getElementById('edit-item-schedule-toggle-group');
+    if (scheduleToggleGroup) scheduleToggleGroup.style.display = allowScheduling ? 'block' : 'none';
+    if (allowScheduling) {
+        populateTaskSchedulingFields('edit', {
+            dueDate: dueDate || '',
+            startTime: currentStartTime || '',
+            reminderMinutes: currentReminderMinutes
+        });
+    } else {
+        resetTaskSchedulingFields('edit');
+    }
     modal.classList.add('active');
 }
 
@@ -2793,8 +2945,7 @@ function closeEditItemModal() {
         tagsInput.value = '';
         hideTaskTagDropdown(tagsInput);
     }
-    const dueDateInput = document.getElementById('edit-item-due-date');
-    if (dueDateInput) dueDateInput.value = '';
+    resetTaskSchedulingFields('edit');
 }
 
 // --- Move Navigation (step-by-step) ---
@@ -3015,8 +3166,8 @@ async function saveItemChanges() {
     const notes = document.getElementById('edit-item-notes').value.trim();
     const tagsInput = document.getElementById('edit-item-tags');
     const tags = tagsInput ? tagsInput.value.trim() : '';
-    const dueDateInput = document.getElementById('edit-item-due-date');
-    const dueDate = dueDateInput && dueDateInput.value ? dueDateInput.value : null;
+    const scheduling = readTaskSchedulingForm('edit');
+    if (!scheduling) return;
 
     if (!content) return;
 
@@ -3024,14 +3175,26 @@ async function saveItemChanges() {
         const res = await fetch(`/api/items/${itemId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content, description, notes, tags, due_date: dueDate })
+            body: JSON.stringify({
+                content,
+                description,
+                notes,
+                tags,
+                due_date: scheduling.due_date,
+                start_time: scheduling.start_time,
+                reminder_minutes_before: scheduling.reminder_minutes_before
+            })
         });
 
         if (res.ok) {
             window.location.reload();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Could not update item. Please try again.', 'error');
         }
     } catch (e) {
         console.error('Error updating item:', e);
+        showToast('Could not update item. Please try again.', 'error');
     }
 }
 

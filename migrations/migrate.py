@@ -154,6 +154,7 @@ def ensure_note_table(cur):
                 content TEXT,
                 note_type VARCHAR(20) NOT NULL DEFAULT 'note',
                 checkbox_mode BOOLEAN DEFAULT 0,
+                list_mode VARCHAR(20) NOT NULL DEFAULT 'standard',
                 pinned BOOLEAN DEFAULT 0,
                 pin_order INTEGER DEFAULT 0,
                 archived_at TIMESTAMP,
@@ -180,6 +181,7 @@ def ensure_note_table(cur):
     add_column(cur, "note", "content", "TEXT")
     add_column(cur, "note", "note_type", "VARCHAR(20) NOT NULL DEFAULT 'note'", default_sql="'note'")
     add_column(cur, "note", "checkbox_mode", "BOOLEAN DEFAULT 0", default_sql="0")
+    add_column(cur, "note", "list_mode", "VARCHAR(20) NOT NULL DEFAULT 'standard'", default_sql="'standard'")
     add_column(cur, "note", "pinned", "BOOLEAN DEFAULT 0")
     add_column(cur, "note", "pin_order", "INTEGER DEFAULT 0")
     add_column(cur, "note", "archived_at", "TIMESTAMP")
@@ -307,10 +309,19 @@ def ensure_calendar_event_table(cur):
                 planner_multi_line_id INTEGER,
                 note_list_item_id INTEGER,
                 do_feed_item_id INTEGER,
+                external_source VARCHAR(50),
+                external_id VARCHAR(100),
+                external_url VARCHAR(500),
+                external_updated_at TIMESTAMP,
+                external_payload_hash VARCHAR(64),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_calendar_event_external "
+            "ON calendar_event(user_id, external_source, external_id)"
         )
         print("[add] calendar_event table created")
         return
@@ -338,10 +349,19 @@ def ensure_calendar_event_table(cur):
     add_column(cur, "calendar_event", "note_list_item_id", "INTEGER")
     add_column(cur, "calendar_event", "do_feed_item_id", "INTEGER")
     add_column(cur, "calendar_event", "item_note", "TEXT")
+    add_column(cur, "calendar_event", "external_source", "VARCHAR(50)")
+    add_column(cur, "calendar_event", "external_id", "VARCHAR(100)")
+    add_column(cur, "calendar_event", "external_url", "VARCHAR(500)")
+    add_column(cur, "calendar_event", "external_updated_at", "TIMESTAMP")
+    add_column(cur, "calendar_event", "external_payload_hash", "VARCHAR(64)")
     add_column(cur, "calendar_event", "priority", "VARCHAR(10) DEFAULT 'medium'")
     add_column(cur, "calendar_event", "status", "VARCHAR(20) DEFAULT 'not_started'")
     add_column(cur, "calendar_event", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "calendar_event", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_event_external "
+        "ON calendar_event(user_id, external_source, external_id)"
+    )
 
 
 def ensure_recurring_event_table(cur):

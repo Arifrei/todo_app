@@ -5,6 +5,10 @@ def normalize_note_type(raw):
     return "list" if str(raw or "").lower() == "list" else "note"
 
 
+def normalize_note_list_mode(raw):
+    return "revolving" if str(raw or "").strip().lower() == "revolving" else "standard"
+
+
 def parse_bool(value, default=False):
     if value is None:
         return default

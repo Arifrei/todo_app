@@ -4,9 +4,10 @@ function initListEditorPage() {
     if (page.dataset.listEditorInit === '1') return;
 
     const titleInput = document.getElementById('list-title');
-    const checkboxToggle = document.getElementById('list-checkbox-toggle');
+    const checkboxToggles = getListCheckboxToggles();
+    const revolvingToggles = getListRevolvingToggles();
     const listId = getListEditorNoteId();
-    if (!titleInput || !checkboxToggle || !listId) {
+    if (!titleInput || !checkboxToggles.length || !revolvingToggles.length || !listId) {
         return;
     }
     page.dataset.listEditorInit = '1';
@@ -402,25 +403,86 @@ function initListEditorPage() {
     document.addEventListener('mousedown', handleListEditorOutsideClick);
 
     titleInput.addEventListener('input', refreshListDirtyState);
-    checkboxToggle.addEventListener('change', () => {
-        if (listState.isArchived) {
-            showReadOnlyToast();
-            checkboxToggle.checked = listState.checkboxMode;
-            return;
-        }
-        listState.checkboxMode = checkboxToggle.checked;
-        refreshListDirtyState();
-        renderListItems();
+    checkboxToggles.forEach((checkboxToggle) => {
+        checkboxToggle.addEventListener('change', () => {
+            if (listState.isArchived) {
+                showReadOnlyToast();
+                syncListModeControls();
+                return;
+            }
+            if (isListRevolvingMode()) {
+                listState.checkboxMode = true;
+                syncListModeControls();
+                return;
+            }
+            listState.checkboxMode = !!checkboxToggle.checked;
+            syncListModeControls();
+            refreshListDirtyState();
+            renderListItems();
+        });
+    });
+    revolvingToggles.forEach((revolvingToggle) => {
+        revolvingToggle.addEventListener('change', () => {
+            if (listState.isArchived) {
+                showReadOnlyToast();
+                syncListModeControls();
+                return;
+            }
+            listState.listMode = revolvingToggle.checked ? 'revolving' : 'standard';
+            if (isListRevolvingMode()) {
+                listState.checkboxMode = true;
+            }
+            syncListModeControls();
+            refreshListDirtyState();
+            renderListItems();
+        });
     });
 
+    syncListModeControls();
     updateListSelectionUI();
     updateListSectionReorderUI();
     loadListForEditor(listId);
 }
 
+function getListCheckboxToggles() {
+    return Array.from(document.querySelectorAll('[data-list-checkbox-toggle]'));
+}
+
+function getListRevolvingToggles() {
+    return Array.from(document.querySelectorAll('[data-list-revolving-toggle]'));
+}
+
+function normalizeListModeValue(raw) {
+    return String(raw || '').trim().toLowerCase() === 'revolving' ? 'revolving' : 'standard';
+}
+
+function isListRevolvingMode() {
+    return normalizeListModeValue(listState.listMode) === 'revolving';
+}
+
+function syncListModeControls() {
+    const checkboxToggles = getListCheckboxToggles();
+    const revolvingToggles = getListRevolvingToggles();
+    const revolving = isListRevolvingMode();
+    if (revolving) {
+        listState.checkboxMode = true;
+    }
+    revolvingToggles.forEach((toggle) => {
+        toggle.checked = revolving;
+        toggle.disabled = !!listState.isArchived;
+        const wrapper = toggle.closest('.list-toggle, .list-menu-toggle');
+        if (wrapper) wrapper.classList.toggle('disabled', !!toggle.disabled);
+    });
+    checkboxToggles.forEach((toggle) => {
+        toggle.checked = revolving ? true : !!listState.checkboxMode;
+        toggle.disabled = !!listState.isArchived || revolving;
+        const wrapper = toggle.closest('.list-toggle, .list-menu-toggle');
+        if (wrapper) wrapper.classList.toggle('disabled', !!toggle.disabled);
+    });
+}
+
 function setListEditorReadOnly(isReadOnly) {
     const titleInput = document.getElementById('list-title');
-    const checkboxToggle = document.getElementById('list-checkbox-toggle');
     const saveBtn = document.getElementById('list-save-btn');
     const cancelBtn = document.getElementById('list-cancel-btn');
     const selectToggle = document.getElementById('list-select-toggle');
@@ -428,7 +490,8 @@ function setListEditorReadOnly(isReadOnly) {
     const sectionReorderDoneBtn = document.getElementById('list-section-reorder-done-btn');
     const bulkBar = document.getElementById('list-bulk-bar');
     if (titleInput) titleInput.disabled = isReadOnly;
-    if (checkboxToggle) checkboxToggle.disabled = isReadOnly;
+    getListCheckboxToggles().forEach((toggle) => { toggle.disabled = isReadOnly; });
+    getListRevolvingToggles().forEach((toggle) => { toggle.disabled = isReadOnly; });
     if (saveBtn) saveBtn.disabled = isReadOnly;
     if (cancelBtn) cancelBtn.disabled = isReadOnly || !hasListSessionChanges();
     if (selectToggle) selectToggle.disabled = isReadOnly;
@@ -437,6 +500,7 @@ function setListEditorReadOnly(isReadOnly) {
     if (bulkBar && isReadOnly) bulkBar.classList.remove('active');
     if (isReadOnly) setListSelectionMode(false);
     if (isReadOnly) setListSectionReorderMode(false);
+    syncListModeControls();
 }
 
 function handleListEditorOutsideClick(e) {
@@ -569,6 +633,7 @@ async function loadListForEditor(listId) {
         listState.listId = list.id;
         listState.items = list.items || [];
         listState.checkboxMode = !!list.checkbox_mode;
+        listState.listMode = normalizeListModeValue(list.list_mode);
         listState.isArchived = !!list.is_archived;
         listState.isListed = !!list.is_listed;
         listState.folderId = list.folder_id || null;
@@ -580,11 +645,13 @@ async function loadListForEditor(listId) {
         listState.activeSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode,
+            listMode: normalizeListModeValue(list.list_mode),
             items: cloneListSnapshotItems(list.items || [])
         };
         listState.sessionSnapshot = {
             title: list.title || '',
             checkboxMode: !!list.checkbox_mode,
+            listMode: normalizeListModeValue(list.list_mode),
             items: cloneListSnapshotItems(list.items || [])
         };
         listState.dirty = false;
@@ -592,10 +659,9 @@ async function loadListForEditor(listId) {
         listState.editingItemId = null;
         listState.expandedItemId = null;
         const titleInput = document.getElementById('list-title');
-        const checkboxToggle = document.getElementById('list-checkbox-toggle');
         const updatedLabel = document.getElementById('list-updated-label');
         if (titleInput) titleInput.value = list.title || '';
-        if (checkboxToggle) checkboxToggle.checked = !!list.checkbox_mode;
+        syncListModeControls();
         if (updatedLabel) updatedLabel.textContent = list.updated_at ? formatNoteDate(list.updated_at) : 'New list';
         renderListItems();
         setListDirty(false);
@@ -613,16 +679,18 @@ async function loadListForEditor(listId) {
 
 function refreshListDirtyState() {
     const titleInput = document.getElementById('list-title');
-    const checkboxToggle = document.getElementById('list-checkbox-toggle');
-    if (!titleInput || !checkboxToggle) return;
+    if (!titleInput) return;
     if (listState.isArchived) {
         showReadOnlyToast();
         return;
     }
-    const snapshot = listState.activeSnapshot || { title: '', checkboxMode: false };
+    const snapshot = listState.activeSnapshot || { title: '', checkboxMode: false, listMode: 'standard' };
     const title = (titleInput.value || '').trim();
-    const checkboxMode = checkboxToggle.checked;
-    const dirty = title !== (snapshot.title || '') || checkboxMode !== !!snapshot.checkboxMode;
+    const checkboxMode = !!listState.checkboxMode;
+    const listMode = normalizeListModeValue(listState.listMode);
+    const dirty = title !== (snapshot.title || '')
+        || checkboxMode !== !!snapshot.checkboxMode
+        || listMode !== normalizeListModeValue(snapshot.listMode);
     setListDirty(dirty);
 }
 
@@ -694,21 +762,23 @@ function setListDirty(dirty) {
 
 function getCurrentListMetadataSnapshot() {
     const titleInput = document.getElementById('list-title');
-    const checkboxToggle = document.getElementById('list-checkbox-toggle');
     return {
         title: titleInput ? (titleInput.value || '').trim() : '',
-        checkboxMode: checkboxToggle ? !!checkboxToggle.checked : false
+        checkboxMode: !!listState.checkboxMode,
+        listMode: normalizeListModeValue(listState.listMode)
     };
 }
 
 function getListSessionSnapshot() {
-    return listState.sessionSnapshot || listState.activeSnapshot || { title: '', checkboxMode: false, items: [] };
+    return listState.sessionSnapshot || listState.activeSnapshot || { title: '', checkboxMode: false, listMode: 'standard', items: [] };
 }
 
 function hasListSessionChanges() {
     const current = getCurrentListMetadataSnapshot();
     const session = getListSessionSnapshot();
-    const metadataChanged = current.title !== (session.title || '') || current.checkboxMode !== !!session.checkboxMode;
+    const metadataChanged = current.title !== (session.title || '')
+        || current.checkboxMode !== !!session.checkboxMode
+        || normalizeListModeValue(current.listMode) !== normalizeListModeValue(session.listMode);
     return metadataChanged || hasListItemSessionChanges(session);
 }
 
@@ -809,13 +879,13 @@ async function cancelListMetadataChanges() {
         return;
     }
     const titleInput = document.getElementById('list-title');
-    const checkboxToggle = document.getElementById('list-checkbox-toggle');
-    if (!titleInput || !checkboxToggle) return;
+    if (!titleInput) return;
     const snapshot = getListSessionSnapshot();
     try {
         titleInput.value = snapshot.title || '';
-        checkboxToggle.checked = !!snapshot.checkboxMode;
+        listState.listMode = normalizeListModeValue(snapshot.listMode);
         listState.checkboxMode = !!snapshot.checkboxMode;
+        syncListModeControls();
         if (hasListItemSessionChanges(snapshot)) {
             await restoreListItemsToSessionSnapshot(snapshot);
         }
@@ -827,7 +897,8 @@ async function cancelListMetadataChanges() {
         }
         listState.sessionSnapshot = {
             title: (titleInput.value || '').trim(),
-            checkboxMode: !!checkboxToggle.checked,
+            checkboxMode: !!listState.checkboxMode,
+            listMode: normalizeListModeValue(listState.listMode),
             items: cloneListSnapshotItems(listState.items || [])
         };
         updateListSessionActionState();
@@ -862,8 +933,7 @@ async function saveListMetadata(options = {}) {
     const { closeAfter = false, silent = false } = options;
     const listId = listState.listId;
     const titleInput = document.getElementById('list-title');
-    const checkboxToggle = document.getElementById('list-checkbox-toggle');
-    if (!listId || !titleInput || !checkboxToggle) return;
+    if (!listId || !titleInput) return;
     if (!listState.dirty) {
         if (closeAfter) {
             window.location.href = getListReturnUrl();
@@ -871,21 +941,25 @@ async function saveListMetadata(options = {}) {
         return;
     }
     const title = titleInput.value.trim() || 'Untitled List';
-    const checkboxMode = checkboxToggle.checked;
+    const checkboxMode = !!listState.checkboxMode;
+    const listMode = normalizeListModeValue(listState.listMode);
     try {
         const res = await fetch(`/api/notes/${listId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, checkbox_mode: checkboxMode })
+            body: JSON.stringify({ title, checkbox_mode: checkboxMode, list_mode: listMode })
         });
         if (!res.ok) throw new Error('Save failed');
         const saved = await res.json();
         listState.activeSnapshot = {
             title: saved.title || title,
             checkboxMode: !!saved.checkbox_mode,
+            listMode: normalizeListModeValue(saved.list_mode),
             items: cloneListSnapshotItems(listState.items || [])
         };
         listState.checkboxMode = !!saved.checkbox_mode;
+        listState.listMode = normalizeListModeValue(saved.list_mode);
+        syncListModeControls();
         setListDirty(false);
         const updatedLabel = document.getElementById('list-updated-label');
         if (updatedLabel) updatedLabel.textContent = saved.updated_at ? formatNoteDate(saved.updated_at) : 'Saved';
@@ -1047,11 +1121,19 @@ async function shareCurrentList() {
 const LIST_SECTION_PREFIX = '[[section]]';
 const LIST_SUBSECTION_PREFIX = '[[subsection]]';
 const SECTION_DRAG_CLICK_SUPPRESS_MS = 250;
+const ITEM_DRAG_CLICK_SUPPRESS_MS = 250;
 const SECTION_DRAG_AUTOSCROLL_EDGE_PX = 72;
 const SECTION_DRAG_AUTOSCROLL_STEP_PX = 20;
 let listSectionReorderState = {
     dragSectionId: null,
     overSectionId: null,
+    dropPosition: null,
+    suppressClicksUntil: 0,
+    dragPreviewEl: null
+};
+let listItemReorderState = {
+    dragItemId: null,
+    overItemId: null,
     dropPosition: null,
     suppressClicksUntil: 0,
     dragPreviewEl: null
@@ -1944,6 +2026,189 @@ async function handleSectionDrop(event) {
 
 function handleSectionDragEnd() {
     resetSectionDragState();
+}
+
+function clearItemDropIndicators() {
+    document.querySelectorAll('.list-pill.item-drop-before, .list-pill.item-drop-after, .list-pill.item-dragging')
+        .forEach((el) => {
+            el.classList.remove('item-drop-before', 'item-drop-after', 'item-dragging');
+            el.removeAttribute('data-drop-position');
+        });
+}
+
+function clearItemDropTargets() {
+    document.querySelectorAll('.list-pill.item-drop-before, .list-pill.item-drop-after')
+        .forEach((el) => {
+            el.classList.remove('item-drop-before', 'item-drop-after');
+            el.removeAttribute('data-drop-position');
+        });
+}
+
+function markItemDropTarget(itemId, dropPosition) {
+    clearItemDropTargets();
+    const target = document.querySelector(`.list-pill[data-item-id="${itemId}"]`);
+    if (!target) return;
+    target.setAttribute('data-drop-position', dropPosition === 'after' ? 'after' : 'before');
+    if (dropPosition === 'after') {
+        target.classList.add('item-drop-after');
+    } else {
+        target.classList.add('item-drop-before');
+    }
+}
+
+function clearListItemDragPreview() {
+    const previewEl = listItemReorderState.dragPreviewEl;
+    if (previewEl && previewEl.parentNode) {
+        previewEl.parentNode.removeChild(previewEl);
+    }
+    listItemReorderState.dragPreviewEl = null;
+}
+
+function resetListItemDragState() {
+    listItemReorderState.dragItemId = null;
+    listItemReorderState.overItemId = null;
+    listItemReorderState.dropPosition = null;
+    listItemReorderState.suppressClicksUntil = Date.now() + ITEM_DRAG_CLICK_SUPPRESS_MS;
+    clearItemDropIndicators();
+    clearListItemDragPreview();
+    document.body.classList.remove('list-item-dragging');
+}
+
+function canDragListItems() {
+    return !listState.isArchived
+        && !listState.sectionReorderMode
+        && !isListSelectionActive()
+        && !((listSearchState.query || '').trim());
+}
+
+function getListDropInsertIndex(sourceItemId, targetItemId, dropPosition = 'before') {
+    if (!sourceItemId || !targetItemId || sourceItemId === targetItemId) return null;
+    const sorted = getSortedListItems();
+    const orderedIds = sorted.map((item) => item.id);
+    const sourceIndex = orderedIds.indexOf(sourceItemId);
+    const targetIndex = orderedIds.indexOf(targetItemId);
+    if (sourceIndex === -1 || targetIndex === -1) return null;
+    let insertIndex = targetIndex + (dropPosition === 'after' ? 1 : 0);
+    if (sourceIndex < insertIndex) insertIndex -= 1;
+    return Math.max(0, Math.min(insertIndex, orderedIds.length - 1));
+}
+
+async function reorderListItemByDrop(sourceItemId, targetItemId, dropPosition = 'before') {
+    const insertIndex = getListDropInsertIndex(sourceItemId, targetItemId, dropPosition);
+    if (insertIndex === null) return false;
+    await updateListItem(sourceItemId, { insert_index: insertIndex });
+    await loadListItems();
+    return true;
+}
+
+function handleListItemDragStart(event) {
+    if (!canDragListItems()) {
+        event.preventDefault();
+        return;
+    }
+    const dragSource = event.currentTarget;
+    const itemId = parseInt(dragSource.dataset.itemId || '', 10);
+    if (!itemId) {
+        event.preventDefault();
+        return;
+    }
+    closeListItemMenu();
+    clearListItemActions();
+    clearListItemDragPreview();
+    listItemReorderState.dragItemId = itemId;
+    listItemReorderState.overItemId = null;
+    listItemReorderState.dropPosition = null;
+    listItemReorderState.suppressClicksUntil = Date.now() + ITEM_DRAG_CLICK_SUPPRESS_MS;
+    const pill = dragSource.closest('.list-pill');
+    if (pill) {
+        pill.classList.add('item-dragging');
+    }
+    document.body.classList.add('list-item-dragging');
+    if (event.dataTransfer) {
+        const itemTitle = dragSource.dataset.itemTitle || 'Item';
+        const preview = document.createElement('div');
+        preview.className = 'list-section-drag-preview';
+        preview.textContent = itemTitle;
+        preview.style.position = 'fixed';
+        preview.style.top = '-9999px';
+        preview.style.left = '-9999px';
+        preview.style.pointerEvents = 'none';
+        document.body.appendChild(preview);
+        listItemReorderState.dragPreviewEl = preview;
+        try {
+            event.dataTransfer.setDragImage(preview, 18, 12);
+        } catch (_) {
+            // Some environments ignore custom drag images.
+        }
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(itemId));
+    }
+}
+
+function handleListItemDragOver(event) {
+    if (!canDragListItems()) return;
+    const sourceId = listItemReorderState.dragItemId;
+    if (!sourceId) return;
+    autoScrollWhileSectionDragging(event.clientY);
+    const target = event.currentTarget;
+    const targetId = parseInt(target.dataset.itemId || '', 10);
+    if (!targetId || targetId === sourceId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const rect = target.getBoundingClientRect();
+    const midpoint = rect.top + (rect.height / 2);
+    const dropPosition = event.clientY >= midpoint ? 'after' : 'before';
+    if (
+        targetId !== listItemReorderState.overItemId ||
+        dropPosition !== listItemReorderState.dropPosition
+    ) {
+        listItemReorderState.overItemId = targetId;
+        listItemReorderState.dropPosition = dropPosition;
+        markItemDropTarget(targetId, dropPosition);
+    }
+}
+
+function handleListItemDragLeave(event) {
+    if (!canDragListItems()) return;
+    const sourceId = listItemReorderState.dragItemId;
+    if (!sourceId) return;
+    const target = event.currentTarget;
+    const related = event.relatedTarget;
+    if (related && target.contains(related)) return;
+    const targetId = parseInt(target.dataset.itemId || '', 10);
+    if (!targetId) return;
+    if (targetId === listItemReorderState.overItemId) {
+        listItemReorderState.overItemId = null;
+        listItemReorderState.dropPosition = null;
+        clearItemDropTargets();
+        const sourcePill = document.querySelector(`.list-pill[data-item-id="${sourceId}"]`);
+        if (sourcePill) sourcePill.classList.add('item-dragging');
+    }
+}
+
+async function handleListItemDrop(event) {
+    if (!canDragListItems()) return;
+    const sourceId = listItemReorderState.dragItemId;
+    const target = event.currentTarget;
+    const targetId = parseInt(target.dataset.itemId || '', 10);
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    event.preventDefault();
+    const dropPosition = listItemReorderState.dropPosition || 'before';
+    try {
+        const moved = await reorderListItemByDrop(sourceId, targetId, dropPosition);
+        if (moved) {
+            showToast('Item moved', 'success', 1200);
+        }
+    } catch (err) {
+        console.error('Item reorder failed:', err);
+        showToast('Could not reorder item', 'error');
+    } finally {
+        resetListItemDragState();
+    }
+}
+
+function handleListItemDragEnd() {
+    resetListItemDragState();
 }
 
 function isListSelectionActive() {
@@ -3601,6 +3866,14 @@ function createListPill(item) {
     const searchQuery = (listSearchState.query || '').trim();
     const searchLower = searchQuery.toLowerCase();
     const noteHasMatch = !!(searchLower && item.note && item.note.toLowerCase().includes(searchLower));
+    const dragEnabled = canDragListItems();
+
+    if (dragEnabled) {
+        pill.classList.add('reorderable');
+        pill.addEventListener('dragover', handleListItemDragOver);
+        pill.addEventListener('dragleave', handleListItemDragLeave);
+        pill.addEventListener('drop', handleListItemDrop);
+    }
 
     if (listState.checkboxMode) {
         const checkbox = document.createElement('input');
@@ -3615,7 +3888,13 @@ function createListPill(item) {
                 checkbox.checked = !!item.checked;
                 return;
             }
-            await updateListItem(item.id, { checked: checkbox.checked }, { refresh: true });
+            try {
+                await updateListItem(item.id, { checked: checkbox.checked }, { refresh: true });
+            } catch (err) {
+                console.error('List checkbox update failed:', err);
+                checkbox.checked = !!item.checked;
+                showToast('Could not update item', 'error');
+            }
         });
         pill.appendChild(checkbox);
     }
@@ -3731,11 +4010,17 @@ function createListPill(item) {
     actions.className = 'list-pill-actions';
     const moveBtn = document.createElement('button');
     moveBtn.type = 'button';
-    moveBtn.className = 'list-pill-action';
-    moveBtn.title = 'Move item';
-    moveBtn.innerHTML = '<i class="fa-solid fa-layer-group"></i>';
+    moveBtn.className = 'list-pill-action drag-handle';
+    moveBtn.title = dragEnabled ? 'Drag or move item' : 'Move item';
+    moveBtn.innerHTML = '<i class="fa-solid fa-grip-lines"></i>';
+    moveBtn.dataset.itemId = String(item.id);
+    moveBtn.dataset.itemTitle = textValue || linkLabel || 'Item';
+    moveBtn.setAttribute('draggable', dragEnabled ? 'true' : 'false');
+    moveBtn.addEventListener('dragstart', handleListItemDragStart);
+    moveBtn.addEventListener('dragend', handleListItemDragEnd);
     moveBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (Date.now() < listItemReorderState.suppressClicksUntil) return;
         if (isListSelectionActive()) return;
         if (listState.isArchived) {
             showReadOnlyToast();
@@ -3873,6 +4158,7 @@ function createListPill(item) {
 
     pill.addEventListener('click', () => {
         clearTouchActive();
+        if (Date.now() < listItemReorderState.suppressClicksUntil) return;
         if (ignoreClick) {
             ignoreClick = false;
             return;

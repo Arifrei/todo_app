@@ -35,6 +35,23 @@
                     <i class="fa-solid fa-ellipsis-vertical"></i>
                 </button>
                 <div class="dropdown-menu notes-actions-menu" id="list-actions-menu">
+                    <div class="list-mode-menu-group">
+                        <div class="list-menu-group-label">List options</div>
+                        <label class="list-menu-toggle" for="list-checkbox-toggle-mobile">
+                            <span class="list-menu-toggle-copy">
+                                <span class="list-menu-toggle-title">Checkboxes</span>
+                                <span class="list-menu-toggle-sub">Show checkboxes for list items</span>
+                            </span>
+                            <input type="checkbox" id="list-checkbox-toggle-mobile" data-list-checkbox-toggle />
+                        </label>
+                        <label class="list-menu-toggle" for="list-revolving-toggle-mobile">
+                            <span class="list-menu-toggle-copy">
+                                <span class="list-menu-toggle-title">Auto-remove checked</span>
+                                <span class="list-menu-toggle-sub">Checked items disappear instead of staying in the list</span>
+                            </span>
+                            <input type="checkbox" id="list-revolving-toggle-mobile" data-list-revolving-toggle />
+                        </label>
+                    </div>
                     <button class="dropdown-item" id="list-select-toggle" type="button" aria-pressed="false">
                         <i class="fa-solid fa-check-square"></i> Select
                     </button>
@@ -68,10 +85,16 @@
         <div class="note-meta list-meta">
             <input id="list-title" type="text" placeholder="Untitled list" autocomplete="off" aria-label="List title" />
             <div class="note-meta-right list-meta-right">
-                <label class="list-toggle">
-                    <input type="checkbox" id="list-checkbox-toggle" />
-                    <span>Checkboxes</span>
-                </label>
+                <div class="list-meta-toggles list-meta-toggles-desktop">
+                    <label class="list-toggle">
+                        <input type="checkbox" id="list-checkbox-toggle" data-list-checkbox-toggle />
+                        <span>Checkboxes</span>
+                    </label>
+                    <label class="list-toggle">
+                        <input type="checkbox" id="list-revolving-toggle" data-list-revolving-toggle />
+                        <span>Auto-remove checked</span>
+                    </label>
+                </div>
                 <span class="note-updated" id="list-updated-label">New list</span>
             </div>
         </div>

@@ -203,6 +203,7 @@
     {% set tag_list = item.tag_list() %}
     {% set is_blocked = (todo_list.type == 'list' and (item.id in blocked_ids) and (not item.is_phase) and item.status != 'phase') %}
     {% set linked_event = linked_calendar_events.get(item.id) if linked_calendar_events else None %}
+    {% set due_time_label = linked_event.start_time.strftime('%I:%M %p').lstrip('0') if linked_event and linked_event.start_time else '' %}
     {% if todo_list.type == 'list' and item.is_phase %}
         {% set phase_tasks = item.phase_tasks
             |selectattr('is_phase', 'equalto', False)
@@ -255,7 +256,7 @@
                 <div class="task-meta-lite u-mt-6px u-flex-wrap-gap-05">
                     {% if item.due_date and not show_inline_due %}
                     <a class="meta-chip time" href="/calendar?day={{ item.due_date }}&mode=day" title="Open {{ item.due_date }} in Calendar day view">
-                        Due {{ item.due_date }}
+                        Due {{ item.due_date }}{% if due_time_label %} at {{ due_time_label }}{% endif %}
                     </a>
                     {% endif %}
                     {% if item.linked_notes|length %}
@@ -284,7 +285,7 @@
         <div class="task-footer">
             {% if todo_list.type in ['list', 'light'] and not item.is_phase and item.due_date %}
             <a class="meta-chip time task-inline-date task-footer-inline-date" href="/calendar?day={{ item.due_date }}&mode=day" title="Open {{ item.due_date }} in Calendar day view">
-                Due {{ item.due_date }}
+                Due {{ item.due_date }}{% if due_time_label %} at {{ due_time_label }}{% endif %}
             </a>
             {% endif %}
             <div class="task-actions">
@@ -316,7 +317,7 @@
                         <i class="fa-solid fa-ellipsis-vertical"></i>
                     </button>
                     <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                        <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`, '{{ item.due_date or '' }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                        <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (tag_list|join(', '))|replace('`', '\\`') }}`, '{{ item.due_date or '' }}', false, '', ''); toggleTaskActionsMenu({{ item.id }}, event);">
                             <i class="fa-solid fa-pen"></i> Edit
                         </button>
                         <button class="task-actions-menu-item danger" data-onclick="deleteItem({{ item.id }});">
@@ -337,7 +338,7 @@
                             <i class="fa-solid fa-ellipsis-vertical"></i>
                         </button>
                         <div class="task-actions-menu" id="task-actions-menu-{{ item.id }}">
-                            <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`, '{{ item.due_date or '' }}'); toggleTaskActionsMenu({{ item.id }}, event);">
+                            <button class="task-actions-menu-item" data-onclick="openEditItemModal({{ item.id }}, `{{ item.content|replace('`', '\\`') }}`, `{{ (item.description or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ (item.notes or '')|replace('`', '\\`')|replace('\n', '\\n') }}`, `{{ ((tag_list|join(', ')) if todo_list.type == 'list' else '')|replace('`', '\\`') }}`, '{{ item.due_date or '' }}', true, '{{ linked_event.start_time.strftime('%H:%M') if linked_event and linked_event.start_time else '' }}', '{{ linked_event.reminder_minutes_before if linked_event and linked_event.reminder_minutes_before is not none else '' }}'); toggleTaskActionsMenu({{ item.id }}, event);">
                                 <i class="fa-solid fa-pen"></i> Edit
                             </button>
                             <button class="task-actions-menu-item" data-onclick="openMoveModal({{ item.id }}, 'task', '{{ item.content|replace('`', '\\`') }}'); toggleTaskActionsMenu({{ item.id }}, event);">
@@ -410,9 +411,27 @@
             <label for="item-tags">Tags (comma separated)</label>
             <input type="text" id="item-tags" class="form-control" placeholder="e.g. home, errands" autocomplete="off">
         </div>
-        <div class="form-group" id="item-due-date-group">
-            <label for="item-due-date">Due date</label>
-            <input type="date" id="item-due-date" class="form-control">
+        {% endif %}
+        {% if todo_list.type in ['list', 'light'] %}
+        <div class="form-group" id="item-schedule-toggle-group">
+            <button type="button" class="btn btn-secondary btn-small" id="item-schedule-toggle" data-onclick="toggleTaskSchedulingFields('add')" aria-controls="item-scheduling-fields" aria-expanded="false">
+                <i class="fa-solid fa-calendar-days"></i>
+                <span id="item-schedule-toggle-label">Add date</span>
+            </button>
+        </div>
+        <div id="item-scheduling-fields" class="u-hidden">
+            <div class="form-group" id="item-due-date-group">
+                <label for="item-due-date">Date</label>
+                <input type="date" id="item-due-date" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="item-start-time">Time (optional)</label>
+                <input type="text" id="item-start-time" class="form-control" placeholder="e.g. 10, 12pm, 3:30pm">
+            </div>
+            <div class="form-group">
+                <label for="item-reminder">Reminder (optional)</label>
+                <input type="text" id="item-reminder" class="form-control" placeholder="e.g. 30m, 2h, 1d">
+            </div>
         </div>
         {% endif %}
         <input type="hidden" id="item-phase-id">
@@ -447,9 +466,27 @@
             <label for="edit-item-tags">Tags (comma separated)</label>
             <input type="text" id="edit-item-tags" class="form-control" autocomplete="off">
         </div>
-        <div class="form-group">
-            <label for="edit-item-due-date">Due date</label>
-            <input type="date" id="edit-item-due-date" class="form-control">
+        {% endif %}
+        {% if todo_list.type in ['list', 'light'] %}
+        <div class="form-group" id="edit-item-schedule-toggle-group">
+            <button type="button" class="btn btn-secondary btn-small" id="edit-item-schedule-toggle" data-onclick="toggleTaskSchedulingFields('edit')" aria-controls="edit-item-scheduling-fields" aria-expanded="false">
+                <i class="fa-solid fa-calendar-days"></i>
+                <span id="edit-item-schedule-toggle-label">Add date</span>
+            </button>
+        </div>
+        <div id="edit-item-scheduling-fields" class="u-hidden">
+            <div class="form-group">
+                <label for="edit-item-due-date">Date</label>
+                <input type="date" id="edit-item-due-date" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="edit-item-start-time">Time (optional)</label>
+                <input type="text" id="edit-item-start-time" class="form-control" placeholder="e.g. 10, 12pm, 3:30pm">
+            </div>
+            <div class="form-group">
+                <label for="edit-item-reminder">Reminder (optional)</label>
+                <input type="text" id="edit-item-reminder" class="form-control" placeholder="e.g. 30m, 2h, 1d">
+            </div>
         </div>
         {% endif %}
         <div class="modal-actions">

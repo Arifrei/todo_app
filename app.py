@@ -42,6 +42,7 @@ from services.quick_bookmark_handlers import (
 )
 from services.validation_service import (
     merge_tag_list,
+    normalize_note_list_mode,
     normalize_note_type,
     normalize_tags,
     parse_bool,
@@ -846,6 +847,21 @@ def manual_rollover():
 def send_digest_now():
     from services.inline_routes import send_digest_now as _impl
     return _impl()
+
+
+@app.route('/api/teamwork/sync', methods=['POST'])
+def teamwork_sync_now():
+    from services.teamwork_routes import teamwork_sync_now as _impl
+    return _impl()
+
+
+@app.route('/api/teamwork/webhook', methods=['GET', 'POST'])
+def teamwork_webhook():
+    if request.method == 'GET':
+        return jsonify({'status': 'ok'})
+    from services.teamwork_routes import teamwork_webhook as _impl
+    return _impl()
+
 
 def _get_or_create_notification_settings(user_id):
     from backend.app_core_logic import _get_or_create_notification_settings as _impl

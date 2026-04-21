@@ -18,6 +18,309 @@ let homepageTouchDragState = {
     currentY: 0
 };
 
+const desktopQuickAccessMenuState = {
+    loaded: false,
+    lastLoadedAt: 0,
+    loadingPromise: null
+};
+
+const DESKTOP_QUICK_ACCESS_REFRESH_MS = 10000;
+
+function buildQuickAccessDayUrl(dayOffset = 0) {
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + dayOffset);
+    const year = targetDate.getFullYear();
+    const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+    const day = String(targetDate.getDate()).padStart(2, '0');
+    return `/calendar?day=${year}-${month}-${day}&mode=day`;
+}
+
+function getDesktopQuickAccessSystemItems() {
+    return [
+        {
+            title: 'Today',
+            icon: 'fa-solid fa-calendar-day',
+            url: buildQuickAccessDayUrl(0),
+            item_type: 'system',
+            system_label: 'Calendar shortcut'
+        },
+        {
+            title: 'Tomorrow',
+            icon: 'fa-solid fa-calendar-plus',
+            url: buildQuickAccessDayUrl(1),
+            item_type: 'system',
+            system_label: 'Calendar shortcut'
+        }
+    ];
+}
+
+function getQuickAccessItemSubtitle(item) {
+    const itemTypeLabels = {
+        system: 'Calendar shortcut',
+        custom: 'Custom link',
+        list: 'Project or list',
+        note: 'Note',
+        folder: 'Folder',
+        calendar: 'Calendar date'
+    };
+    if (item.system_label) return item.system_label;
+    return itemTypeLabels[item.item_type] || 'Quick access item';
+}
+
+function ensureQAProtectedState() {
+    if (typeof window.qaProtectedState === 'undefined') {
+        window.qaProtectedState = {
+            active: false,
+            pendingUrl: null,
+            protectedType: null,
+            itemType: null,
+            referenceId: null,
+            protectedFolderId: null
+        };
+    }
+    return window.qaProtectedState;
+}
+
+if (typeof window.verifyQAProtectedPin !== 'function') {
+    window.verifyQAProtectedPin = async function(pin) {
+        const state = ensureQAProtectedState();
+        const { protectedType, itemType, referenceId, protectedFolderId, pendingUrl } = state;
+
+        try {
+            let unlockEndpoint = '';
+
+            if (protectedType === 'note' && itemType === 'note') {
+                unlockEndpoint = `/api/notes/${referenceId}/unlock`;
+            } else if (protectedType === 'folder' && itemType === 'folder') {
+                unlockEndpoint = `/api/note-folders/${referenceId}/unlock`;
+            } else if (protectedType === 'parent_folder') {
+                unlockEndpoint = `/api/note-folders/${protectedFolderId}/unlock`;
+            } else {
+                showToast('Unknown protection type', 'error', 3000);
+                return false;
+            }
+
+            const res = await fetch(unlockEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin })
+            });
+
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                showToast(data.error || 'Incorrect PIN', 'error', 3000);
+                const input = document.getElementById('pin-input');
+                if (input) input.value = '';
+                return false;
+            }
+
+            closePinModal();
+            state.active = false;
+            window.location.href = pendingUrl;
+            return true;
+        } catch (error) {
+            console.error('Error verifying Quick Access PIN:', error);
+            showToast('Error verifying PIN', 'error', 3000);
+            return false;
+        }
+    };
+}
+
+function openProtectedQuickAccessItem(item) {
+    if (typeof openPinModal !== 'function') {
+        return false;
+    }
+
+    const state = ensureQAProtectedState();
+    state.pendingUrl = item.url || '/quick-access';
+    state.protectedType = item.protected_type || null;
+    state.itemType = item.item_type || null;
+    state.referenceId = item.reference_id ? Number(item.reference_id) : null;
+    state.protectedFolderId = item.protected_folder_id ? Number(item.protected_folder_id) : null;
+    state.active = true;
+    openPinModal();
+    return true;
+}
+
+function createDesktopQuickAccessItemElement(item) {
+    const link = document.createElement('a');
+    link.className = 'desktop-quick-access-item';
+    if (item.item_type === 'system') link.classList.add('is-system');
+    if (item.is_protected) link.classList.add('is-protected');
+    link.href = item.url || '/quick-access';
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'desktop-quick-access-item-icon';
+    const icon = document.createElement('i');
+    icon.className = item.icon || 'fa-solid fa-bookmark';
+    icon.setAttribute('aria-hidden', 'true');
+    iconWrap.appendChild(icon);
+
+    const textWrap = document.createElement('span');
+    textWrap.className = 'desktop-quick-access-item-text';
+
+    const title = document.createElement('span');
+    title.className = 'desktop-quick-access-item-title';
+    title.textContent = item.title || 'Untitled';
+
+    const subtitle = document.createElement('span');
+    subtitle.className = 'desktop-quick-access-item-subtitle';
+    subtitle.textContent = getQuickAccessItemSubtitle(item);
+
+    textWrap.appendChild(title);
+    textWrap.appendChild(subtitle);
+
+    link.appendChild(iconWrap);
+    link.appendChild(textWrap);
+
+    if (item.is_protected) {
+        const lock = document.createElement('span');
+        lock.className = 'desktop-quick-access-item-lock';
+        lock.innerHTML = '<i class="fa-solid fa-lock" aria-hidden="true"></i>';
+        link.appendChild(lock);
+        link.addEventListener('click', (event) => {
+            if (!openProtectedQuickAccessItem(item)) return;
+            event.preventDefault();
+            event.stopPropagation();
+        });
+    }
+
+    return link;
+}
+
+function renderDesktopQuickAccessItems(items = [], stateMessage = '', isError = false) {
+    const list = document.getElementById('desktop-quick-access-list');
+    if (!list) return;
+
+    list.replaceChildren();
+
+    const systemItems = getDesktopQuickAccessSystemItems();
+    const customItems = Array.isArray(items) ? items : [];
+
+    systemItems.forEach((item) => list.appendChild(createDesktopQuickAccessItemElement(item)));
+
+    if (customItems.length > 0) {
+        const divider = document.createElement('div');
+        divider.className = 'desktop-quick-access-divider';
+        list.appendChild(divider);
+        customItems.forEach((item) => list.appendChild(createDesktopQuickAccessItemElement(item)));
+    }
+
+    if (stateMessage) {
+        const state = document.createElement('div');
+        state.className = `desktop-quick-access-state${isError ? ' is-error' : ''}`;
+        state.textContent = stateMessage;
+        list.appendChild(state);
+    }
+}
+
+async function loadDesktopQuickAccessMenu({ force = false } = {}) {
+    const isFresh = desktopQuickAccessMenuState.loaded &&
+        (Date.now() - desktopQuickAccessMenuState.lastLoadedAt) < DESKTOP_QUICK_ACCESS_REFRESH_MS;
+    if (!force && isFresh) return;
+    if (desktopQuickAccessMenuState.loadingPromise) return desktopQuickAccessMenuState.loadingPromise;
+
+    if (!desktopQuickAccessMenuState.loaded) {
+        renderDesktopQuickAccessItems([], 'Loading quick access...');
+    }
+
+    desktopQuickAccessMenuState.loadingPromise = fetch('/api/quick-access')
+        .then(async (response) => {
+            if (!response.ok) throw new Error('Failed to load quick access');
+            const items = await response.json();
+            renderDesktopQuickAccessItems(items);
+            desktopQuickAccessMenuState.loaded = true;
+            desktopQuickAccessMenuState.lastLoadedAt = Date.now();
+        })
+        .catch((error) => {
+            console.error('Failed to load desktop quick access items:', error);
+            renderDesktopQuickAccessItems([], 'Could not load saved quick access items.', true);
+        })
+        .finally(() => {
+            desktopQuickAccessMenuState.loadingPromise = null;
+        });
+
+    return desktopQuickAccessMenuState.loadingPromise;
+}
+
+function positionDesktopQuickAccessMenu(trigger, container) {
+    if (!trigger || !container) return;
+
+    const sidebar = document.getElementById('sidebar-nav');
+    const panel = document.getElementById('desktop-quick-access-panel');
+    const triggerRect = trigger.getBoundingClientRect();
+    const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : triggerRect;
+    const panelHeight = panel ? panel.offsetHeight || 360 : 360;
+    const panelMargin = 18;
+    const top = Math.min(
+        Math.max(triggerRect.top + triggerRect.height / 2, panelMargin + panelHeight / 2),
+        window.innerHeight - panelMargin - panelHeight / 2
+    );
+
+    container.style.left = `${Math.min(sidebarRect.right + 12, triggerRect.right + 10)}px`;
+    container.style.top = `${top}px`;
+}
+
+function initDesktopQuickAccessMenu() {
+    const container = document.getElementById('desktop-quick-access');
+    const navTrigger = document.querySelector('.nav-links li[data-nav-id="quick-access"]');
+    const triggerLink = navTrigger ? navTrigger.querySelector('a') : null;
+    if (!container || container.dataset.ready === '1') return;
+    container.dataset.ready = '1';
+
+    const isMobileViewport = () => window.matchMedia && window.matchMedia('(max-width: 1024px)').matches;
+    let closeTimer = null;
+
+    if (triggerLink) {
+        triggerLink.setAttribute('aria-haspopup', 'true');
+        triggerLink.setAttribute('aria-expanded', 'false');
+    }
+
+    const loadMenu = () => {
+        loadDesktopQuickAccessMenu()
+            .then(() => positionDesktopQuickAccessMenu(navTrigger, container))
+            .catch(() => {});
+    };
+
+    const openMenu = () => {
+        if (isMobileViewport()) return;
+        clearTimeout(closeTimer);
+        positionDesktopQuickAccessMenu(navTrigger, container);
+        container.classList.add('is-open');
+        if (triggerLink) triggerLink.setAttribute('aria-expanded', 'true');
+        loadMenu();
+    };
+
+    const closeMenu = () => {
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(() => {
+            container.classList.remove('is-open');
+            if (triggerLink) triggerLink.setAttribute('aria-expanded', 'false');
+        }, 220);
+    };
+
+    if (navTrigger) {
+        navTrigger.addEventListener('mouseenter', openMenu);
+        navTrigger.addEventListener('focusin', openMenu);
+        navTrigger.addEventListener('mouseleave', closeMenu);
+        navTrigger.addEventListener('focusout', closeMenu);
+    }
+
+    container.addEventListener('mouseenter', openMenu);
+    container.addEventListener('focusin', openMenu);
+    container.addEventListener('mouseleave', closeMenu);
+    container.addEventListener('focusout', closeMenu);
+    window.addEventListener('resize', () => {
+        if (container.classList.contains('is-open')) {
+            positionDesktopQuickAccessMenu(navTrigger, container);
+        }
+    });
+
+    if (!isMobileViewport()) {
+        loadMenu();
+    }
+}
+
 function initHomepageReorder() {
     const grid = document.getElementById('homepage-grid');
     if (!grid) return; // Not on homepage
@@ -386,6 +689,7 @@ function initBaseChrome() {
             window.location.href = '/quick-access';
         });
     }
+    initDesktopQuickAccessMenu();
 
     const aiLauncherBtn = document.getElementById('ai-launcher-btn');
     if (aiLauncherBtn && typeof toggleAIPanel === 'function') {
