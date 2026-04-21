@@ -513,6 +513,27 @@ def delete_imported_task(task_id, user_id=None, commit=True):
     return deleted
 
 
+def mark_imported_task_done(task_id, user_id=None, commit=True, reason='webhook_completed'):
+    task_id = str(task_id)
+    query = CalendarEvent.query.filter_by(external_source=SOURCE_NAME, external_id=task_id)
+    if user_id:
+        query = query.filter_by(user_id=user_id)
+    events = query.all()
+    if not events:
+        return {'action': 'skipped', 'reason': 'not_imported', 'task_id': task_id}
+    for event in events:
+        event.status = 'done'
+        event.is_event = False
+    if commit:
+        db.session.commit()
+    return {
+        'action': 'updated',
+        'reason': reason,
+        'task_id': task_id,
+        'event_ids': [event.id for event in events],
+    }
+
+
 def upsert_task(task, included=None, user=None, config=None, commit=True, parent_lookup=None):
     config = config or get_teamwork_config()
     user = user or get_target_user(config)
@@ -661,14 +682,18 @@ def sync_all_assigned_tasks():
     return stats
 
 
-def sync_single_task(task_id):
+def sync_single_task(task_id, completed_fallback=False, single_task_fallback=False):
     config = get_teamwork_config()
     user = get_target_user(config)
     if not user:
         raise TeamworkConfigError('No local user exists for Teamwork calendar sync')
     client = TeamworkClient(config)
     task, included = client.get_assigned_task(task_id, include_completed=True)
+    if not task and (completed_fallback or single_task_fallback):
+        task, included = client.get_task(task_id)
     if not task:
+        if completed_fallback:
+            return mark_imported_task_done(task_id, user_id=user.id)
         deleted = delete_imported_task(task_id, user_id=user.id)
         return {'action': 'deleted' if deleted else 'skipped', 'reason': 'not_found_or_not_assigned', 'task_id': str(task_id)}
     return upsert_task(task, included=included, user=user, config=config, parent_lookup=client.get_task_name)
@@ -683,19 +708,45 @@ def extract_task_id_from_webhook(payload):
             task_id = _task_id(value)
             if task_id:
                 return task_id
-    for key in ('taskId', 'taskID', 'id'):
+    for key in (
+        'taskId',
+        'taskID',
+        'todoItemId',
+        'todoItemID',
+        'todo-item-id',
+        'itemId',
+        'objectId',
+        'objectID',
+        'id',
+    ):
         value = payload.get(key)
         if value is not None:
             return str(value)
     return None
 
 
+def _webhook_event_text(payload, event_name=None):
+    parts = [event_name or '']
+    if isinstance(payload, dict):
+        for key in ('event', 'eventName', 'eventType', 'type', 'action', 'verb'):
+            value = payload.get(key)
+            if value is not None:
+                parts.append(str(value))
+    return ' '.join(parts).lower()
+
+
 def handle_webhook_payload(payload, event_name=None):
     task_id = extract_task_id_from_webhook(payload)
     if not task_id:
         return {'action': 'skipped', 'reason': 'missing_task_id'}
-    event_l = (event_name or '').lower()
+    event_l = _webhook_event_text(payload, event_name)
     if 'deleted' in event_l:
         deleted = delete_imported_task(task_id)
         return {'action': 'deleted' if deleted else 'skipped', 'task_id': task_id, 'reason': 'webhook_deleted'}
-    return sync_single_task(task_id)
+    return sync_single_task(
+        task_id,
+        completed_fallback='completed' in event_l,
+        single_task_fallback=any(
+            value in event_l for value in ('updated', 'assigned', 'moved', 'reopened')
+        ),
+    )
