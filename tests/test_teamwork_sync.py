@@ -28,6 +28,21 @@ def test_teamwork_context_lines_include_project_task_list_parent_and_link():
     ]
 
 
+def test_assignee_names_resolve_from_included_users():
+    task = {
+        'assigneeUserIds': [734285, 734224],
+        'assignees': [{'id': 734224}],
+    }
+    included = {
+        'users': {
+            '734285': {'firstName': 'Rachie', 'lastName': 'Perlmutter'},
+            '734224': {'firstName': 'Ari', 'lastName': 'Stone'},
+        }
+    }
+
+    assert tw._assignee_names(task, included) == ['Ari Stone', 'Rachie Perlmutter']
+
+
 def test_teamwork_assignment_filter_rejects_explicit_other_assignee():
     config = SimpleNamespace(assignee_user_id='42')
 
@@ -115,6 +130,7 @@ def test_completed_sync_falls_back_to_single_task_fetch(monkeypatch):
 
     monkeypatch.setattr(tw, 'get_teamwork_config', lambda: SimpleNamespace())
     monkeypatch.setattr(tw, 'get_target_user', lambda _config: SimpleNamespace(id=1))
+    monkeypatch.setattr(tw, 'get_ignored_task_ids', lambda user_id: set())
     monkeypatch.setattr(tw, 'TeamworkClient', FakeClient)
     monkeypatch.setattr(
         tw,
@@ -141,6 +157,7 @@ def test_completed_sync_marks_existing_done_when_refetch_empty(monkeypatch):
 
     monkeypatch.setattr(tw, 'get_teamwork_config', lambda: SimpleNamespace())
     monkeypatch.setattr(tw, 'get_target_user', lambda _config: SimpleNamespace(id=1))
+    monkeypatch.setattr(tw, 'get_ignored_task_ids', lambda user_id: set())
     monkeypatch.setattr(tw, 'TeamworkClient', FakeClient)
     monkeypatch.setattr(
         tw,
@@ -182,6 +199,7 @@ def test_updated_sync_can_import_from_single_task_fallback(monkeypatch):
 
     monkeypatch.setattr(tw, 'get_teamwork_config', lambda: SimpleNamespace(assignee_user_id='42'))
     monkeypatch.setattr(tw, 'get_target_user', lambda _config: SimpleNamespace(id=1))
+    monkeypatch.setattr(tw, 'get_ignored_task_ids', lambda user_id: set())
     monkeypatch.setattr(tw, 'TeamworkClient', FakeClient)
     monkeypatch.setattr(
         tw,
@@ -193,3 +211,24 @@ def test_updated_sync_can_import_from_single_task_fallback(monkeypatch):
         'action': 'created',
         'task_id': '123',
     }
+
+
+def test_sync_single_task_skips_ignored_task(monkeypatch):
+    monkeypatch.setattr(tw, 'get_teamwork_config', lambda: SimpleNamespace())
+    monkeypatch.setattr(tw, 'get_target_user', lambda _config: SimpleNamespace(id=1))
+    monkeypatch.setattr(tw, 'get_ignored_task_ids', lambda user_id: {'123'})
+    calls = {}
+
+    def fake_delete(task_id, user_id=None):
+        calls['task_id'] = str(task_id)
+        calls['user_id'] = user_id
+        return 1
+
+    monkeypatch.setattr(tw, 'delete_imported_task', fake_delete)
+
+    assert tw.sync_single_task(123) == {
+        'action': 'deleted',
+        'reason': 'ignored',
+        'task_id': '123',
+    }
+    assert calls == {'task_id': '123', 'user_id': 1}

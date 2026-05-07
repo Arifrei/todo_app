@@ -254,6 +254,36 @@ def ensure_calendar_event(cur):
     )
 
 
+def ensure_teamwork_ignored_task(cur):
+    if not table_exists(cur, "teamwork_ignored_task"):
+        cur.execute(
+            """
+            CREATE TABLE teamwork_ignored_task (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                task_id VARCHAR(100) NOT NULL,
+                title VARCHAR(200),
+                ignored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                UNIQUE(user_id, task_id)
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_teamwork_ignored_task_user_task "
+            "ON teamwork_ignored_task(user_id, task_id)"
+        )
+        print("[add] teamwork_ignored_task table created")
+        return
+    add_column(cur, "teamwork_ignored_task", "user_id", "INTEGER")
+    add_column(cur, "teamwork_ignored_task", "task_id", "VARCHAR(100)")
+    add_column(cur, "teamwork_ignored_task", "title", "VARCHAR(200)")
+    add_column(cur, "teamwork_ignored_task", "ignored_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_teamwork_ignored_task_user_task "
+        "ON teamwork_ignored_task(user_id, task_id)"
+    )
+
+
 def ensure_embedding_table(cur):
     if not table_exists(cur, "embedding_record"):
         cur.execute(
@@ -745,6 +775,7 @@ def main():
         ensure_note_list_item(cur)
         ensure_note_folder(cur)
         ensure_calendar_event(cur)
+        ensure_teamwork_ignored_task(cur)
         ensure_recurring_event(cur)
         ensure_recurrence_exception(cur)
         ensure_recalls(cur)

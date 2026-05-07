@@ -491,6 +491,21 @@ class CalendarEvent(db.Model):
         }
 
 
+class TeamworkIgnoredTask(db.Model):
+    __tablename__ = 'teamwork_ignored_task'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    task_id = db.Column(db.String(100), nullable=False)
+    title = db.Column(db.String(200), nullable=True)
+    ignored_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'task_id', name='uq_teamwork_ignored_task_user_task'),
+        db.Index('idx_teamwork_ignored_task_user_task', 'user_id', 'task_id'),
+    )
+
+
 class RecurringEvent(db.Model):
     """Template for recurring calendar items."""
     id = db.Column(db.Integer, primary_key=True)

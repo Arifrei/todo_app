@@ -863,6 +863,12 @@ def teamwork_webhook():
     return _impl()
 
 
+@app.route('/api/teamwork/ignore', methods=['POST'])
+def teamwork_ignore_task():
+    from services.teamwork_routes import teamwork_ignore_task as _impl
+    return _impl()
+
+
 def _get_or_create_notification_settings(user_id):
     from backend.app_core_logic import _get_or_create_notification_settings as _impl
     return _impl(user_id)

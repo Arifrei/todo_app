@@ -5,7 +5,9 @@ from backend.background_jobs import start_app_context_job
 from services.teamwork_sync import (
     TeamworkConfigError,
     get_teamwork_config,
+    get_target_user,
     handle_webhook_payload,
+    ignore_teamwork_task_for_user,
     sync_all_assigned_tasks,
     verify_webhook_signature,
 )
@@ -68,3 +70,43 @@ def teamwork_webhook():
         on_error=_on_error,
     )
     return a.jsonify({'status': 'accepted'})
+
+
+def teamwork_ignore_task():
+    import app as a
+    from models import CalendarEvent
+
+    user = a.get_current_user()
+    if not user:
+        try:
+            user = get_target_user(get_teamwork_config())
+        except TeamworkConfigError:
+            user = None
+    if not user:
+        return a.jsonify({'error': 'No user selected'}), 401
+
+    payload = a.request.get_json(silent=True) or {}
+    task_id = payload.get('task_id') or payload.get('taskId') or payload.get('external_id')
+    title = payload.get('title')
+    event_id = payload.get('event_id') or payload.get('eventId') or payload.get('calendar_event_id')
+
+    if not task_id and event_id is not None:
+        event = CalendarEvent.query.filter_by(
+            id=event_id,
+            user_id=user.id,
+            external_source='teamwork',
+        ).first()
+        if not event or not event.external_id:
+            return a.jsonify({'error': 'Teamwork calendar item not found'}), 404
+        task_id = event.external_id
+        title = title or event.title
+
+    if not task_id:
+        return a.jsonify({'error': 'task_id or event_id is required'}), 400
+
+    try:
+        result = ignore_teamwork_task_for_user(user.id, task_id, title=title)
+    except Exception as exc:
+        a.app.logger.exception('Teamwork ignore failed')
+        return a.jsonify({'error': str(exc)}), 502
+    return a.jsonify(result)

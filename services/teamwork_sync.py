@@ -9,7 +9,7 @@ from flask import current_app
 from sqlalchemy import func
 
 from backend.embedding_service import ENTITY_CALENDAR, delete_embedding_for_entity
-from models import CalendarEvent, User, db
+from models import CalendarEvent, TeamworkIgnoredTask, User, db
 
 
 SOURCE_NAME = 'teamwork'
@@ -281,6 +281,72 @@ def _tasklist_name(task, included):
     return _included_name(included, 'tasklists', _task_tasklist_id(task))
 
 
+def _user_display_name(user, fallback_id=None):
+    if not isinstance(user, dict):
+        return str(fallback_id) if fallback_id is not None else None
+    name = _clean_env(_get_any(user, 'name', 'displayName', 'fullName'))
+    if name:
+        return name
+    first = _clean_env(_get_any(user, 'firstName', 'firstname')) or ''
+    last = _clean_env(_get_any(user, 'lastName', 'lastname')) or ''
+    combined = ' '.join(part for part in (first, last) if part).strip()
+    if combined:
+        return combined
+    email = _clean_env(_get_any(user, 'email'))
+    if email:
+        return email
+    user_id = _get_any(user, 'id', 'userId', 'userID')
+    if user_id is not None:
+        return str(user_id)
+    if fallback_id is not None:
+        return str(fallback_id)
+    return None
+
+
+def _assignee_names(task, included):
+    names = []
+    seen = set()
+
+    def add_name(candidate, fallback_id=None):
+        name = _user_display_name(candidate, fallback_id=fallback_id)
+        if not name:
+            return
+        key = name.strip().lower()
+        if key in seen:
+            return
+        seen.add(key)
+        names.append(name.strip())
+
+    for raw_user in _as_list(_get_any(task, 'assigneeUsers', 'users', 'people')):
+        if isinstance(raw_user, dict):
+            user_id = _get_any(raw_user, 'id', 'userId', 'userID')
+            included_user = _included_item(included, 'users', user_id)
+            add_name(included_user or raw_user, fallback_id=user_id)
+        elif raw_user is not None:
+            included_user = _included_item(included, 'users', raw_user)
+            add_name(included_user, fallback_id=raw_user)
+
+    assignees = _get_any(task, 'assignees')
+    for raw_user in _as_list(assignees):
+        if isinstance(raw_user, dict):
+            user_id = _get_any(raw_user, 'id', 'userId', 'userID')
+            included_user = _included_item(included, 'users', user_id)
+            add_name(included_user or raw_user, fallback_id=user_id)
+        elif raw_user is not None:
+            included_user = _included_item(included, 'users', raw_user)
+            add_name(included_user, fallback_id=raw_user)
+
+    for user_id in _as_list(_get_any(task, 'assigneeUserIds', 'responsiblePartyIds', 'responsibleUserIds')):
+        if isinstance(user_id, dict):
+            user_id = _get_any(user_id, 'id', 'userId', 'userID')
+        if user_id is None:
+            continue
+        included_user = _included_item(included, 'users', user_id)
+        add_name(included_user, fallback_id=user_id)
+
+    return names
+
+
 def _parent_task_id(task):
     parent_id = None
     parent = _get_any(task, 'parentTask')
@@ -378,11 +444,14 @@ def _teamwork_context_lines(task, included, config=None, parent_lookup=None):
     parts = []
     project_name = _project_name(task, included)
     tasklist_name = _tasklist_name(task, included)
+    assignee_names = _assignee_names(task, included)
     parent_label = _parent_task_label(task, parent_lookup=parent_lookup)
     if project_name:
         parts.append(f'Project: {project_name}')
     if tasklist_name:
         parts.append(f'Task list: {tasklist_name}')
+    if assignee_names:
+        parts.append(f"Assignees: {', '.join(assignee_names)}")
     if parent_label:
         parts.append(f'Parent task: {parent_label}')
     if config:
@@ -405,7 +474,7 @@ def _is_generated_teamwork_note(value):
     lines = [line.strip() for line in note.splitlines() if line.strip()]
     if not lines:
         return False
-    known_prefixes = ('Project:', 'Task list:', 'Parent task:')
+    known_prefixes = ('Project:', 'Task list:', 'Assignees:', 'Parent task:')
     has_teamwork_link = any(line.startswith('[Open in Teamwork](') for line in lines)
     has_only_generated_lines = all(
         line.startswith(known_prefixes) or line.startswith('[Open in Teamwork](')
@@ -492,6 +561,35 @@ class TeamworkClient:
         return self._task_name_cache[task_id]
 
 
+def get_ignored_task_ids(user_id):
+    return {
+        str(task_id) for (task_id,) in db.session.query(TeamworkIgnoredTask.task_id)
+        .filter_by(user_id=user_id)
+        .all()
+        if task_id is not None
+    }
+
+
+def ignore_teamwork_task_for_user(user_id, task_id, title=None, commit=True):
+    task_id = str(task_id)
+    ignored = TeamworkIgnoredTask.query.filter_by(user_id=user_id, task_id=task_id).first()
+    if not ignored:
+        ignored = TeamworkIgnoredTask(user_id=user_id, task_id=task_id, title=_clean_env(title))
+        db.session.add(ignored)
+    elif title:
+        ignored.title = _clean_env(title)
+    db.session.flush()
+    deleted = delete_imported_task(task_id, user_id=user_id, commit=False)
+    if commit:
+        db.session.commit()
+    return {
+        'status': 'ok',
+        'task_id': task_id,
+        'deleted': deleted,
+        'ignored_id': ignored.id,
+    }
+
+
 def delete_imported_task(task_id, user_id=None, commit=True):
     task_id = str(task_id)
     query = CalendarEvent.query.filter_by(external_source=SOURCE_NAME, external_id=task_id)
@@ -534,7 +632,7 @@ def mark_imported_task_done(task_id, user_id=None, commit=True, reason='webhook_
     }
 
 
-def upsert_task(task, included=None, user=None, config=None, commit=True, parent_lookup=None):
+def upsert_task(task, included=None, user=None, config=None, commit=True, parent_lookup=None, ignored_task_ids=None):
     config = config or get_teamwork_config()
     user = user or get_target_user(config)
     if not user:
@@ -544,6 +642,12 @@ def upsert_task(task, included=None, user=None, config=None, commit=True, parent
     task_id = _task_id(task)
     if not task_id:
         return {'action': 'skipped', 'reason': 'missing_task_id'}
+    ignored_task_ids = ignored_task_ids if ignored_task_ids is not None else get_ignored_task_ids(user.id)
+    if task_id in ignored_task_ids:
+        deleted = delete_imported_task(task_id, user_id=user.id, commit=False)
+        if commit:
+            db.session.commit()
+        return {'action': 'deleted' if deleted else 'skipped', 'reason': 'ignored', 'task_id': task_id}
     if not _task_is_assigned_to_configured_user(task, config):
         deleted = delete_imported_task(task_id, user_id=user.id, commit=False)
         if commit:
@@ -612,6 +716,7 @@ def sync_all_assigned_tasks():
     if not user:
         raise TeamworkConfigError('No local user exists for Teamwork calendar sync')
     client = TeamworkClient(config)
+    ignored_task_ids = get_ignored_task_ids(user.id)
     stats = {
         'created': 0,
         'updated': 0,
@@ -634,14 +739,22 @@ def sync_all_assigned_tasks():
             task_id = _task_id(task)
             if task_id:
                 seen_task_ids.add(task_id)
-            result = upsert_task(
-                task,
-                included=included,
-                user=user,
-                config=config,
-                commit=False,
-                parent_lookup=client.get_task_name,
-            )
+            if task_id and task_id in ignored_task_ids:
+                result = {
+                    'action': 'deleted' if delete_imported_task(task_id, user_id=user.id, commit=False) else 'skipped',
+                    'reason': 'ignored',
+                    'task_id': task_id,
+                }
+            else:
+                result = upsert_task(
+                    task,
+                    included=included,
+                    user=user,
+                    config=config,
+                    commit=False,
+                    parent_lookup=client.get_task_name,
+                    ignored_task_ids=ignored_task_ids,
+                )
             _count_result(result)
         except Exception:
             stats['errors'] += 1
@@ -671,6 +784,7 @@ def sync_all_assigned_tasks():
                 config=config,
                 commit=False,
                 parent_lookup=client.get_task_name,
+                ignored_task_ids=ignored_task_ids,
             )
             _count_result(result)
         except Exception:
@@ -687,6 +801,9 @@ def sync_single_task(task_id, completed_fallback=False, single_task_fallback=Fal
     user = get_target_user(config)
     if not user:
         raise TeamworkConfigError('No local user exists for Teamwork calendar sync')
+    if str(task_id) in get_ignored_task_ids(user.id):
+        deleted = delete_imported_task(task_id, user_id=user.id)
+        return {'action': 'deleted' if deleted else 'skipped', 'reason': 'ignored', 'task_id': str(task_id)}
     client = TeamworkClient(config)
     task, included = client.get_assigned_task(task_id, include_completed=True)
     if not task and (completed_fallback or single_task_fallback):

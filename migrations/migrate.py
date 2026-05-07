@@ -364,6 +364,37 @@ def ensure_calendar_event_table(cur):
     )
 
 
+def ensure_teamwork_ignored_task_table(cur):
+    if table_exists(cur, "teamwork_ignored_task"):
+        add_column(cur, "teamwork_ignored_task", "user_id", "INTEGER")
+        add_column(cur, "teamwork_ignored_task", "task_id", "VARCHAR(100)")
+        add_column(cur, "teamwork_ignored_task", "title", "VARCHAR(200)")
+        add_column(cur, "teamwork_ignored_task", "ignored_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_teamwork_ignored_task_user_task "
+            "ON teamwork_ignored_task(user_id, task_id)"
+        )
+        print("[ok] teamwork_ignored_task table exists")
+        return
+    cur.execute(
+        """
+        CREATE TABLE teamwork_ignored_task (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            task_id VARCHAR(100) NOT NULL,
+            title VARCHAR(200),
+            ignored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            UNIQUE(user_id, task_id)
+        )
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_teamwork_ignored_task_user_task "
+        "ON teamwork_ignored_task(user_id, task_id)"
+    )
+    print("[add] teamwork_ignored_task table created")
+
+
 def ensure_recurring_event_table(cur):
     if table_exists(cur, "recurring_event"):
         add_column(cur, "recurring_event", "description", "TEXT")
@@ -929,6 +960,7 @@ def main():
         ensure_note_list_item_table(cur)
         ensure_note_folder_table(cur)
         ensure_calendar_event_table(cur)
+        ensure_teamwork_ignored_task_table(cur)
         ensure_recurring_event_table(cur)
         ensure_recurrence_exception_table(cur)
         ensure_recall_table(cur)

@@ -316,9 +316,66 @@ function getTeamworkInfo(ev) {
         title: (ev && ev.title) || 'Teamwork task',
         project: getTeamworkDescriptionLine(ev, 'Project'),
         taskList: getTeamworkDescriptionLine(ev, 'Task list'),
+        assignees: getTeamworkDescriptionLine(ev, 'Assignees'),
         parent: getTeamworkDescriptionLine(ev, 'Parent task'),
         url: getTeamworkTaskLink(ev)
     };
+}
+
+async function ignoreTeamworkCalendarTask(ev) {
+    if (!isTeamworkCalendarItem(ev)) return false;
+    try {
+        const res = await fetch('/api/teamwork/ignore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                event_id: ev && ev.id,
+                task_id: ev && ev.external_id,
+                title: ev && ev.title
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data.error || 'Could not ignore Teamwork task.');
+        }
+        if (window.isNativeApp && window.isNativeApp()) {
+            if (window.NotificationService && typeof window.NotificationService.cancel === 'function' && ev && ev.id) {
+                await window.NotificationService.cancel(ev.id);
+            }
+        }
+        closeTeamworkInfoPopover();
+        if (Array.isArray(calendarState.events)) {
+            calendarState.events = calendarState.events.filter(item => item.id !== ev.id);
+        }
+        if (calendarState.monthEventsByDay && ev && ev.day && Array.isArray(calendarState.monthEventsByDay[ev.day])) {
+            calendarState.monthEventsByDay[ev.day] = calendarState.monthEventsByDay[ev.day].filter(item => item.id !== ev.id);
+        }
+        if (typeof calendarSelection !== 'undefined' && calendarSelection && calendarSelection.ids) {
+            calendarSelection.ids.delete(calendarSelectionKey(ev.id));
+            if (calendarSelection.ids.size === 0) {
+                calendarSelection.active = false;
+            }
+            updateCalendarBulkBar();
+        }
+        renderCalendarEvents();
+        if (calendarState.monthCursor) {
+            renderCalendarMonth();
+        }
+        showToast('Teamwork task ignored.', 'success');
+        return true;
+    } catch (error) {
+        console.error('Failed to ignore Teamwork task', error);
+        showToast(error && error.message ? error.message : 'Could not ignore Teamwork task.', 'error');
+        return false;
+    }
+}
+
+function confirmIgnoreTeamworkCalendarTask(ev) {
+    if (!isTeamworkCalendarItem(ev)) return;
+    const title = (ev && ev.title) ? `"${ev.title}"` : 'this Teamwork task';
+    openConfirmModal(`Ignore ${title}? It will stay hidden from future Teamwork syncs.`, async () => {
+        await ignoreTeamworkCalendarTask(ev);
+    });
 }
 
 function bindTeamworkInfoPopoverDismissals() {
@@ -425,7 +482,11 @@ function openTeamworkInfoPopover(ev, anchor) {
     details.className = 'teamwork-info-details';
     appendTeamworkInfoDetail(details, 'Project', info.project, 'fa-solid fa-folder-tree');
     appendTeamworkInfoDetail(details, 'Task list', info.taskList, 'fa-solid fa-list-check');
+    appendTeamworkInfoDetail(details, 'Assignees', info.assignees, 'fa-solid fa-user-group');
     appendTeamworkInfoDetail(details, 'Parent task', info.parent, 'fa-solid fa-code-branch');
+
+    const actions = document.createElement('div');
+    actions.className = 'teamwork-info-actions';
 
     if (info.url) {
         const link = document.createElement('a');
@@ -434,10 +495,21 @@ function openTeamworkInfoPopover(ev, anchor) {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.innerHTML = '<i class="fa-solid fa-arrow-up-right-from-square"></i><span>Open in Teamwork</span>';
-        details.appendChild(link);
+        actions.appendChild(link);
     }
 
-    popover.append(header, title, details);
+    const ignoreBtn = document.createElement('button');
+    ignoreBtn.type = 'button';
+    ignoreBtn.className = 'teamwork-info-ignore';
+    ignoreBtn.innerHTML = '<i class="fa-solid fa-eye-slash"></i><span>Ignore in sync</span>';
+    ignoreBtn.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        confirmIgnoreTeamworkCalendarTask(ev);
+    };
+    actions.appendChild(ignoreBtn);
+
+    popover.append(header, title, details, actions);
     popover.hidden = false;
     popover.classList.add('active');
     positionTeamworkInfoPopover(popover, anchor);
@@ -3225,9 +3297,30 @@ function renderCalendarEvents() {
             deleteCalendarEvent(ev.id);
         };
 
+        const ignoreTeamworkMenuItem = isTeamworkCalendarItem(ev) ? document.createElement('button') : null;
+        if (ignoreTeamworkMenuItem) {
+            ignoreTeamworkMenuItem.className = 'calendar-item-menu-option';
+            ignoreTeamworkMenuItem.innerHTML = '<i class="fa-solid fa-eye-slash"></i> Ignore Teamwork task';
+            ignoreTeamworkMenuItem.onclick = (e) => {
+                e.stopPropagation();
+                overflowDropdown.classList.remove('active');
+                confirmIgnoreTeamworkCalendarTask(ev);
+            };
+        }
+
         const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
         // Order: reminder, rollover, allow overlap, timeline mode, note, move, follow up, delete
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, noteMenuItem, moveMenuItem, followUpMenuItem, deleteMenuItem);
+        overflowDropdown.append(
+            reminderMenuItem,
+            rolloverMenuItem,
+            allowOverlapMenuItem,
+            displayModeMenuItem,
+            noteMenuItem,
+            moveMenuItem,
+            followUpMenuItem,
+            ...(ignoreTeamworkMenuItem ? [ignoreTeamworkMenuItem] : []),
+            deleteMenuItem
+        );
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown); // Append to body instead
 
