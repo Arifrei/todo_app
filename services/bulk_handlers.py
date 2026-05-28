@@ -80,10 +80,25 @@ def bulk_notes_route(
         return jsonify({"updated": count})
 
     if action == "pin":
+        max_note_pin = (
+            db.session.query(db.func.coalesce(db.func.max(Note.pin_order), 0))
+            .filter(Note.user_id == user.id, Note.pinned.is_(True))
+            .scalar()
+            or 0
+        )
+        max_folder_pin = (
+            db.session.query(db.func.coalesce(db.func.max(NoteFolder.pin_order), 0))
+            .filter(NoteFolder.user_id == user.id, NoteFolder.pinned.is_(True))
+            .scalar()
+            or 0
+        )
+        next_pin_order = max(max_note_pin, max_folder_pin) + 1
         count = 0
         for note in notes:
             if not note.pinned:
                 note.pinned = True
+                note.pin_order = next_pin_order
+                next_pin_order += 1
                 count += 1
         db.session.commit()
         return jsonify({"updated": count})
@@ -93,6 +108,7 @@ def bulk_notes_route(
         for note in notes:
             if note.pinned:
                 note.pinned = False
+                note.pin_order = 0
                 count += 1
         db.session.commit()
         return jsonify({"updated": count})

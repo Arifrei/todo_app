@@ -5,6 +5,32 @@ function formatCalendarLabel(dayStr) {
     return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric', timeZone: USER_TIMEZONE });
 }
 
+function formatCalendarDateKey(dateObj) {
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function getCalendarTodayKey() {
+    const now = new Date();
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: USER_TIMEZONE,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).formatToParts(now);
+        const lookup = Object.fromEntries(parts.map(part => [part.type, part.value]));
+        if (lookup.year && lookup.month && lookup.day) {
+            return `${lookup.year}-${lookup.month}-${lookup.day}`;
+        }
+    } catch (e) {
+        // Fall back to browser-local calendar day.
+    }
+    return formatCalendarDateKey(now);
+}
+
 function renderCalendarDayLabel(dayStr) {
     const label = document.getElementById('calendar-day-label');
     if (!label) return;
@@ -39,8 +65,8 @@ function getMonthRange(dateObj) {
     return {
         start,
         end,
-        startStr: start.toISOString().slice(0, 10),
-        endStr: end.toISOString().slice(0, 10)
+        startStr: formatCalendarDateKey(start),
+        endStr: formatCalendarDateKey(end)
     };
 }
 
@@ -938,7 +964,7 @@ function renderCalendarMonth() {
     if (!grid || !calendarState.monthCursor) return;
     if (label) label.textContent = formatMonthLabel(calendarState.monthCursor);
 
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getCalendarTodayKey();
     const range = getMonthRange(calendarState.monthCursor);
     const startDayOfWeek = range.start.getDay();
     const daysInMonth = range.end.getDate();
@@ -952,7 +978,7 @@ function renderCalendarMonth() {
 
     for (let day = 1; day <= daysInMonth; day++) {
         const dateObj = new Date(calendarState.monthCursor.getFullYear(), calendarState.monthCursor.getMonth(), day);
-        const dateStr = dateObj.toISOString().slice(0, 10);
+        const dateStr = formatCalendarDateKey(dateObj);
         const cell = document.createElement('button');
         cell.type = 'button';
         cell.className = 'calendar-month-cell';
@@ -1392,7 +1418,7 @@ function showRecurringFormView(editItem = null) {
         if (freqEl) freqEl.value = 'daily';
         if (intervalEl) intervalEl.value = '1';
         if (unitEl) unitEl.value = 'days';
-        const todayStr = calendarState.selectedDay || new Date().toISOString().slice(0, 10);
+        const todayStr = calendarState.selectedDay || getCalendarTodayKey();
         if (startDayInput) startDayInput.value = todayStr;
         const dateObj = new Date(`${todayStr}T00:00:00`);
         if (dayOfMonthEl) dayOfMonthEl.value = dateObj.getDate();
@@ -2089,7 +2115,7 @@ function renderDayTimelinePanel(allItems) {
     }
 
     const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10);
+    const todayStr = getCalendarTodayKey();
     if (calendarState.selectedDay === todayStr) {
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
         if (nowMinutes >= startHour * 60 && nowMinutes <= endHour * 60) {

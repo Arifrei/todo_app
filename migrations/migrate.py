@@ -256,6 +256,8 @@ def ensure_note_folder_table(cur):
                 parent_id INTEGER,
                 name VARCHAR(120) NOT NULL,
                 order_index INTEGER DEFAULT 0,
+                pinned BOOLEAN DEFAULT 0,
+                pin_order INTEGER DEFAULT 0,
                 is_pin_protected BOOLEAN DEFAULT 0 NOT NULL,
                 archived_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -269,6 +271,8 @@ def ensure_note_folder_table(cur):
     add_column(cur, "note_folder", "parent_id", "INTEGER")
     add_column(cur, "note_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "note_folder", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "note_folder", "pinned", "BOOLEAN DEFAULT 0")
+    add_column(cur, "note_folder", "pin_order", "INTEGER DEFAULT 0")
     add_column(cur, "note_folder", "is_pin_protected", "BOOLEAN DEFAULT 0 NOT NULL")
     add_column(cur, "note_folder", "archived_at", "TIMESTAMP")
     add_column(cur, "note_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")

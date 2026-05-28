@@ -1119,8 +1119,7 @@ function initCalendarPage() {
     if (!page) return;
     if (document.body && document.body.dataset.calendarPageInit === '1') return;
     if (document.body) document.body.dataset.calendarPageInit = '1';
-    const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
+    const todayStr = getCalendarTodayKey();
     const params = new URLSearchParams(window.location.search);
     const initialDayParam = params.get('day');
     const initialMode = params.get('mode');
@@ -1370,13 +1369,13 @@ function initCalendarPage() {
         if (!calendarState.selectedDay) return;
         const current = new Date(calendarState.selectedDay + 'T00:00:00');
         current.setDate(current.getDate() - 1);
-        openDayDetails(current.toISOString().slice(0, 10));
+        openDayDetails(formatCalendarDateKey(current));
     };
     if (nextBtn) nextBtn.onclick = () => {
         if (!calendarState.selectedDay) return;
         const current = new Date(calendarState.selectedDay + 'T00:00:00');
         current.setDate(current.getDate() + 1);
-        openDayDetails(current.toISOString().slice(0, 10));
+        openDayDetails(formatCalendarDateKey(current));
     };
     if (picker) picker.onchange = (e) => openDayDetails(e.target.value);
     if (todayBtn) todayBtn.onclick = () => openDayDetails(todayStr);

@@ -157,14 +157,18 @@ function getSortedNotesItems() {
     const notes = notesState.notes || [];
     const folders = noteFolderState.folders || [];
 
-    // Filter folders to current parent level
     const currentFolders = folders.filter(f =>
         (f.parent_id || null) === (currentFolderId || null)
     ).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
 
-    // Separate pinned and unpinned notes
-    const pinnedItems = notes.filter(n => n.pinned)
-        .sort((a, b) => (a.pin_order || 0) - (b.pin_order || 0));
+    const pinnedNotes = notes.filter(n => n.pinned).map(note => ({ type: 'note', item: note }));
+    const pinnedFolders = currentFolders.filter(f => f.pinned).map(folder => ({ type: 'folder', item: folder }));
+    const pinnedItems = pinnedNotes.concat(pinnedFolders)
+        .sort((a, b) => {
+            const orderDiff = (a.item.pin_order || 0) - (b.item.pin_order || 0);
+            if (orderDiff !== 0) return orderDiff;
+            return (a.type + a.item.id).localeCompare(b.type + b.item.id);
+        });
 
     const unpinnedNotes = notes.filter(n => !n.pinned && n.note_type === 'note')
         .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
@@ -172,11 +176,13 @@ function getSortedNotesItems() {
     const unpinnedLists = notes.filter(n => !n.pinned && n.note_type === 'list')
         .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
 
+    const unpinnedFolders = currentFolders.filter(f => !f.pinned);
+
     return {
         pinned: pinnedItems,
         notes: unpinnedNotes,
         lists: unpinnedLists,
-        folders: currentFolders
+        folders: unpinnedFolders
     };
 }
 
@@ -284,8 +290,12 @@ function renderNotesUnified() {
     // Render pinned section
     if (sorted.pinned.length) {
         listEl.appendChild(createSectionHeader('Pinned'));
-        sorted.pinned.forEach(note => {
-            listEl.appendChild(createNoteItem(note, { isPinned: true }));
+        sorted.pinned.forEach(entry => {
+            if (entry.type === 'folder') {
+                listEl.appendChild(createFolderItem(entry.item, { isPinned: true }));
+            } else {
+                listEl.appendChild(createNoteItem(entry.item, { isPinned: true }));
+            }
         });
     }
 
@@ -454,25 +464,30 @@ function createNoteItem(note, options = {}) {
 }
 
 function createFolderItem(folder, options = {}) {
-    const { isArchived = false } = options;
+    const { isArchived = false, isPinned = false } = options;
     const item = document.createElement('div');
     const isProtected = folder.is_pin_protected;
-    item.className = 'notes-item' + (isProtected ? ' protected locked' : '') + (isArchived ? ' archived' : '');
+    item.className = 'notes-item' + (isPinned ? ' pinned-item' : '') + (isProtected ? ' protected locked' : '') + (isArchived ? ' archived' : '');
     item.dataset.itemId = folder.id;
     item.dataset.itemType = 'folder';
     item.dataset.locked = isProtected ? 'true' : 'false';
     item.dataset.archived = isArchived ? 'true' : 'false';
+    if (isPinned) {
+        item.draggable = true;
+    }
 
     const lockIcon = isProtected ? '<i class="notes-item-lock fa-solid fa-lock"></i>' : '';
 
     item.innerHTML = `
         <div class="notes-item-content">
+            ${isPinned ? '<div class="notes-item-drag-handle"><i class="fa-solid fa-grip-vertical"></i></div>' : ''}
             <div class="notes-item-icon type-folder">
                 <i class="fa-solid fa-folder"></i>
             </div>
             <span class="notes-item-title">${escapeHtml(folder.name)}</span>
             ${lockIcon}
             <i class="notes-item-chevron fa-solid fa-chevron-right"></i>
+            ${isPinned ? '<i class="notes-item-pinned fa-solid fa-thumbtack"></i>' : ''}
             <div class="notes-item-dropdown">
                 <button class="btn-icon" id="notes-folder-menu-btn-${folder.id}" type="button" data-folder-id="${folder.id}" data-folder-name="${escapeHtml(folder.name)}" onclick="toggleFolderActionsMenu(${folder.id}, event)" title="More actions" aria-label="More folder actions" aria-haspopup="menu" aria-expanded="false">
                     <i class="fa-solid fa-ellipsis-vertical"></i>
@@ -923,8 +938,15 @@ function toggleFolderActionsMenu(folderId, event) {
     const folder = getFolderById(folderId);
     const isProtected = folder && folder.is_pin_protected;
     const isArchived = folder && folder.is_archived;
+    const isPinned = folder && folder.pinned;
+    const pinLabel = isPinned ? 'Unpin' : 'Pin';
     const protectLabel = isProtected ? 'Unprotect' : 'Protect';
     const protectIcon = isProtected ? 'fa-lock-open' : 'fa-lock';
+    const pinOption = isArchived ? '' : `
+        <button class="notes-item-menu-option" data-action="pin">
+            <i class="fa-solid fa-thumbtack"></i> ${pinLabel}
+        </button>
+    `;
     const archiveOption = isArchived ? `
         <button class="notes-item-menu-option" data-action="restore">
             <i class="fa-solid fa-rotate-left"></i> Restore
@@ -943,6 +965,7 @@ function toggleFolderActionsMenu(folderId, event) {
     dropdown.setAttribute('role', 'menu');
     dropdown.dataset.folderId = folderId;
     dropdown.innerHTML = `
+        ${pinOption}
         <button class="notes-item-menu-option" data-action="rename">
             <i class="fa-solid fa-pen"></i> Rename
         </button>
@@ -964,7 +987,8 @@ function toggleFolderActionsMenu(folderId, event) {
             e.stopPropagation();
             const action = opt.dataset.action;
             closeNotesDropdown();
-            if (action === 'rename') handleFolderMenuRename(folderId, folderName);
+            if (action === 'pin') handleFolderMenuPin(folderId);
+            else if (action === 'rename') handleFolderMenuRename(folderId, folderName);
             else if (action === 'move') handleFolderMenuMove(folderId);
             else if (action === 'protect') handleFolderMenuProtect(folderId);
             else if (action === 'archive') handleFolderMenuArchive(folderId);
@@ -1276,6 +1300,41 @@ function handleFolderMenuMove(folderId) {
     openNoteMoveModal(folderId, 'folder');
 }
 
+async function handleFolderMenuPin(folderId) {
+    const folder = getFolderById(folderId);
+    if (!folder) return;
+    if (folder.is_archived) {
+        showToast('Restore the folder to pin it.', 'info', 2000);
+        return;
+    }
+
+    const newPinned = !folder.pinned;
+    try {
+        const res = await fetch(`/api/note-folders/${folderId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned: newPinned })
+        });
+
+        if (!res.ok) {
+            let message = 'Failed to update pin';
+            try {
+                const data = await res.json();
+                if (data && data.error) message = data.error;
+            } catch (e) {
+                // Keep fallback message
+            }
+            throw new Error(message);
+        }
+
+        showToast(newPinned ? 'Pinned' : 'Unpinned', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Folder pin toggle failed:', err);
+        showToast(err.message || 'Failed to update', 'error', 3000);
+    }
+}
+
 async function handleFolderMenuDelete(folderId) {
     const folder = getFolderById(folderId);
     if (!folder) return;
@@ -1570,27 +1629,39 @@ async function savePinnedOrder() {
     if (!listEl) return;
 
     const pinnedItems = listEl.querySelectorAll('.notes-item.pinned-item');
-    const ids = Array.from(pinnedItems).map(item => parseInt(item.dataset.itemId, 10));
+    const items = Array.from(pinnedItems)
+        .map(item => ({
+            type: item.dataset.itemType,
+            id: parseInt(item.dataset.itemId, 10)
+        }))
+        .filter(item => (item.type === 'note' || item.type === 'folder') && Number.isFinite(item.id));
 
-    if (!ids.length) return;
+    if (!items.length) return;
 
     try {
         const res = await fetch('/api/notes/reorder', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids })
+            body: JSON.stringify({ items })
         });
 
         if (!res.ok) throw new Error('Reorder failed');
 
         // Update local state to match new order
         const newPinOrder = {};
-        ids.forEach((id, index) => {
-            newPinOrder[id] = index;
+        items.forEach((item, index) => {
+            newPinOrder[`${item.type}:${item.id}`] = index + 1;
         });
         notesState.notes.forEach(note => {
-            if (note.pinned && newPinOrder[note.id] !== undefined) {
-                note.pin_order = newPinOrder[note.id];
+            const key = `note:${note.id}`;
+            if (note.pinned && newPinOrder[key] !== undefined) {
+                note.pin_order = newPinOrder[key];
+            }
+        });
+        (noteFolderState.folders || []).forEach(folder => {
+            const key = `folder:${folder.id}`;
+            if (folder.pinned && newPinOrder[key] !== undefined) {
+                folder.pin_order = newPinOrder[key];
             }
         });
 

@@ -344,6 +344,8 @@ class NoteFolder(db.Model):
     parent_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
     name = db.Column(db.String(120), nullable=False)
     order_index = db.Column(db.Integer, default=0)
+    pinned = db.Column(db.Boolean, default=False)
+    pin_order = db.Column(db.Integer, default=0)
     is_pin_protected = db.Column(db.Boolean, default=False, nullable=False)
     archived_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -355,6 +357,8 @@ class NoteFolder(db.Model):
             'parent_id': self.parent_id,
             'name': self.name,
             'order_index': self.order_index or 0,
+            'pinned': bool(self.pinned),
+            'pin_order': self.pin_order or 0,
             'is_pin_protected': bool(self.is_pin_protected),
             'archived_at': self.archived_at.isoformat() if self.archived_at else None,
             'is_archived': bool(self.archived_at),

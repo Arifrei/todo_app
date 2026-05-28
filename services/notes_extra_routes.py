@@ -9,14 +9,60 @@ for _name, _value in vars(_app_module).items():
         globals()[_name] = _value
 
 def reorder_notes():
-    """Reorder pinned notes by explicit id list (pinned only)."""
+    """Reorder pinned notes and folders by explicit ordered list."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     data = request.get_json(silent=True) or {}
+    items = data.get('items')
     ids = data.get('ids')
+    if isinstance(items, list) and items:
+        parsed_items = []
+        note_ids = []
+        folder_ids = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get('type')
+            try:
+                item_id = int(item.get('id'))
+            except (ValueError, TypeError):
+                continue
+            if item_type == 'note':
+                note_ids.append(item_id)
+                parsed_items.append(('note', item_id))
+            elif item_type == 'folder':
+                folder_ids.append(item_id)
+                parsed_items.append(('folder', item_id))
+        if not parsed_items:
+            return jsonify({'error': 'items array required'}), 400
+
+        pinned_notes = Note.query.filter(
+            Note.user_id == user.id,
+            Note.pinned.is_(True),
+            Note.id.in_(note_ids or [0])
+        ).all()
+        pinned_folders = NoteFolder.query.filter(
+            NoteFolder.user_id == user.id,
+            NoteFolder.pinned.is_(True),
+            NoteFolder.id.in_(folder_ids or [0])
+        ).all()
+        note_map = {n.id: n for n in pinned_notes}
+        folder_map = {f.id: f for f in pinned_folders}
+        order_val = 1
+        for item_type, item_id in parsed_items:
+            if item_type == 'note':
+                item = note_map.get(item_id)
+            else:
+                item = folder_map.get(item_id)
+            if item:
+                item.pin_order = order_val
+                order_val += 1
+        db.session.commit()
+        return jsonify({'pinned': order_val - 1})
+
     if not isinstance(ids, list) or not ids:
-        return jsonify({'error': 'ids array required'}), 400
+        return jsonify({'error': 'items or ids array required'}), 400
 
     pinned_notes = Note.query.filter(
         Note.user_id == user.id,
@@ -95,6 +141,8 @@ def archive_note_folder(folder_id):
         if not pin or not user.check_notes_pin(pin):
             return jsonify({'error': 'Folder is protected. Please enter notes PIN.'}), 403
     folder.archived_at = _now_local()
+    folder.pinned = False
+    folder.pin_order = 0
     folder.updated_at = _now_local()
     db.session.commit()
     return jsonify(folder.to_dict())

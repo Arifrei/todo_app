@@ -677,10 +677,15 @@ def handle_note(note_id):
         if 'pinned' in data:
             is_pin = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
             if is_pin and not note.pinned:
-                max_pin = db.session.query(db.func.coalesce(db.func.max(Note.pin_order), 0)).filter(
+                max_note_pin = db.session.query(db.func.coalesce(db.func.max(Note.pin_order), 0)).filter(
                     Note.user_id == user.id,
                     Note.pinned.is_(True)
-                ).scalar()
+                ).scalar() or 0
+                max_folder_pin = db.session.query(db.func.coalesce(db.func.max(NoteFolder.pin_order), 0)).filter(
+                    NoteFolder.user_id == user.id,
+                    NoteFolder.pinned.is_(True)
+                ).scalar() or 0
+                max_pin = max(max_note_pin, max_folder_pin)
                 note.pin_order = (max_pin or 0) + 1
             if not is_pin:
                 note.pin_order = 0
@@ -1298,6 +1303,24 @@ def note_folder_detail(folder_id):
             if not parent:
                 return jsonify({'error': 'Parent folder not found'}), 404
         folder.parent_id = parent_id_int
+    if 'pinned' in data:
+        is_pin = str(data.get('pinned')).lower() in ['1', 'true', 'yes', 'on']
+        if is_pin and folder.archived_at:
+            return jsonify({'error': 'Archived folders cannot be pinned.'}), 403
+        if is_pin and not folder.pinned:
+            max_note_pin = db.session.query(db.func.coalesce(db.func.max(Note.pin_order), 0)).filter(
+                Note.user_id == user.id,
+                Note.pinned.is_(True)
+            ).scalar() or 0
+            max_folder_pin = db.session.query(db.func.coalesce(db.func.max(NoteFolder.pin_order), 0)).filter(
+                NoteFolder.user_id == user.id,
+                NoteFolder.pinned.is_(True)
+            ).scalar() or 0
+            max_pin = max(max_note_pin, max_folder_pin)
+            folder.pin_order = (max_pin or 0) + 1
+        if not is_pin:
+            folder.pin_order = 0
+        folder.pinned = is_pin
     # Handle notes PIN protection toggle
     if 'is_pin_protected' in data:
         is_protected = str(data.get('is_pin_protected')).lower() in ['1', 'true', 'yes', 'on']
