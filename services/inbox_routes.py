@@ -312,6 +312,29 @@ def _available_notes(a, user):
     return [note for note in notes if note.folder_id not in protected_folders]
 
 
+def _context_text(value, limit=500):
+    cleaned = ' '.join(str(value or '').split())
+    return cleaned[:limit] or None
+
+
+def _note_folder_paths(a, user):
+    folders = {
+        folder.id: folder
+        for folder in a.NoteFolder.query.filter_by(user_id=user.id).all()
+    }
+    paths = {}
+    for folder_id, folder in folders.items():
+        parts = []
+        current = folder
+        visited = set()
+        while current and current.id not in visited:
+            visited.add(current.id)
+            parts.append(current.name)
+            current = folders.get(current.parent_id)
+        paths[folder_id] = ' / '.join(reversed(parts))
+    return paths
+
+
 def build_destination_catalog(a, user, include_context=False):
     lists = a.TodoList.query.filter(
         a.TodoList.user_id == user.id,
@@ -319,6 +342,11 @@ def build_destination_catalog(a, user, include_context=False):
     ).order_by(a.TodoList.title.asc()).all()
     task_destinations = []
     for todo_list in lists:
+        phase_titles = {
+            item.id: item.content
+            for item in todo_list.items
+            if item.is_phase_header()
+        }
         phases = [
             {
                 'id': item.id,
@@ -334,13 +362,35 @@ def build_destination_catalog(a, user, include_context=False):
             'phases': phases,
         }
         if include_context:
-            entry['samples'] = [
-                item.content
-                for item in todo_list.items
-                if not item.is_phase_header()
-            ][:8]
+            regular_items = [
+                item for item in todo_list.items if not item.is_phase_header()
+            ]
+            regular_items.sort(key=lambda item: (
+                item.status == 'done',
+                item.status != 'in_progress',
+                item.due_date or date.max,
+                item.order_index or 0,
+                item.id or 0,
+            ))
+            entry['samples'] = [item.content for item in regular_items[:12]]
+            entry['items'] = [
+                {
+                    'id': item.id,
+                    'title': item.content,
+                    'status': item.status,
+                    'phase_id': item.phase_id,
+                    'phase': phase_titles.get(item.phase_id),
+                    'description': _context_text(item.description, 350),
+                    'notes': _context_text(item.notes, 350),
+                    'tags': item.tag_list(),
+                    'due_date': item.due_date.isoformat() if item.due_date else None,
+                }
+                for item in regular_items[:24]
+            ]
+            entry['item_count'] = len(regular_items)
         task_destinations.append(entry)
 
+    folder_paths = _note_folder_paths(a, user) if include_context else {}
     note_destinations = []
     note_list_destinations = []
     for note in _available_notes(a, user):
@@ -351,7 +401,9 @@ def build_destination_catalog(a, user, include_context=False):
             )
             sections = []
             current_section = None
+            current_subsection = None
             samples = []
+            context_items = []
             for item in ordered_items:
                 kind = _marker_kind(item.text)
                 if kind == 'section':
@@ -361,28 +413,228 @@ def build_destination_catalog(a, user, include_context=False):
                         'subsections': [],
                     }
                     sections.append(current_section)
+                    current_subsection = None
                 elif kind == 'subsection' and current_section is not None:
-                    current_section['subsections'].append({
+                    current_subsection = {
                         'id': item.id,
                         'title': _marker_title(item.text) or 'Untitled subsection',
-                    })
-                elif not kind and include_context and len(samples) < 8:
-                    samples.append(item.text)
+                    }
+                    current_section['subsections'].append(current_subsection)
+                elif not kind and include_context:
+                    if len(samples) < 12:
+                        samples.append(item.text)
+                    if len(context_items) < 30:
+                        context_items.append({
+                            'id': item.id,
+                            'text': item.text,
+                            'note': _context_text(item.note, 280),
+                            'checked': bool(item.checked),
+                            'scheduled_date': (
+                                item.scheduled_date.isoformat()
+                                if item.scheduled_date
+                                else None
+                            ),
+                            'section_id': (
+                                current_section['id'] if current_section else None
+                            ),
+                            'section': (
+                                current_section['title'] if current_section else None
+                            ),
+                            'subsection_id': (
+                                current_subsection['id']
+                                if current_subsection
+                                else None
+                            ),
+                            'subsection': (
+                                current_subsection['title']
+                                if current_subsection
+                                else None
+                            ),
+                        })
             entry = {'id': note.id, 'title': note.title, 'sections': sections}
             if include_context:
                 entry['samples'] = samples
+                entry['items'] = context_items
+                entry['item_count'] = len([
+                    item for item in ordered_items if not _marker_kind(item.text)
+                ])
+                entry['folder'] = folder_paths.get(note.folder_id)
             note_list_destinations.append(entry)
             continue
 
         entry = {'id': note.id, 'title': note.title}
         if include_context:
-            entry['snippet'] = _html_to_plain_text(note.content or '')[:240]
+            entry['snippet'] = _context_text(
+                _html_to_plain_text(note.content or ''),
+                900,
+            )
+            entry['folder'] = folder_paths.get(note.folder_id)
+            entry['updated_at'] = (
+                note.updated_at.isoformat() if note.updated_at else None
+            )
         note_destinations.append(entry)
 
     return {
         'task_lists': task_destinations,
         'notes': note_destinations,
         'note_lists': note_list_destinations,
+    }
+
+
+def _rank_context_entries(content, entries, sample_getter):
+    return sorted(
+        entries,
+        key=lambda entry: (
+            _candidate_score(
+                content,
+                entry.get('title') or '',
+                sample_getter(entry),
+            ),
+            entry.get('item_count') or 0,
+        ),
+        reverse=True,
+    )
+
+
+def build_routing_context(a, user, content, catalog):
+    """Build bounded, user-specific evidence for the AI routing decision."""
+    today_value = a._now_local().date()
+    task_lists = _rank_context_entries(
+        content,
+        catalog['task_lists'],
+        lambda entry: [
+            item.get('title') or ''
+            for item in entry.get('items', [])
+        ],
+    )
+    notes = _rank_context_entries(
+        content,
+        catalog['notes'],
+        lambda entry: [entry.get('snippet') or ''],
+    )
+    note_lists = _rank_context_entries(
+        content,
+        catalog['note_lists'],
+        lambda entry: [
+            item.get('text') or ''
+            for item in entry.get('items', [])
+        ],
+    )
+
+    destination_index = {
+        'task_lists': [
+            {
+                'id': entry['id'],
+                'title': entry['title'],
+                'type': entry['type'],
+                'phases': entry.get('phases', []),
+                'item_count': entry.get('item_count', 0),
+                'sample_items': [
+                    item.get('title')
+                    for item in entry.get('items', [])[:6]
+                ],
+            }
+            for entry in catalog['task_lists']
+        ],
+        'notes': [
+            {
+                'id': entry['id'],
+                'title': entry['title'],
+                'folder': entry.get('folder'),
+                'content_preview': _context_text(entry.get('snippet'), 280),
+            }
+            for entry in catalog['notes']
+        ],
+        'note_lists': [
+            {
+                'id': entry['id'],
+                'title': entry['title'],
+                'folder': entry.get('folder'),
+                'sections': entry.get('sections', []),
+                'item_count': entry.get('item_count', 0),
+                'sample_items': [
+                    item.get('text')
+                    for item in entry.get('items', [])[:8]
+                ],
+            }
+            for entry in catalog['note_lists']
+        ],
+    }
+
+    future_events = (
+        a.CalendarEvent.query
+        .filter(
+            a.CalendarEvent.user_id == user.id,
+            a.CalendarEvent.day >= today_value,
+        )
+        .order_by(
+            a.CalendarEvent.day.asc(),
+            a.CalendarEvent.start_time.asc(),
+            a.CalendarEvent.id.asc(),
+        )
+        .limit(30)
+        .all()
+    )
+    recent_events = (
+        a.CalendarEvent.query
+        .filter(
+            a.CalendarEvent.user_id == user.id,
+            a.CalendarEvent.day < today_value,
+        )
+        .order_by(a.CalendarEvent.day.desc(), a.CalendarEvent.id.desc())
+        .limit(15)
+        .all()
+    )
+    calendar_patterns = []
+    for event in future_events + recent_events:
+        linked_kind = None
+        if event.todo_item_id:
+            linked_kind = 'task'
+        elif event.note_list_item_id:
+            linked_kind = 'note_list'
+        elif event.planner_simple_item_id or event.planner_multi_item_id:
+            linked_kind = 'planner'
+        calendar_patterns.append({
+            'title': event.title,
+            'day': event.day.isoformat(),
+            'start_time': (
+                event.start_time.strftime('%H:%M') if event.start_time else None
+            ),
+            'end_time': (
+                event.end_time.strftime('%H:%M') if event.end_time else None
+            ),
+            'is_event': bool(event.is_event),
+            'status': event.status,
+            'linked_kind': linked_kind,
+        })
+
+    mapping_history = []
+    mapped_items = (
+        a.InboxItem.query
+        .filter_by(user_id=user.id, status='mapped')
+        .order_by(a.InboxItem.mapped_at.desc(), a.InboxItem.id.desc())
+        .limit(25)
+        .all()
+    )
+    for item in mapped_items:
+        try:
+            mapped_result = json.loads(item.mapped_result_json or '{}')
+        except (TypeError, ValueError, json.JSONDecodeError):
+            mapped_result = {}
+        mapping_history.append({
+            'capture': _context_text(item.content, 500),
+            'destination_kind': item.mapped_destination_type,
+            'destination_label': mapped_result.get('label'),
+            'mapped_at': item.mapped_at.isoformat() if item.mapped_at else None,
+        })
+
+    return {
+        'destination_index': destination_index,
+        'task_context': task_lists[:30],
+        'note_context': notes[:35],
+        'note_list_context': note_lists[:35],
+        'calendar_patterns': calendar_patterns,
+        'prior_inbox_mappings': mapping_history,
     }
 
 
@@ -483,6 +735,15 @@ def build_heuristic_suggestion(content, catalog, today=None):
         and best_task_score >= 5
         and re.search(r'\b(?:task|project|phase)\b', lower)
     )
+    contextual_task_intent = bool(
+        best_task
+        and best_task_score >= 5
+        and re.search(
+            r'\b(?:add|build|call|check|create|draft|email|finish|fix|follow up|'
+            r'implement|prepare|review|send|submit|test|update|verify|write)\b',
+            lower,
+        )
+    )
 
     if best_note_list and (
         explicit_note_list_destination
@@ -525,7 +786,7 @@ def build_heuristic_suggestion(content, catalog, today=None):
         }
         return destination, f"Best matching note: {best_note['title']}.", min(0.92, 0.55 + best_note_score / 50)
 
-    if schedule['date'] and not explicit_task_destination:
+    if schedule['date'] and not (explicit_task_destination or contextual_task_intent):
         destination = {
             'kind': 'calendar',
             'title': clean_title,
@@ -580,15 +841,32 @@ def _ai_suggestion(a, user, content, catalog, fallback):
     if not _ai_available(a):
         return None
     today_value = a._now_local().date().isoformat()
-    compact_catalog = {
-        'task_lists': catalog['task_lists'][:80],
-        'notes': catalog['notes'][:80],
-        'note_lists': catalog['note_lists'][:80],
-    }
+    routing_context = build_routing_context(a, user, content, catalog)
     system_prompt = f"""
-You route one inbox capture into an existing personal organization system.
-Today is {today_value}. Choose only IDs present in the supplied catalog.
-Return one JSON object with keys: destination, reason, confidence.
+You are the intent-understanding router for a personal organization system.
+Today is {today_value}. Analyze what the capture means before choosing where it belongs.
+Use the user's existing projects, tasks, notes, maintained lists, calendar behavior, and
+prior Inbox mappings as evidence. Do not route by keyword overlap alone.
+
+Important distinctions:
+- A date is evidence, not an automatic Calendar decision.
+- Use Calendar for a standalone appointment, event, reservation, time block, or dated
+  action that has no stronger existing project/list home.
+- Use task when the capture is actionable work that belongs to an existing task list or
+  project. A mentioned date then becomes due_date, including when the project name is
+  implied by related tasks rather than copied verbatim.
+- Use note for narrative, reference material, observations, or information that extends
+  an existing note.
+- Use note_list for one atomic member of an existing checklist, shopping list, packing
+  list, or other maintained structured list. Select the best section/subsection.
+- Treat prior Inbox mappings as user-specific preference examples, not absolute rules.
+- Compare the capture with sibling items and the purpose implied by each container.
+- If evidence conflicts, prefer the destination that preserves the capture's intent and
+  explain the decisive context briefly.
+
+Choose only IDs present in destination_index. Never invent an ID.
+Return one JSON object with keys: intent, destination, reason, confidence.
+intent is a short description of what the user is trying to record.
 confidence must be a number from 0 to 1.
 destination.kind must be task, calendar, note, or note_list.
 
@@ -611,23 +889,25 @@ note_list destination:
 "start_time":"HH:MM or null","end_time":"HH:MM or null",
 "reminder_minutes_before":null}}
 
-Infer useful details from the capture. Prefer an existing semantically matching project,
-note, list, phase, section, or subsection. An explicit date usually means the calendar
-unless the capture clearly instructs you to add it to a named task, project, note, or list.
-Calendar titles must not contain the extracted date, time, or reminder phrase.
-Do not invent IDs.
+Use the parsed schedule when it reflects the capture, but do not manufacture scheduling.
+Remove date, time, and reminder phrases from Calendar titles. Keep Calendar description
+out of the result. Make task and list-item titles concise while preserving their meaning.
 """
     payload = {
         'capture': content,
-        'catalog': compact_catalog,
+        'parsed_schedule': extract_capture_schedule(
+            content,
+            today=a._now_local().date(),
+        ),
+        'organization_context': routing_context,
         'fallback_suggestion': fallback,
     }
     return call_chat_json(
         system_prompt,
         json.dumps(payload, ensure_ascii=True),
-        max_tokens=700,
+        max_tokens=900,
         temperature=0.1,
-        retries=0,
+        retries=1,
         logger=a.app.logger,
     )
 
@@ -895,8 +1175,8 @@ def refine_suggestion_with_ai(a, user, inbox_item, catalog, fallback_destination
 
 def generate_suggestion(a, user, inbox_item):
     """Generate a suggestion synchronously for scripts and focused tests."""
-    destination, confidence, catalog = generate_rule_suggestion(a, user, inbox_item)
-    if confidence < 0.82:
+    destination, _confidence, catalog = generate_rule_suggestion(a, user, inbox_item)
+    if _ai_available(a):
         refined = refine_suggestion_with_ai(
             a,
             user,
@@ -922,7 +1202,7 @@ def process_inbox_suggestion(item_id):
 
     try:
         destination, confidence, catalog = generate_rule_suggestion(a, user, item)
-        should_refine = confidence < 0.82 and _ai_available(a)
+        should_refine = _ai_available(a)
         if should_refine:
             item.suggestion_status = 'refining'
         a.db.session.commit()
@@ -1260,3 +1540,15 @@ def map_inbox_item_route(item_id):
         a.db.session.rollback()
         a.app.logger.exception('Failed to map inbox item %s', item_id)
         return a.jsonify({'error': 'Could not map this inbox item.'}), 500
+
+
+def delete_inbox_item(item_id):
+    import app as a
+
+    user = a.get_current_user()
+    if not user:
+        return a.jsonify({'error': 'No user selected'}), 401
+    item = a.InboxItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+    a.db.session.delete(item)
+    a.db.session.commit()
+    return '', 204

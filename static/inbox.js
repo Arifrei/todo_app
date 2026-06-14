@@ -123,14 +123,24 @@ function renderInboxItems() {
                 ${suggestionHtml}
                 <div class="inbox-card-actions">
                     <button class="btn btn-primary inbox-accept-btn" type="button"
-                            data-inbox-id="${item.id}" ${suggestion.label && !item.temporary ? '' : 'disabled'}>
+                            data-inbox-id="${item.id}" title="Accept suggestion"
+                            aria-label="Accept suggestion" ${suggestion.label && !item.temporary ? '' : 'disabled'}>
                         <i class="fa-solid fa-check"></i>
-                        Accept suggestion
+                        <span class="inbox-action-label inbox-action-label-full">Accept suggestion</span>
+                        <span class="inbox-action-label inbox-action-label-short">Accept</span>
                     </button>
                     <button class="btn inbox-manual-btn" type="button" data-inbox-id="${item.id}"
+                            title="Map manually" aria-label="Map manually"
                             ${item.temporary ? 'disabled' : ''}>
                         <i class="fa-solid fa-sliders"></i>
-                        Map manually
+                        <span class="inbox-action-label inbox-action-label-full">Map manually</span>
+                        <span class="inbox-action-label inbox-action-label-short">Map</span>
+                    </button>
+                    <button class="btn btn-danger inbox-delete-btn" type="button" data-inbox-id="${item.id}"
+                            title="Delete inbox item" aria-label="Delete inbox item"
+                            ${item.temporary ? 'disabled' : ''}>
+                        <i class="fa-solid fa-trash"></i>
+                        <span class="inbox-action-label">Delete</span>
                     </button>
                 </div>
             </article>
@@ -207,6 +217,23 @@ async function acceptInboxSuggestion(itemId, button) {
         showToast(error.message, 'error');
         inboxSetBusy(button, false);
     }
+}
+
+function deleteInboxItem(itemId) {
+    openConfirmModal('Delete this inbox item?', async () => {
+        try {
+            const response = await fetch(`/api/inbox/${itemId}`, { method: 'DELETE' });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload.error || 'Could not delete inbox item');
+            }
+            inboxState.items = inboxState.items.filter(item => item.id !== itemId);
+            renderInboxItems();
+            showToast('Inbox item deleted', 'success');
+        } catch (error) {
+            showToast(error.message, 'error');
+        }
+    });
 }
 
 async function loadInboxDestinations() {
@@ -443,7 +470,12 @@ function initInboxPage() {
             return;
         }
         const manual = event.target.closest('.inbox-manual-btn');
-        if (manual) openInboxMapper(Number(manual.dataset.inboxId));
+        if (manual) {
+            openInboxMapper(Number(manual.dataset.inboxId));
+            return;
+        }
+        const deleteButton = event.target.closest('.inbox-delete-btn');
+        if (deleteButton) deleteInboxItem(Number(deleteButton.dataset.inboxId));
     });
     document.getElementById('inbox-map-kind')?.addEventListener('change', event => {
         showInboxMapKind(event.target.value);

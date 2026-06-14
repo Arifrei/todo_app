@@ -504,6 +504,12 @@ def map_inbox_item_route(item_id):
     return _impl(item_id)
 
 
+@app.route('/api/inbox/<int:item_id>', methods=['DELETE'])
+def delete_inbox_item(item_id):
+    from services.inbox_routes import delete_inbox_item as _impl
+    return _impl(item_id)
+
+
 @app.route('/api/lists/reorder', methods=['POST'])
 def reorder_lists():
     from services.list_routes import reorder_lists as _impl

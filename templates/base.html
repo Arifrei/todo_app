@@ -255,6 +255,13 @@
                 <img src="{{ url_for('static', filename='myo.png') }}" alt="Simply Tasks">
             </div>
             <div class="mobile-topbar-actions">
+                <a class="btn-icon-mobile mobile-inbox-btn{{ ' active' if request.path.startswith('/inbox') else '' }}"
+                   href="/inbox"
+                   aria-label="Inbox"
+                   title="Inbox"
+                   {% if request.path.startswith('/inbox') %}aria-current="page"{% endif %}>
+                    <i class="fa-solid fa-box-open"></i>
+                </a>
                 <button class="btn-icon-mobile" id="mobile-quick-access-btn" type="button" aria-label="Quick Access" title="Quick Access">
                     <i class="fa-solid fa-star"></i>
                 </button>

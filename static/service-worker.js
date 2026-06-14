@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taskflow-cache-v20';
+const CACHE_NAME = 'taskflow-cache-v22';
 const CORE_ASSETS = [
   '/',
   '/static/style.css',
