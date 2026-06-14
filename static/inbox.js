@@ -83,35 +83,21 @@ function renderInboxItems() {
             !suggestion.label
             && (item.temporary || ['pending', 'processing'].includes(item.suggestion_status))
         );
-        const isRefining = item.suggestion_status === 'refining' && Boolean(suggestion.label);
-        const confidence = Number.isFinite(Number(item.suggestion_confidence))
-            ? `${Math.round(Number(item.suggestion_confidence) * 100)}%`
-            : '';
-        const source = item.suggestion_source === 'ai'
-            ? 'AI suggestion'
-            : (isRefining ? 'Auto suggestion, AI refining' : 'Auto suggestion');
         const suggestionHtml = isDetecting
             ? `
                 <div class="inbox-suggestion inbox-suggestion-detecting">
                     <strong><i class="fa-solid fa-spinner fa-spin"></i> Detecting destination...</strong>
-                    <p>The item is saved. You can add the next one now.</p>
                 </div>
             `
             : suggestion.label
             ? `
                 <div class="inbox-suggestion">
-                    <div class="inbox-suggestion-heading">
-                        <span>${escapeHtml(source)}</span>
-                        ${confidence ? `<small>${escapeHtml(confidence)}</small>` : ''}
-                    </div>
                     <strong>${escapeHtml(suggestion.label)}</strong>
-                    <p>${escapeHtml(item.suggestion_reason || '')}</p>
                 </div>
             `
             : `
                 <div class="inbox-suggestion inbox-suggestion-unavailable">
                     <strong>Manual mapping needed</strong>
-                    <p>${escapeHtml(item.suggestion_reason || 'No automatic suggestion is available.')}</p>
                 </div>
             `;
         return `

@@ -116,26 +116,8 @@
     background: rgba(209, 250, 229, 0.42);
 }
 
-.inbox-suggestion-heading {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 0.35rem;
-    color: #047857;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-}
-
 .inbox-suggestion strong {
     display: block;
-}
-
-.inbox-suggestion p {
-    margin: 0.3rem 0 0;
-    color: var(--text-muted);
-    font-size: 0.8rem;
 }
 
 .inbox-suggestion-unavailable {
