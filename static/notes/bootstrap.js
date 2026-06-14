@@ -36,7 +36,8 @@ function initNotesListPage() {
     const folderId = rawFolderId ? parseInt(rawFolderId, 10) : null;
     noteFolderState.currentFolderId = Number.isFinite(folderId) ? folderId : null;
 
-    // Initialize FAB
+    // Initialize search and FAB
+    initNoteTitleSearch();
     initNotesFab();
 
     // Initialize bulk action buttons
@@ -98,6 +99,15 @@ let noteSwipeState = {
 
 // FAB state
 let noteFabExpanded = false;
+let noteSearchState = {
+    open: false,
+    query: '',
+    loading: false,
+    results: [],
+    error: '',
+    timer: null,
+    controller: null
+};
 
 /**
  * Load notes and folders, then render unified list
@@ -147,6 +157,219 @@ async function loadNotesUnified() {
         console.error('Error loading notes:', err);
         listEl.innerHTML = '<div class="notes-empty-state"><i class="fa-solid fa-exclamation-circle"></i><p>Could not load notes</p></div>';
     }
+}
+
+function initNoteTitleSearch() {
+    const toggle = document.getElementById('notes-search-toggle');
+    const panel = document.getElementById('notes-search-panel');
+    const input = document.getElementById('notes-search-input');
+    const clear = document.getElementById('notes-search-clear');
+    if (!toggle || !panel || !input) return;
+
+    toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setNoteSearchOpen(!noteSearchState.open);
+    });
+
+    input.addEventListener('input', () => {
+        noteSearchState.query = input.value.trim();
+        scheduleNoteTitleSearch();
+        renderNoteSearchResults();
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            setNoteSearchOpen(false);
+        }
+    });
+
+    if (clear) {
+        clear.addEventListener('click', () => {
+            input.value = '';
+            noteSearchState.query = '';
+            noteSearchState.results = [];
+            noteSearchState.error = '';
+            if (noteSearchState.controller) noteSearchState.controller.abort();
+            renderNoteSearchResults();
+            input.focus();
+        });
+    }
+
+    renderNoteSearchResults();
+}
+
+function setNoteSearchOpen(open) {
+    const toggle = document.getElementById('notes-search-toggle');
+    const panel = document.getElementById('notes-search-panel');
+    const input = document.getElementById('notes-search-input');
+    const fab = document.getElementById('notes-fab');
+    if (!toggle || !panel || !input) return;
+
+    noteSearchState.open = !!open;
+    panel.classList.toggle('active', noteSearchState.open);
+    panel.setAttribute('aria-hidden', noteSearchState.open ? 'false' : 'true');
+    toggle.classList.toggle('active', noteSearchState.open);
+    toggle.setAttribute('aria-expanded', noteSearchState.open ? 'true' : 'false');
+
+    if (noteSearchState.open) {
+        noteFabExpanded = false;
+        if (fab) fab.classList.remove('expanded');
+        window.requestAnimationFrame(() => input.focus());
+        renderNoteSearchResults();
+    } else if (noteSearchState.controller) {
+        noteSearchState.controller.abort();
+    }
+}
+
+function scheduleNoteTitleSearch() {
+    if (noteSearchState.timer) {
+        clearTimeout(noteSearchState.timer);
+    }
+    if (!noteSearchState.query) {
+        noteSearchState.loading = false;
+        noteSearchState.results = [];
+        noteSearchState.error = '';
+        if (noteSearchState.controller) noteSearchState.controller.abort();
+        return;
+    }
+    noteSearchState.loading = true;
+    noteSearchState.error = '';
+    noteSearchState.timer = setTimeout(runNoteTitleSearch, 220);
+}
+
+async function runNoteTitleSearch() {
+    const query = noteSearchState.query;
+    if (!query) return;
+    if (noteSearchState.controller) noteSearchState.controller.abort();
+    noteSearchState.controller = new AbortController();
+    renderNoteSearchResults();
+
+    try {
+        const params = new URLSearchParams({ all: '1', search: query });
+        const res = await fetch(`/api/notes?${params.toString()}`, {
+            signal: noteSearchState.controller.signal
+        });
+        if (res.status === 401) {
+            window.location.href = '/select-user';
+            return;
+        }
+        if (!res.ok) throw new Error('Search failed');
+        const results = await res.json();
+        if (query !== noteSearchState.query) return;
+        noteSearchState.results = Array.isArray(results) ? results : [];
+        noteSearchState.error = '';
+    } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.error('Note title search failed:', err);
+        noteSearchState.results = [];
+        noteSearchState.error = 'Could not search notes';
+    } finally {
+        if (query === noteSearchState.query) {
+            noteSearchState.loading = false;
+            renderNoteSearchResults();
+        }
+    }
+}
+
+function renderNoteSearchResults() {
+    const resultsEl = document.getElementById('notes-search-results');
+    const clear = document.getElementById('notes-search-clear');
+    if (!resultsEl) return;
+
+    if (clear) {
+        clear.classList.toggle('visible', !!noteSearchState.query);
+    }
+
+    resultsEl.innerHTML = '';
+    if (!noteSearchState.query) {
+        const hint = document.createElement('div');
+        hint.className = 'notes-search-empty';
+        hint.textContent = 'Search all note titles.';
+        resultsEl.appendChild(hint);
+        return;
+    }
+
+    if (noteSearchState.loading) {
+        const loading = document.createElement('div');
+        loading.className = 'notes-search-empty';
+        loading.textContent = 'Searching...';
+        resultsEl.appendChild(loading);
+        return;
+    }
+
+    if (noteSearchState.error) {
+        const error = document.createElement('div');
+        error.className = 'notes-search-empty error';
+        error.textContent = noteSearchState.error;
+        resultsEl.appendChild(error);
+        return;
+    }
+
+    if (!noteSearchState.results.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notes-search-empty';
+        empty.textContent = 'No matching titles.';
+        resultsEl.appendChild(empty);
+        return;
+    }
+
+    noteSearchState.results.forEach(note => {
+        resultsEl.appendChild(createNoteSearchResultItem(note));
+    });
+}
+
+function createNoteSearchResultItem(note) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'notes-search-result';
+    const isList = note.note_type === 'list';
+    const isLocked = !!(note.locked || note.is_pin_protected);
+    const iconName = isList ? 'fa-list' : 'fa-note-sticky';
+    const typeLabel = isList ? 'List' : 'Note';
+    const folderPath = getNoteFolderPath(note.folder_id);
+
+    item.innerHTML = `
+        <span class="notes-search-result-icon ${isList ? 'type-list' : 'type-note'}">
+            <i class="fa-solid ${iconName}"></i>
+        </span>
+        <span class="notes-search-result-main">
+            <span class="notes-search-result-title">${escapeHtml(getNoteDisplayTitle(note))}</span>
+            <span class="notes-search-result-meta">${escapeHtml(typeLabel)} &middot; ${escapeHtml(folderPath)}</span>
+        </span>
+        ${isLocked ? '<i class="notes-search-result-lock fa-solid fa-lock"></i>' : ''}
+    `;
+
+    item.addEventListener('click', () => {
+        if (isLocked) {
+            pinState.pendingNoteId = note.id;
+            pinState.pendingFolderId = null;
+            pinState.pendingAction = null;
+            openPinModal();
+            return;
+        }
+        openNoteInEditor(note.id);
+    });
+
+    return item;
+}
+
+function getNoteFolderPath(folderId) {
+    const parsedFolderId = parseInt(folderId, 10);
+    if (!Number.isFinite(parsedFolderId)) return 'Main';
+
+    const folders = noteFolderState.folders || [];
+    const folderMap = new Map(folders.map(folder => [folder.id, folder]));
+    const names = [];
+    const seen = new Set();
+    let current = folderMap.get(parsedFolderId);
+
+    while (current && !seen.has(current.id)) {
+        names.unshift(current.name || 'Folder');
+        seen.add(current.id);
+        current = current.parent_id ? folderMap.get(current.parent_id) : null;
+    }
+
+    return names.length ? names.join(' / ') : 'Folder';
 }
 
 /**

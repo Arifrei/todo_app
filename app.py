@@ -22,7 +22,7 @@ from backend.embedding_service import (
     delete_embedding_for_entity,
     refresh_embedding_for_entity,
 )
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, InboxItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -90,8 +90,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'inbox', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['inbox', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
@@ -382,6 +382,11 @@ def tasks_page():
     from services.inline_routes import tasks_page as _impl
     return _impl()
 
+@app.route('/inbox')
+def inbox_page():
+    from services.inbox_routes import inbox_page as _impl
+    return _impl()
+
 @app.route('/download/app')
 def download_app():
     from services.inline_routes import download_app as _impl
@@ -474,6 +479,29 @@ def list_view(list_id):
 def handle_lists():
     from services.list_routes import handle_lists as _impl
     return _impl()
+
+@app.route('/api/inbox', methods=['GET', 'POST'])
+def inbox_items():
+    from services.inbox_routes import inbox_items as _impl
+    return _impl()
+
+
+@app.route('/api/inbox/destinations', methods=['GET'])
+def inbox_destinations():
+    from services.inbox_routes import inbox_destinations as _impl
+    return _impl()
+
+
+@app.route('/api/inbox/<int:item_id>/accept', methods=['POST'])
+def accept_inbox_suggestion(item_id):
+    from services.inbox_routes import accept_inbox_suggestion as _impl
+    return _impl(item_id)
+
+
+@app.route('/api/inbox/<int:item_id>/map', methods=['POST'])
+def map_inbox_item_route(item_id):
+    from services.inbox_routes import map_inbox_item_route as _impl
+    return _impl(item_id)
 
 
 @app.route('/api/lists/reorder', methods=['POST'])

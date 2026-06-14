@@ -18,6 +18,9 @@
             {% endif %}
         </div>
         <div class="notes-header-actions">
+            <button class="notes-search-toggle" id="notes-search-toggle" type="button" aria-label="Search notes" aria-controls="notes-search-panel" aria-expanded="false">
+                <i class="fa-solid fa-magnifying-glass"></i>
+            </button>
             <!-- FAB Button -->
             <div class="notes-fab-container notes-fab-header" id="notes-fab">
                 <button class="notes-fab-main" id="notes-fab-main" aria-label="Add note options" aria-controls="notes-fab" aria-expanded="false">
@@ -40,6 +43,17 @@
             </div>
         </div>
     </header>
+
+    <div class="notes-search-panel" id="notes-search-panel" aria-hidden="true">
+        <div class="notes-search-field">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="search" id="notes-search-input" placeholder="Search note titles" autocomplete="off">
+            <button class="notes-search-clear" id="notes-search-clear" type="button" aria-label="Clear search">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="notes-search-results" id="notes-search-results"></div>
+    </div>
 
     <!-- Bulk Action Bar -->
     <div class="bulk-actions u-hidden" id="notes-bulk-actions">

@@ -166,6 +166,7 @@ def handle_notes():
     include_all = parse_bool(request.args.get('all'))
     include_hidden = parse_bool(request.args.get('include_hidden'))
     archived_only = parse_bool(request.args.get('archived'))
+    title_search = (request.args.get('search') or request.args.get('q') or '').strip()
     planner_multi_item_id = request.args.get('planner_multi_item_id')
     planner_multi_line_id = request.args.get('planner_multi_line_id')
     planner_multi_item_id = int(planner_multi_item_id) if planner_multi_item_id and str(planner_multi_item_id).isdigit() else None
@@ -260,6 +261,14 @@ def handle_notes():
             notes_query = notes_query.filter(Note.folder_id.is_(None))
         else:
             notes_query = notes_query.filter_by(folder_id=folder_id_int)
+    if title_search:
+        title_search_like = (
+            title_search
+            .replace('\\', '\\\\')
+            .replace('%', '\\%')
+            .replace('_', '\\_')
+        )
+        notes_query = notes_query.filter(Note.title.ilike(f'%{title_search_like}%', escape='\\'))
     if planner_multi_item_id:
         notes_query = notes_query.filter(Note.planner_multi_item_id == planner_multi_item_id)
     if planner_multi_line_id:

@@ -122,7 +122,7 @@
     gap: 1rem;
     position: relative;
     flex-wrap: nowrap;
-    padding-right: 4.5rem;
+    padding-right: 7.5rem;
 }
 
 .notes-page-header h1 {
@@ -149,6 +149,179 @@
     flex-direction: column;
     flex: 1;
     min-width: 0;
+}
+
+.notes-search-toggle {
+    position: fixed;
+    top: 2.5rem;
+    right: 5.5rem;
+    z-index: 1001;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--white);
+    color: var(--text-color);
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.notes-search-toggle:hover,
+.notes-search-toggle.active {
+    color: var(--primary-color);
+    border-color: rgba(59, 130, 246, 0.45);
+    box-shadow: var(--shadow-lg);
+    transform: scale(1.04);
+}
+
+.notes-search-panel {
+    display: none;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--white);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+
+.notes-search-panel.active {
+    display: block;
+}
+
+.notes-search-field {
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 0.9rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-muted);
+}
+
+.notes-search-field input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-color);
+    font: inherit;
+}
+
+.notes-search-field input::-webkit-search-cancel-button {
+    display: none;
+}
+
+.notes-search-clear {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+.notes-search-clear.visible {
+    display: flex;
+}
+
+.notes-search-clear:hover {
+    background: var(--bg-color);
+    color: var(--text-color);
+}
+
+.notes-search-results {
+    display: flex;
+    flex-direction: column;
+    max-height: min(440px, 60vh);
+    overflow-y: auto;
+}
+
+.notes-search-empty {
+    padding: 1rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.notes-search-empty.error {
+    color: var(--danger-color);
+}
+
+.notes-search-result {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--white);
+    color: var(--text-color);
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.notes-search-result:last-child {
+    border-bottom: none;
+}
+
+.notes-search-result:hover {
+    background: var(--bg-color);
+}
+
+.notes-search-result-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    color: white;
+}
+
+.notes-search-result-icon.type-note {
+    background: linear-gradient(135deg, #3b82f6, #06b6d4);
+}
+
+.notes-search-result-icon.type-list {
+    background: linear-gradient(135deg, #10b981, #14b8a6);
+}
+
+.notes-search-result-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 1;
+}
+
+.notes-search-result-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.notes-search-result-meta {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.notes-search-result-lock {
+    color: var(--text-muted);
+    flex: 0 0 auto;
 }
 
 .notes-unified-list {
@@ -582,6 +755,11 @@
         top: calc(1.25rem + 40px + env(safe-area-inset-top, 0px));
         right: 1rem;
     }
+
+    .notes-search-toggle {
+        top: calc(1.25rem + 40px + env(safe-area-inset-top, 0px));
+        right: 4rem;
+    }
 }
 
 .notes-fab-main {
@@ -664,6 +842,16 @@
 }
 
 @media (max-width: 768px) {
+    .notes-search-toggle {
+        position: absolute;
+        top: 0;
+        right: 3rem;
+    }
+
+    .notes-search-panel {
+        border-radius: 8px;
+    }
+
     .notes-fab-header {
         position: absolute;
         top: 0;

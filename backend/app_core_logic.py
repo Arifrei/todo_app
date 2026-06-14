@@ -1017,14 +1017,75 @@ def _rollover_incomplete_events():
                     continue
 
                 linked_todo_ids = {ev.todo_item_id for ev in events if ev.todo_item_id}
+                todo_items_by_id = {}
                 done_linked_todo_ids = set()
                 if linked_todo_ids:
-                    done_linked_todo_ids = {
-                        task_id for (task_id,) in db.session.query(TodoItem.id).filter(
-                            TodoItem.id.in_(linked_todo_ids),
-                            TodoItem.status == 'done'
+                    todo_items_by_id = {
+                        item.id: item for item in TodoItem.query.filter(
+                            TodoItem.id.in_(linked_todo_ids)
                         ).all()
                     }
+                    done_linked_todo_ids = {
+                        item_id for item_id, item in todo_items_by_id.items()
+                        if item.status == 'done'
+                    }
+
+                linked_note_item_ids = {ev.note_list_item_id for ev in events if ev.note_list_item_id}
+                note_items_by_id = {}
+                done_linked_note_item_ids = set()
+                if linked_note_item_ids:
+                    note_items_by_id = {
+                        item.id: item for item in NoteListItem.query.filter(
+                            NoteListItem.id.in_(linked_note_item_ids)
+                        ).all()
+                    }
+                    done_linked_note_item_ids = {
+                        item_id for item_id, item in note_items_by_id.items()
+                        if item.checked
+                    }
+
+                linked_feed_item_ids = {ev.do_feed_item_id for ev in events if ev.do_feed_item_id}
+                feed_items_by_id = {}
+                if linked_feed_item_ids:
+                    feed_items_by_id = {
+                        item.id: item for item in DoFeedItem.query.filter(
+                            DoFeedItem.id.in_(linked_feed_item_ids)
+                        ).all()
+                    }
+
+                def move_linked_source_dates(ev):
+                    if ev.todo_item_id:
+                        linked_item = todo_items_by_id.get(ev.todo_item_id)
+                        if linked_item:
+                            linked_item.due_date = today
+                    if ev.note_list_item_id:
+                        linked_note_item = note_items_by_id.get(ev.note_list_item_id)
+                        if linked_note_item:
+                            linked_note_item.scheduled_date = today
+                    if ev.do_feed_item_id:
+                        linked_feed_item = feed_items_by_id.get(ev.do_feed_item_id)
+                        if linked_feed_item:
+                            linked_feed_item.scheduled_date = today
+                    if ev.planner_simple_item_id:
+                        linked_planner_item = db.session.get(PlannerSimpleItem, ev.planner_simple_item_id)
+                        if linked_planner_item:
+                            linked_planner_item.scheduled_date = today
+                    if ev.planner_multi_item_id:
+                        linked_planner_item = db.session.get(PlannerMultiItem, ev.planner_multi_item_id)
+                        if linked_planner_item:
+                            linked_planner_item.scheduled_date = today
+                    if ev.planner_multi_line_id:
+                        linked_planner_line = db.session.get(PlannerMultiLine, ev.planner_multi_line_id)
+                        if linked_planner_line:
+                            linked_planner_line.scheduled_date = today
+
+                def copy_linked_source_fields(source, target):
+                    target.todo_item_id = source.todo_item_id
+                    target.planner_simple_item_id = source.planner_simple_item_id
+                    target.planner_multi_item_id = source.planner_multi_item_id
+                    target.planner_multi_line_id = source.planner_multi_line_id
+                    target.note_list_item_id = source.note_list_item_id
+                    target.do_feed_item_id = source.do_feed_item_id
 
                 events_to_delete = {}
                 for ev in events:
@@ -1032,9 +1093,21 @@ def _rollover_incomplete_events():
                         if ev.status != 'done':
                             ev.status = 'done'
                         continue
+                    if ev.note_list_item_id and ev.note_list_item_id in done_linked_note_item_ids:
+                        if ev.status != 'done':
+                            ev.status = 'done'
+                        continue
+                    if ev.note_list_item_id and ev.note_list_item_id not in note_items_by_id:
+                        events_to_delete[ev.id] = ev
+                        continue
+                    if ev.do_feed_item_id and ev.do_feed_item_id not in feed_items_by_id:
+                        events_to_delete[ev.id] = ev
+                        continue
 
                     # Skip if this event has already been rolled over today
                     if ev.id in rolled_lookup:
+                        copy_linked_source_fields(ev, rolled_lookup[ev.id])
+                        move_linked_source_dates(ev)
                         events_to_delete[ev.id] = ev
                         continue
 
@@ -1092,6 +1165,11 @@ def _rollover_incomplete_events():
                         rollover_enabled=ev.rollover_enabled,
                         rolled_from_id=ev.id,
                         todo_item_id=ev.todo_item_id,
+                        planner_simple_item_id=ev.planner_simple_item_id,
+                        planner_multi_item_id=ev.planner_multi_item_id,
+                        planner_multi_line_id=ev.planner_multi_line_id,
+                        note_list_item_id=ev.note_list_item_id,
+                        do_feed_item_id=ev.do_feed_item_id,
                         recurrence_id=None,
                         item_note=ev.item_note
                     )
@@ -1099,10 +1177,7 @@ def _rollover_incomplete_events():
                     created_calendar_events.append(copy_event)
                     created_events += 1
                     events_to_delete[ev.id] = ev
-                    if ev.todo_item_id:
-                        linked_item = TodoItem.query.filter_by(id=ev.todo_item_id).first()
-                        if linked_item:
-                            linked_item.due_date = today
+                    move_linked_source_dates(ev)
 
                 for dup in duplicates_to_delete:
                     db.session.delete(dup)

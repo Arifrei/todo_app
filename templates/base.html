@@ -272,6 +272,12 @@
                             <span class="nav-label">Home</span>
                         </a>
                     </li>
+                    <li data-nav-id="inbox">
+                        <a href="/inbox" class="{{ 'active' if request.path.startswith('/inbox') else '' }}"{% if request.path.startswith('/inbox') %} aria-current="page"{% endif %}>
+                            <span class="icon-bubble"><i class="fa-solid fa-box-open"></i></span>
+                            <span class="nav-label">Inbox</span>
+                        </a>
+                    </li>
                     <li data-nav-id="tasks">
                         <a href="/tasks" class="{{ 'active' if request.path.startswith('/tasks') or request.path.startswith('/list') else '' }}"{% if request.path.startswith('/tasks') or request.path.startswith('/list') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-list-check"></i></span>

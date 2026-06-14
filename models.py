@@ -1,7 +1,9 @@
+import json
+from datetime import date, datetime, time
+
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, date, time
 
 db = SQLAlchemy()
 
@@ -41,6 +43,7 @@ class User(UserMixin, db.Model):
 
     # Relationships
     lists = db.relationship('TodoList', backref='owner', lazy=True, cascade="all, delete-orphan")
+    inbox_items = db.relationship('InboxItem', backref='owner', lazy=True, cascade="all, delete-orphan")
     notifications = db.relationship('Notification', backref='user', lazy=True, cascade="all, delete-orphan")
     notification_settings = db.relationship('NotificationSetting', backref='user', lazy=True, cascade="all, delete-orphan")
 
@@ -332,6 +335,63 @@ class NoteListItem(db.Model):
             'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
             'checked': bool(self.checked),
             'order_index': self.order_index or 0,
+        }
+
+
+class InboxItem(db.Model):
+    """Unprocessed quick capture with an optional auto-detected destination."""
+    __tablename__ = 'inbox_item'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='open')
+    suggestion_status = db.Column(db.String(20), nullable=False, default='pending')
+    suggestion_json = db.Column(db.Text, nullable=True)
+    suggestion_source = db.Column(db.String(20), nullable=True)
+    suggestion_reason = db.Column(db.String(500), nullable=True)
+    suggestion_confidence = db.Column(db.Float, nullable=True)
+    mapped_destination_type = db.Column(db.String(30), nullable=True)
+    mapped_destination_id = db.Column(db.Integer, nullable=True)
+    mapped_result_json = db.Column(db.Text, nullable=True)
+    mapped_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.Index('idx_inbox_item_user', 'user_id'),
+        db.Index('idx_inbox_item_user_status', 'user_id', 'status'),
+    )
+
+    def to_dict(self):
+        try:
+            suggestion = json.loads(self.suggestion_json) if self.suggestion_json else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            suggestion = None
+        try:
+            mapped_result = json.loads(self.mapped_result_json) if self.mapped_result_json else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            mapped_result = None
+        return {
+            'id': self.id,
+            'content': self.content,
+            'status': self.status,
+            'suggestion_status': self.suggestion_status,
+            'suggestion': suggestion,
+            'suggestion_source': self.suggestion_source,
+            'suggestion_reason': self.suggestion_reason,
+            'suggestion_confidence': self.suggestion_confidence,
+            'mapped_destination_type': self.mapped_destination_type,
+            'mapped_destination_id': self.mapped_destination_id,
+            'mapped_result': mapped_result,
+            'mapped_at': self.mapped_at.isoformat() if self.mapped_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

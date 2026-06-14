@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="inbox-layout">
+    <header class="inbox-header">
+        <div>
+            <h1>Inbox</h1>
+            <p>Capture it now. Decide exactly where it belongs later.</p>
+        </div>
+        <div class="inbox-count" id="inbox-count">0 items</div>
+    </header>
+
+    <form class="inbox-capture" id="inbox-capture-form">
+        <label for="inbox-capture-input">Quick add</label>
+        <div class="inbox-capture-row">
+            <textarea id="inbox-capture-input" rows="2" maxlength="5000"
+                      placeholder="Call Sam tomorrow at 3pm, remind me 15 minutes before..."></textarea>
+            <button class="btn btn-primary" id="inbox-capture-submit" type="submit">
+                <i class="fa-solid fa-plus"></i>
+                Add
+            </button>
+        </div>
+        <p>Press <strong>Ctrl+Enter</strong> to add. Dates, times, reminders, project names, and note names help auto-detection.</p>
+    </form>
+
+    <section class="inbox-items" id="inbox-items" aria-live="polite">
+        <div class="inbox-empty">Loading inbox...</div>
+    </section>
+</div>
+
+<div class="modal inbox-map-modal" id="inbox-map-modal" role="dialog" aria-modal="true" aria-labelledby="inbox-map-title">
+    <div class="modal-content inbox-map-content" tabindex="-1">
+        <div class="inbox-map-header">
+            <div>
+                <h2 id="inbox-map-title">Map inbox item</h2>
+                <p id="inbox-map-capture"></p>
+            </div>
+            <button class="btn-icon" id="inbox-map-close" type="button" aria-label="Close mapping dialog">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+
+        <form id="inbox-map-form">
+            <div class="form-group">
+                <label for="inbox-map-kind">Destination</label>
+                <select class="form-control" id="inbox-map-kind">
+                    <option value="task">Task in a project or list</option>
+                    <option value="calendar">Calendar item</option>
+                    <option value="note">Append to a note</option>
+                    <option value="note_list">Item in a Notes list</option>
+                </select>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="task">
+                <div class="inbox-form-grid">
+                    <div class="form-group">
+                        <label for="inbox-task-list">Project or list</label>
+                        <select class="form-control" id="inbox-task-list"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-task-phase">Phase</label>
+                        <select class="form-control" id="inbox-task-phase"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-task-title">Task</label>
+                    <input class="form-control" id="inbox-task-title" maxlength="200">
+                </div>
+                <div class="inbox-form-grid">
+                    <div class="form-group">
+                        <label for="inbox-task-description">Description</label>
+                        <textarea class="form-control" id="inbox-task-description" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-task-notes">Notes</label>
+                        <textarea class="form-control" id="inbox-task-notes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-task-tags">Tags</label>
+                    <input class="form-control" id="inbox-task-tags" placeholder="work, urgent">
+                </div>
+                <div class="inbox-form-grid inbox-schedule-grid">
+                    <div class="form-group"><label for="inbox-task-date">Date</label><input class="form-control" type="date" id="inbox-task-date"></div>
+                    <div class="form-group"><label for="inbox-task-start">Start</label><input class="form-control" type="time" id="inbox-task-start"></div>
+                    <div class="form-group"><label for="inbox-task-end">End</label><input class="form-control" type="time" id="inbox-task-end"></div>
+                    <div class="form-group">
+                        <label for="inbox-task-reminder">Reminder</label>
+                        <input class="form-control" type="text" id="inbox-task-reminder" placeholder="e.g., 30m">
+                    </div>
+                </div>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="calendar">
+                <div class="form-group">
+                    <label for="inbox-calendar-title">Title</label>
+                    <input class="form-control" id="inbox-calendar-title" maxlength="200">
+                </div>
+                <div class="inbox-form-grid inbox-schedule-grid">
+                    <div class="form-group"><label for="inbox-calendar-date">Date</label><input class="form-control" type="date" id="inbox-calendar-date"></div>
+                    <div class="form-group"><label for="inbox-calendar-start">Start</label><input class="form-control" type="time" id="inbox-calendar-start"></div>
+                    <div class="form-group"><label for="inbox-calendar-end">End</label><input class="form-control" type="time" id="inbox-calendar-end"></div>
+                    <div class="form-group">
+                        <label for="inbox-calendar-reminder">Reminder</label>
+                        <input class="form-control" type="text" id="inbox-calendar-reminder" placeholder="e.g., 30m">
+                    </div>
+                </div>
+                <label class="inbox-checkbox">
+                    <input type="checkbox" id="inbox-calendar-event">
+                    Treat as an informational event
+                </label>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="note">
+                <div class="form-group">
+                    <label for="inbox-note-target">Note</label>
+                    <select class="form-control" id="inbox-note-target"></select>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-note-text">Text to append</label>
+                    <textarea class="form-control" id="inbox-note-text" rows="5"></textarea>
+                </div>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="note_list">
+                <div class="inbox-form-grid">
+                    <div class="form-group">
+                        <label for="inbox-note-list-target">Notes list</label>
+                        <select class="form-control" id="inbox-note-list-target"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-note-list-section">Section</label>
+                        <select class="form-control" id="inbox-note-list-section"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-note-list-subsection">Subsection</label>
+                        <select class="form-control" id="inbox-note-list-subsection"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-note-list-text">List item</label>
+                    <input class="form-control" id="inbox-note-list-text" maxlength="300">
+                </div>
+                <div class="form-group">
+                    <label for="inbox-note-list-note">Item note</label>
+                    <textarea class="form-control" id="inbox-note-list-note" rows="2"></textarea>
+                </div>
+                <div class="inbox-form-grid inbox-schedule-grid">
+                    <div class="form-group"><label for="inbox-note-list-date">Date</label><input class="form-control" type="date" id="inbox-note-list-date"></div>
+                    <div class="form-group"><label for="inbox-note-list-start">Start</label><input class="form-control" type="time" id="inbox-note-list-start"></div>
+                    <div class="form-group"><label for="inbox-note-list-end">End</label><input class="form-control" type="time" id="inbox-note-list-end"></div>
+                    <div class="form-group">
+                        <label for="inbox-note-list-reminder">Reminder</label>
+                        <input class="form-control" type="text" id="inbox-note-list-reminder" placeholder="e.g., 30m">
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn" id="inbox-map-cancel" type="button">Cancel</button>
+                <button class="btn btn-primary" id="inbox-map-submit" type="submit">Insert item</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='inbox.js') }}" defer></script>
+{% endblock %}

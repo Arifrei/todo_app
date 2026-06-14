@@ -172,6 +172,62 @@ def ensure_note_list_item(cur):
     add_column(cur, "note_list_item", "order_index", "INTEGER DEFAULT 0")
 
 
+def ensure_inbox_item(cur):
+    if not table_exists(cur, "inbox_item"):
+        cur.execute(
+            """
+            CREATE TABLE inbox_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'open',
+                suggestion_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                suggestion_json TEXT,
+                suggestion_source VARCHAR(20),
+                suggestion_reason VARCHAR(500),
+                suggestion_confidence FLOAT,
+                mapped_destination_type VARCHAR(30),
+                mapped_destination_id INTEGER,
+                mapped_result_json TEXT,
+                mapped_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_inbox_item_user ON inbox_item(user_id)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_inbox_item_user_status "
+            "ON inbox_item(user_id, status)"
+        )
+        print("[add] inbox_item table created")
+        return
+    add_column(cur, "inbox_item", "user_id", "INTEGER")
+    add_column(cur, "inbox_item", "content", "TEXT NOT NULL DEFAULT ''")
+    add_column(cur, "inbox_item", "status", "VARCHAR(20) NOT NULL DEFAULT 'open'")
+    add_column(
+        cur,
+        "inbox_item",
+        "suggestion_status",
+        "VARCHAR(20) NOT NULL DEFAULT 'pending'",
+    )
+    add_column(cur, "inbox_item", "suggestion_json", "TEXT")
+    add_column(cur, "inbox_item", "suggestion_source", "VARCHAR(20)")
+    add_column(cur, "inbox_item", "suggestion_reason", "VARCHAR(500)")
+    add_column(cur, "inbox_item", "suggestion_confidence", "FLOAT")
+    add_column(cur, "inbox_item", "mapped_destination_type", "VARCHAR(30)")
+    add_column(cur, "inbox_item", "mapped_destination_id", "INTEGER")
+    add_column(cur, "inbox_item", "mapped_result_json", "TEXT")
+    add_column(cur, "inbox_item", "mapped_at", "TIMESTAMP")
+    add_column(cur, "inbox_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "inbox_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_inbox_item_user ON inbox_item(user_id)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbox_item_user_status "
+        "ON inbox_item(user_id, status)"
+    )
+
+
 def ensure_calendar_event(cur):
     if not table_exists(cur, "calendar_event"):
         cur.execute(
@@ -777,6 +833,7 @@ def main():
         ensure_note(cur)
         ensure_note_link(cur)
         ensure_note_list_item(cur)
+        ensure_inbox_item(cur)
         ensure_note_folder(cur)
         ensure_calendar_event(cur)
         ensure_teamwork_ignored_task(cur)
