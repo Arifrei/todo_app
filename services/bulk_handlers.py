@@ -142,8 +142,9 @@ def bulk_vault_documents_route(
     Document,
     DocumentFolder,
     db,
-    app,
     os_module,
+    vault_root_for_user,
+    now_local,
 ):
     user = get_current_user()
     if not user:
@@ -174,44 +175,69 @@ def bulk_vault_documents_route(
         return jsonify({"error": "No matching documents found"}), 404
 
     if action == "delete":
+        file_paths = []
         for doc in docs:
-            try:
-                file_path = os_module.path.join(
-                    app.config.get("VAULT_UPLOAD_FOLDER", "vault_uploads"),
-                    doc.stored_filename,
+            file_paths.append(
+                os_module.path.join(
+                    vault_root_for_user(user.id),
+                    os_module.path.basename(doc.stored_filename or ""),
                 )
-                if os_module.path.exists(file_path):
-                    os_module.remove(file_path)
-            except Exception:
-                pass
+            )
             db.session.delete(doc)
         db.session.commit()
+        for file_path in file_paths:
+            try:
+                if os_module.path.isfile(file_path):
+                    os_module.remove(file_path)
+            except OSError:
+                pass
         return jsonify({"deleted": len(docs)})
 
     if action == "archive":
-        now = datetime.now(pytz.UTC).replace(tzinfo=None)
+        now = now_local()
         count = 0
         for doc in docs:
             if not doc.archived_at:
                 doc.archived_at = now
+                doc.pinned = False
+                doc.pin_order = 0
+                doc.updated_at = now
                 count += 1
         db.session.commit()
         return jsonify({"updated": count})
 
     if action == "unarchive":
+        now = now_local()
         count = 0
         for doc in docs:
             if doc.archived_at:
                 doc.archived_at = None
+                if doc.folder_id is not None:
+                    folder = DocumentFolder.query.filter_by(
+                        id=doc.folder_id,
+                        user_id=user.id,
+                    ).first()
+                    if not folder or folder.archived_at:
+                        doc.folder_id = None
+                doc.updated_at = now
                 count += 1
         db.session.commit()
         return jsonify({"updated": count})
 
     if action == "pin":
+        max_pin = (
+            db.session.query(db.func.coalesce(db.func.max(Document.pin_order), 0))
+            .filter(Document.user_id == user.id, Document.pinned.is_(True))
+            .scalar()
+            or 0
+        )
         count = 0
         for doc in docs:
             if not doc.pinned:
+                max_pin += 1
                 doc.pinned = True
+                doc.pin_order = max_pin
+                doc.updated_at = now_local()
                 count += 1
         db.session.commit()
         return jsonify({"updated": count})
@@ -221,6 +247,8 @@ def bulk_vault_documents_route(
         for doc in docs:
             if doc.pinned:
                 doc.pinned = False
+                doc.pin_order = 0
+                doc.updated_at = now_local()
                 count += 1
         db.session.commit()
         return jsonify({"updated": count})
@@ -232,7 +260,11 @@ def bulk_vault_documents_route(
                 folder_id = int(folder_id)
             except (ValueError, TypeError):
                 return jsonify({"error": "Invalid destination_id"}), 400
-            folder = DocumentFolder.query.filter_by(id=folder_id, user_id=user.id).first()
+            folder = DocumentFolder.query.filter_by(
+                id=folder_id,
+                user_id=user.id,
+                archived_at=None,
+            ).first()
             if not folder:
                 return jsonify({"error": "Destination folder not found"}), 404
         else:
@@ -240,6 +272,7 @@ def bulk_vault_documents_route(
 
         for doc in docs:
             doc.folder_id = folder_id
+            doc.updated_at = now_local()
         db.session.commit()
         return jsonify({"updated": len(docs)})
 

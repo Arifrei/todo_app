@@ -38,6 +38,10 @@
                 </button>
             </div>
             <div class="vault-toolbar-actions">
+                <select id="vault-scope-select" class="vault-sort-select" title="Show vault items">
+                    <option value="active">Active</option>
+                    <option value="archived">Trash</option>
+                </select>
                 <select id="vault-sort-select" class="vault-sort-select" title="Sort by">
                     <option value="recent">Recent</option>
                     <option value="title">Name</option>
@@ -60,13 +64,17 @@
             <button class="btn btn-secondary btn-small u-ml-05" type="button" id="vault-bulk-clear">Clear</button>
         </div>
         <div class="bulk-buttons">
-            <button class="btn btn-secondary" type="button" id="vault-bulk-pin">
+            <button class="btn btn-secondary vault-bulk-active-only" type="button" id="vault-bulk-pin">
                 <i class="fa-solid fa-thumbtack"></i> Pin
             </button>
-            <button class="btn btn-secondary" type="button" id="vault-bulk-move">
+            <button class="btn btn-secondary vault-bulk-active-only" type="button" id="vault-bulk-move">
                 <i class="fa-solid fa-folder"></i> Move
             </button>
-            <button class="btn-icon delete" type="button" id="vault-bulk-delete" title="Delete selected" aria-label="Delete selected vault files">
+            <button class="btn btn-secondary" type="button" id="vault-bulk-archive">
+                <i class="fa-solid fa-box-archive"></i>
+                <span id="vault-bulk-archive-label">Archive</span>
+            </button>
+            <button class="btn-icon delete" type="button" id="vault-bulk-delete" title="Delete selected permanently" aria-label="Delete selected vault files permanently">
                 <i class="fa-solid fa-trash"></i>
             </button>
         </div>
@@ -82,9 +90,14 @@
         </div>
         <h3>No files here yet</h3>
         <p>Upload documents or create folders to get started.</p>
-        <button class="btn btn-primary" type="button" id="vault-empty-upload">
-            <i class="fa-solid fa-cloud-arrow-up"></i> Upload files
-        </button>
+        <div class="vault-empty-actions">
+            <button class="btn btn-secondary" type="button" id="vault-empty-folder">
+                <i class="fa-solid fa-folder-plus"></i> New folder
+            </button>
+            <button class="btn btn-primary" type="button" id="vault-empty-upload">
+                <i class="fa-solid fa-cloud-arrow-up"></i> Upload files
+            </button>
+        </div>
     </div>
 </div>
 
@@ -99,6 +112,39 @@
         <div class="modal-actions">
             <button class="btn" type="button" id="vault-folder-cancel">Cancel</button>
             <button class="btn btn-primary" type="button" id="vault-folder-save">Save</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="vault-document-modal" role="dialog" aria-modal="true" aria-labelledby="vault-document-modal-title">
+    <div class="modal-content vault-modal-content" tabindex="-1">
+        <h2 id="vault-document-modal-title">Edit file</h2>
+        <div class="form-group">
+            <label for="vault-document-title">Title</label>
+            <input type="text" id="vault-document-title" class="form-control" maxlength="255">
+        </div>
+        <div class="form-group">
+            <label for="vault-document-tags">Tags <span class="form-hint">(comma separated)</span></label>
+            <input type="text" id="vault-document-tags" class="form-control" placeholder="work, receipts, personal...">
+        </div>
+        <input type="hidden" id="vault-document-id">
+        <div class="modal-actions">
+            <button class="btn" type="button" id="vault-document-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="vault-document-save">Save</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="vault-move-modal" role="dialog" aria-modal="true" aria-labelledby="vault-move-modal-title">
+    <div class="modal-content vault-modal-content" tabindex="-1">
+        <h2 id="vault-move-modal-title">Move item</h2>
+        <div class="form-group">
+            <label for="vault-move-select">Destination folder</label>
+            <select id="vault-move-select" class="form-control"></select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="vault-move-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="vault-move-save">Move</button>
         </div>
     </div>
 </div>
@@ -139,12 +185,15 @@
     <div class="modal-content vault-preview-content" tabindex="-1">
         <div class="vault-preview-header">
             <h2 id="vault-preview-title">Document</h2>
-            <button class="btn-icon" type="button" id="vault-preview-close" title="Close" aria-label="Close preview">
+            <button class="btn-icon" type="button" id="vault-preview-close" title="Close" aria-label="Close preview" data-modal-close>
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </div>
         <div class="vault-preview-body" id="vault-preview-body"></div>
         <div class="vault-preview-actions">
+            <button class="btn btn-secondary" type="button" id="vault-preview-edit">
+                <i class="fa-solid fa-pen"></i> Edit
+            </button>
             <button class="btn btn-danger" type="button" id="vault-preview-archive">
                 <i class="fa-solid fa-box-archive"></i> Archive
             </button>

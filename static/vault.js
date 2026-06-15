@@ -4,6 +4,7 @@ const vaultState = {
     documents: [],
     activeFolderId: null,
     viewMode: localStorage.getItem('vaultViewMode') || 'grid',
+    scope: 'active',
     search: '',
     sort: 'recent',
     stats: null
@@ -14,6 +15,11 @@ let vaultSelection = null;
 let vaultBulkActions = null;
 let vaultUploadAbortController = null;
 let vaultUploadQueue = [];
+let vaultDocumentRequestId = 0;
+let vaultActiveMenu = null;
+let vaultActiveMenuTrigger = null;
+let vaultMoveContext = null;
+let vaultPreviewDocument = null;
 
 function initVaultSelection() {
     vaultSelection = new SelectionManager({
@@ -34,6 +40,7 @@ function initVaultSelection() {
         moduleName: 'document',
         onComplete: () => {
             loadVaultDocuments();
+            loadVaultStats();
         }
     });
 }
@@ -56,9 +63,11 @@ let vaultFabExpanded = false;
 
 function closeVaultFab() {
     const fab = document.getElementById('vault-fab');
+    const mainBtn = document.getElementById('vault-fab-main');
     if (!fab) return;
     vaultFabExpanded = false;
     fab.classList.remove('expanded');
+    if (mainBtn) mainBtn.setAttribute('aria-expanded', 'false');
 }
 
 function initVaultFab() {
@@ -72,6 +81,7 @@ function initVaultFab() {
         e.stopPropagation();
         vaultFabExpanded = !vaultFabExpanded;
         fab.classList.toggle('expanded', vaultFabExpanded);
+        mainBtn.setAttribute('aria-expanded', vaultFabExpanded ? 'true' : 'false');
     });
 
     if (newFolderBtn) {
@@ -116,8 +126,10 @@ function vaultGetFolderById(folderId) {
 
 function vaultBuildFolderPath(folderId) {
     const path = [];
+    const visited = new Set();
     let current = vaultGetFolderById(folderId);
-    while (current) {
+    while (current && !visited.has(current.id)) {
+        visited.add(current.id);
         path.unshift(current);
         current = vaultGetFolderById(current.parent_id);
     }
@@ -131,7 +143,10 @@ function renderVaultBreadcrumb() {
 
     const root = document.createElement('button');
     root.className = 'vault-nav-item' + (!vaultState.activeFolderId ? ' active' : '');
-    root.innerHTML = '<i class="fa-solid fa-house"></i>';
+    root.innerHTML = vaultIsArchivedScope()
+        ? '<i class="fa-solid fa-trash-can"></i><span>Trash</span>'
+        : '<i class="fa-solid fa-house"></i>';
+    root.setAttribute('aria-label', vaultIsArchivedScope() ? 'Trash root' : 'Vault root');
     root.addEventListener('click', () => vaultSetActiveFolder(null));
     breadcrumb.appendChild(root);
 
@@ -167,6 +182,129 @@ function vaultSortDocuments(items) {
     return sorted;
 }
 
+function vaultIsArchivedScope() {
+    return vaultState.scope === 'archived';
+}
+
+function vaultFolderPathLabel(folderId) {
+    const path = vaultBuildFolderPath(folderId);
+    return path.length ? path.map(folder => folder.name).join(' / ') : 'Root';
+}
+
+function closeVaultItemMenu(options = {}) {
+    const returnFocus = options.returnFocus === true;
+    if (vaultActiveMenu) {
+        vaultActiveMenu.remove();
+        vaultActiveMenu = null;
+    }
+    if (vaultActiveMenuTrigger) {
+        vaultActiveMenuTrigger.setAttribute('aria-expanded', 'false');
+        vaultActiveMenuTrigger.removeAttribute('aria-controls');
+        if (returnFocus) vaultActiveMenuTrigger.focus();
+        vaultActiveMenuTrigger = null;
+    }
+}
+
+function positionVaultItemMenu(menu, trigger) {
+    const rect = trigger.getBoundingClientRect();
+    const padding = 8;
+    const menuWidth = Math.max(menu.offsetWidth || 210, 210);
+    const menuHeight = menu.offsetHeight || 280;
+    let top = rect.bottom + padding;
+    let left = rect.right - menuWidth;
+
+    if (window.innerHeight - rect.bottom < menuHeight + padding && rect.top > menuHeight + padding) {
+        top = rect.top - menuHeight - padding;
+    }
+    left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
+    menu.style.top = `${Math.max(padding, top)}px`;
+    menu.style.left = `${left}px`;
+}
+
+function vaultMenuOption(action, icon, label, danger = false) {
+    return `
+        <button class="vault-item-menu-option${danger ? ' danger' : ''}" type="button" data-action="${action}" role="menuitem">
+            <i class="fa-solid ${icon}"></i>
+            <span>${label}</span>
+        </button>
+    `;
+}
+
+function openVaultItemMenu(type, data, trigger) {
+    const menuKey = `${type}-${data.id}`;
+    if (vaultActiveMenu && vaultActiveMenu.dataset.menuKey === menuKey) {
+        closeVaultItemMenu({ returnFocus: true });
+        return;
+    }
+
+    closeVaultItemMenu();
+    const archived = vaultIsArchivedScope();
+    const options = [];
+    if (type === 'folder') {
+        options.push(vaultMenuOption('open', 'fa-folder-open', 'Open'));
+        if (archived) {
+            options.push(vaultMenuOption('restore', 'fa-rotate-left', 'Restore'));
+        } else {
+            options.push(vaultMenuOption('rename', 'fa-pen', 'Rename'));
+            options.push(vaultMenuOption('move', 'fa-folder-tree', 'Move to folder'));
+            options.push(vaultMenuOption('archive', 'fa-box-archive', 'Archive'));
+        }
+        options.push(vaultMenuOption('delete', 'fa-trash', 'Delete permanently', true));
+    } else {
+        options.push(vaultMenuOption('open', 'fa-eye', 'Preview'));
+        if (archived) {
+            options.push(vaultMenuOption('restore', 'fa-rotate-left', 'Restore'));
+        } else {
+            options.push(vaultMenuOption('edit', 'fa-pen', 'Edit title and tags'));
+            options.push(vaultMenuOption('move', 'fa-folder-open', 'Move to folder'));
+            options.push(vaultMenuOption('pin', 'fa-thumbtack', data.pinned ? 'Unpin' : 'Pin'));
+            options.push(vaultMenuOption('archive', 'fa-box-archive', 'Archive'));
+        }
+        options.push(vaultMenuOption('download', 'fa-download', 'Download'));
+        options.push(vaultMenuOption('delete', 'fa-trash', 'Delete permanently', true));
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'vault-item-menu active';
+    menu.id = `vault-item-menu-${menuKey}`;
+    menu.dataset.menuKey = menuKey;
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML = options.join('');
+    menu.querySelectorAll('.vault-item-menu-option').forEach(option => {
+        option.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const action = option.dataset.action;
+            closeVaultItemMenu();
+            if (type === 'folder') {
+                if (action === 'open') vaultSetActiveFolder(data.id);
+                else if (action === 'rename') openVaultFolderModal(data);
+                else if (action === 'move') openVaultMoveModal('folder', data);
+                else if (action === 'archive') vaultArchiveFolder(data);
+                else if (action === 'restore') vaultRestoreFolder(data);
+                else if (action === 'delete') vaultDeleteFolder(data);
+            } else {
+                if (action === 'open') vaultOpenDoc(data);
+                else if (action === 'edit') openVaultDocumentModal(data);
+                else if (action === 'move') openVaultMoveModal('document', data);
+                else if (action === 'pin') vaultTogglePin(data);
+                else if (action === 'archive') vaultArchiveDoc(data);
+                else if (action === 'restore') vaultRestoreDoc(data);
+                else if (action === 'download') vaultDownloadDoc(data);
+                else if (action === 'delete') vaultDeleteDoc(data);
+            }
+        });
+    });
+
+    document.body.appendChild(menu);
+    positionVaultItemMenu(menu, trigger);
+    vaultActiveMenu = menu;
+    vaultActiveMenuTrigger = trigger;
+    trigger.setAttribute('aria-controls', menu.id);
+    trigger.setAttribute('aria-expanded', 'true');
+    const firstOption = menu.querySelector('button');
+    if (firstOption) firstOption.focus();
+}
+
 function renderVaultItems() {
     const grid = document.getElementById('vault-grid');
     const empty = document.getElementById('vault-empty');
@@ -180,6 +318,22 @@ function renderVaultItems() {
         grid.innerHTML = '';
         if (content) content.style.display = 'none';
         empty.style.display = 'flex';
+        const title = empty.querySelector('h3');
+        const message = empty.querySelector('p');
+        const actions = empty.querySelector('.vault-empty-actions');
+        if (vaultState.search) {
+            if (title) title.textContent = 'No matching files';
+            if (message) message.textContent = `Nothing matches "${vaultState.search}".`;
+            if (actions) actions.style.display = 'none';
+        } else if (vaultIsArchivedScope()) {
+            if (title) title.textContent = 'Trash is empty';
+            if (message) message.textContent = 'Archived files and folders will appear here.';
+            if (actions) actions.style.display = 'none';
+        } else {
+            if (title) title.textContent = 'No files here yet';
+            if (message) message.textContent = 'Upload documents or create folders to get started.';
+            if (actions) actions.style.display = 'flex';
+        }
         return;
     }
 
@@ -192,24 +346,36 @@ function renderVaultItems() {
     if (folders.length && !vaultState.search) {
         folders.forEach(folder => {
             const item = document.createElement('div');
-            item.className = 'vault-item';
+            item.className = 'vault-item vault-folder-item';
+            item.setAttribute('data-folder-id', folder.id);
+            item.setAttribute('tabindex', '0');
+            item.setAttribute('role', 'group');
+            item.setAttribute('aria-label', `Folder ${folder.name}`);
             item.innerHTML = `
-                <div class="vault-item-icon folder"><i class="fa-solid fa-folder"></i></div>
+                <div class="vault-item-visual">
+                    <div class="vault-item-icon folder"><i class="fa-solid fa-folder"></i></div>
+                </div>
                 <div class="vault-item-info">
                     <div class="vault-item-name">${escapeHtml(folder.name)}</div>
                     <div class="vault-item-meta">Folder</div>
                 </div>
-                <div class="vault-item-actions">
-                    <button class="vault-item-btn" title="Open" type="button"><i class="fa-solid fa-folder-open"></i></button>
-                    <button class="vault-item-btn" title="Rename" type="button"><i class="fa-solid fa-pen"></i></button>
-                    <button class="vault-item-btn danger" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
-                </div>
+                <button class="vault-item-menu-trigger" type="button" title="Folder actions" aria-label="Actions for ${escapeHtml(folder.name)}" aria-haspopup="menu" aria-expanded="false">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
             `;
-            const btns = item.querySelectorAll('.vault-item-btn');
-            btns[0].addEventListener('click', (e) => { e.stopPropagation(); vaultSetActiveFolder(folder.id); });
-            btns[1].addEventListener('click', (e) => { e.stopPropagation(); openVaultFolderModal(folder); });
-            btns[2].addEventListener('click', (e) => { e.stopPropagation(); vaultArchiveFolder(folder); });
-            item.addEventListener('click', () => vaultSetActiveFolder(folder.id));
+            const menuTrigger = item.querySelector('.vault-item-menu-trigger');
+            menuTrigger.addEventListener('click', (event) => {
+                event.stopPropagation();
+                openVaultItemMenu('folder', folder, menuTrigger);
+            });
+            item.addEventListener('click', (event) => {
+                if (!event.target.closest('button')) vaultSetActiveFolder(folder.id);
+            });
+            item.addEventListener('keydown', (event) => {
+                if (event.target !== item || !['Enter', ' '].includes(event.key)) return;
+                event.preventDefault();
+                vaultSetActiveFolder(folder.id);
+            });
             grid.appendChild(item);
         });
     }
@@ -222,26 +388,31 @@ function renderVaultItems() {
         const item = document.createElement('div');
         item.className = 'vault-item' + (doc.pinned ? ' pinned' : '') + (isSelected ? ' selected' : '');
         item.setAttribute('data-doc-id', doc.id);
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('role', 'group');
+        item.setAttribute('aria-label', `File ${doc.title}`);
+        const isImage = category === 'image';
+        const visual = isImage
+            ? `<img class="vault-item-thumbnail" src="/api/vault/documents/${doc.id}/preview" alt="" loading="lazy">`
+            : `<div class="vault-item-icon ${category}"><i class="${iconClass}"></i></div>`;
+        const location = vaultState.search ? vaultFolderPathLabel(doc.folder_id) : '';
+        const extension = (doc.file_extension || '').toUpperCase();
+        const size = doc.file_size_formatted || vaultFormatFileSize(doc.file_size);
+        const meta = [location, extension, size].filter(Boolean).join(' | ');
         item.innerHTML = `
-            <input type="checkbox" class="item-select-checkbox vault-item-checkbox" ${isSelected ? 'checked' : ''}>
-            <div class="vault-item-icon ${category}"><i class="${iconClass}"></i></div>
+            <input type="checkbox" class="item-select-checkbox vault-item-checkbox" aria-label="Select ${escapeHtml(doc.title)}" ${isSelected ? 'checked' : ''}>
+            <div class="vault-item-visual ${isImage ? 'has-thumbnail' : ''}">${visual}</div>
             <div class="vault-item-info">
                 <div class="vault-item-name">${escapeHtml(doc.title)}</div>
-                <div class="vault-item-meta">${doc.file_size_formatted || vaultFormatFileSize(doc.file_size)}</div>
+                <div class="vault-item-meta">${escapeHtml(meta)}</div>
             </div>
-            <div class="vault-item-actions">
-                <button class="vault-item-btn" title="${doc.pinned ? 'Unpin' : 'Pin'}" type="button"><i class="fa-solid fa-thumbtack"></i></button>
-                <button class="vault-item-btn" title="Open" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
-                <button class="vault-item-btn" title="Download" type="button"><i class="fa-solid fa-download"></i></button>
-                <button class="vault-item-btn danger" title="Archive" type="button"><i class="fa-solid fa-box-archive"></i></button>
-            </div>
+            <button class="vault-item-menu-trigger" type="button" title="File actions" aria-label="Actions for ${escapeHtml(doc.title)}" aria-haspopup="menu" aria-expanded="false">
+                <i class="fa-solid fa-ellipsis-vertical"></i>
+            </button>
         `;
         const checkbox = item.querySelector('.vault-item-checkbox');
         checkbox.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (vaultSelection) vaultSelection.toggle(doc.id);
-        });
-        checkbox.addEventListener('change', (e) => {
             if (vaultSelection) {
                 if (e.target.checked) {
                     vaultSelection.select(doc.id);
@@ -250,17 +421,35 @@ function renderVaultItems() {
                 }
             }
         });
-        const btns = item.querySelectorAll('.vault-item-btn');
-        btns[0].addEventListener('click', (e) => { e.stopPropagation(); vaultTogglePin(doc); });
-        btns[1].addEventListener('click', (e) => { e.stopPropagation(); vaultOpenDoc(doc); });
-        btns[2].addEventListener('click', (e) => { e.stopPropagation(); vaultDownloadDoc(doc); });
-        btns[3].addEventListener('click', (e) => { e.stopPropagation(); vaultArchiveDoc(doc); });
+        const thumbnail = item.querySelector('.vault-item-thumbnail');
+        if (thumbnail) {
+            thumbnail.addEventListener('error', () => {
+                const visualWrap = thumbnail.parentElement;
+                visualWrap.classList.remove('has-thumbnail');
+                visualWrap.innerHTML = `<div class="vault-item-icon image"><i class="${iconClass}"></i></div>`;
+            }, { once: true });
+        }
+        const menuTrigger = item.querySelector('.vault-item-menu-trigger');
+        menuTrigger.addEventListener('click', (event) => {
+            event.stopPropagation();
+            openVaultItemMenu('document', doc, menuTrigger);
+        });
         item.addEventListener('click', (e) => {
-            // If in selection mode, toggle selection instead of opening
-            if (vaultSelection && vaultSelection.getCount() > 0 && !e.target.closest('.vault-item-actions')) {
+            if (e.target.closest('button, input')) return;
+            if (vaultSelection && vaultSelection.getCount() > 0) {
                 vaultSelection.toggle(doc.id);
                 checkbox.checked = vaultSelection.isSelected(doc.id);
                 item.classList.toggle('selected', checkbox.checked);
+            } else {
+                vaultOpenDoc(doc);
+            }
+        });
+        item.addEventListener('keydown', (event) => {
+            if (event.target !== item || !['Enter', ' '].includes(event.key)) return;
+            event.preventDefault();
+            if (vaultSelection && vaultSelection.getCount() > 0) {
+                vaultSelection.toggle(doc.id);
+                checkbox.checked = vaultSelection.isSelected(doc.id);
             } else {
                 vaultOpenDoc(doc);
             }
@@ -276,7 +465,8 @@ function renderVaultItems() {
 
 async function loadVaultFolders() {
     try {
-        const res = await fetch('/api/vault/folders');
+        const archived = vaultIsArchivedScope() ? '?archived=true' : '';
+        const res = await fetch(`/api/vault/folders${archived}`);
         if (!res.ok) throw new Error('Folder load failed');
         vaultState.folders = await res.json();
         renderVaultBreadcrumb();
@@ -288,11 +478,18 @@ async function loadVaultFolders() {
 }
 
 async function loadVaultDocuments() {
-    const query = vaultState.search ? `/api/vault/search?q=${encodeURIComponent(vaultState.search)}` : `/api/vault/documents?folder_id=${vaultState.activeFolderId || ''}`;
+    const requestId = ++vaultDocumentRequestId;
+    const archivedParam = vaultIsArchivedScope() ? '&archived=true' : '';
+    const query = vaultState.search
+        ? `/api/vault/search?q=${encodeURIComponent(vaultState.search)}${archivedParam}`
+        : `/api/vault/documents?folder_id=${vaultState.activeFolderId || ''}${archivedParam}`;
     try {
         const res = await fetch(query);
         if (!res.ok) throw new Error('Document load failed');
-        vaultState.documents = await res.json();
+        const documents = await res.json();
+        if (requestId !== vaultDocumentRequestId) return;
+        if (vaultSelection) vaultSelection.deselectAll();
+        vaultState.documents = documents;
         renderVaultItems();
     } catch (err) {
         console.error(err);
@@ -311,20 +508,22 @@ async function loadVaultStats() {
 }
 
 function vaultSetActiveFolder(folderId) {
+    closeVaultItemMenu();
     vaultState.activeFolderId = folderId;
     renderVaultBreadcrumb();
     loadVaultDocuments();
-    renderVaultItems();
 }
 
 function populateVaultFolderSelect() {
     const select = document.getElementById('vault-folder-select');
     if (!select) return;
     select.innerHTML = '<option value="">Root</option>';
+    const visited = new Set();
     const buildOptions = (parentId, prefix) => {
         vaultState.folders
-            .filter(folder => (folder.parent_id || null) === parentId)
+            .filter(folder => (folder.parent_id || null) === parentId && !visited.has(folder.id))
             .forEach(folder => {
+                visited.add(folder.id);
                 const option = document.createElement('option');
                 option.value = folder.id;
                 option.textContent = `${prefix}${folder.name}`;
@@ -333,6 +532,23 @@ function populateVaultFolderSelect() {
             });
     };
     buildOptions(null, '');
+}
+
+async function vaultSetScope(scope) {
+    if (!['active', 'archived'].includes(scope) || scope === vaultState.scope) return;
+    closeVaultItemMenu();
+    if (vaultSelection) vaultSelection.deselectAll();
+    vaultState.scope = scope;
+    vaultState.activeFolderId = null;
+    const activeOnly = document.querySelectorAll('.vault-bulk-active-only');
+    activeOnly.forEach(element => {
+        element.style.display = vaultIsArchivedScope() ? 'none' : '';
+    });
+    const fab = document.getElementById('vault-fab');
+    if (fab) fab.style.display = vaultIsArchivedScope() ? 'none' : '';
+    const archiveLabel = document.getElementById('vault-bulk-archive-label');
+    if (archiveLabel) archiveLabel.textContent = vaultIsArchivedScope() ? 'Restore' : 'Archive';
+    await Promise.all([loadVaultFolders(), loadVaultDocuments()]);
 }
 
 function vaultApplyViewMode() {
@@ -359,6 +575,7 @@ function vaultToggleView() {
 }
 
 function openVaultFolderModal(folder = null) {
+    closeVaultItemMenu();
     const modal = document.getElementById('vault-folder-modal');
     const title = document.getElementById('vault-folder-modal-title');
     const nameInput = document.getElementById('vault-folder-name');
@@ -368,6 +585,7 @@ function openVaultFolderModal(folder = null) {
     nameInput.value = folder ? folder.name : '';
     idInput.value = folder ? folder.id : '';
     modal.classList.add('active');
+    setTimeout(() => nameInput.focus(), 0);
 }
 
 function closeVaultFolderModal() {
@@ -410,12 +628,15 @@ async function saveVaultFolder() {
 }
 
 function openVaultUploadModal() {
+    if (vaultIsArchivedScope()) return;
     const modal = document.getElementById('vault-upload-modal');
     if (modal) modal.classList.add('active');
     const tagsInput = document.getElementById('vault-tags-input');
     if (tagsInput) tagsInput.value = '';
     vaultUploadQueue = [];
     renderVaultUploadFiles();
+    const folderSelect = document.getElementById('vault-folder-select');
+    if (folderSelect) folderSelect.value = vaultState.activeFolderId || '';
 }
 
 function closeVaultUploadModal(options = {}) {
@@ -434,6 +655,155 @@ function closeVaultUploadModal(options = {}) {
     const fileInput = document.getElementById('vault-file-input');
     if (fileInput) fileInput.value = '';
     renderVaultUploadFiles();
+}
+
+function openVaultDocumentModal(doc) {
+    closeVaultItemMenu();
+    const modal = document.getElementById('vault-document-modal');
+    const idInput = document.getElementById('vault-document-id');
+    const titleInput = document.getElementById('vault-document-title');
+    const tagsInput = document.getElementById('vault-document-tags');
+    if (!modal || !idInput || !titleInput || !tagsInput) return;
+    idInput.value = doc.id;
+    titleInput.value = doc.title || '';
+    tagsInput.value = Array.isArray(doc.tags) ? doc.tags.join(', ') : (doc.tags || '');
+    modal.classList.add('active');
+    setTimeout(() => {
+        titleInput.focus();
+        titleInput.select();
+    }, 0);
+}
+
+function closeVaultDocumentModal() {
+    const modal = document.getElementById('vault-document-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function saveVaultDocument() {
+    const idInput = document.getElementById('vault-document-id');
+    const titleInput = document.getElementById('vault-document-title');
+    const tagsInput = document.getElementById('vault-document-tags');
+    if (!idInput || !titleInput || !tagsInput) return;
+    const title = titleInput.value.trim();
+    if (!title) {
+        showToast('Title is required', 'warning');
+        titleInput.focus();
+        return;
+    }
+    try {
+        const res = await fetch(`/api/vault/documents/${idInput.value}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, tags: tagsInput.value.trim() })
+        });
+        if (!res.ok) throw new Error('Document update failed');
+        closeVaultDocumentModal();
+        await loadVaultDocuments();
+        showToast('File updated', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not update file', 'error');
+    }
+}
+
+function vaultFolderDescendantIds(folderId) {
+    const descendants = new Set([folderId]);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        vaultState.folders.forEach(folder => {
+            if (descendants.has(folder.parent_id) && !descendants.has(folder.id)) {
+                descendants.add(folder.id);
+                changed = true;
+            }
+        });
+    }
+    return descendants;
+}
+
+function populateVaultMoveSelect(context) {
+    const select = document.getElementById('vault-move-select');
+    if (!select) return;
+    select.innerHTML = '<option value="">Root</option>';
+    const excluded = context.type === 'folder'
+        ? vaultFolderDescendantIds(context.item.id)
+        : new Set();
+    const visited = new Set();
+    const buildOptions = (parentId, prefix) => {
+        vaultState.folders
+            .filter(folder => (
+                (folder.parent_id || null) === parentId
+                && !excluded.has(folder.id)
+                && !visited.has(folder.id)
+            ))
+            .forEach(folder => {
+                visited.add(folder.id);
+                const option = document.createElement('option');
+                option.value = folder.id;
+                option.textContent = `${prefix}${folder.name}`;
+                select.appendChild(option);
+                buildOptions(folder.id, `${prefix}- `);
+            });
+    };
+    buildOptions(null, '');
+}
+
+function openVaultMoveModal(type, item = null) {
+    if (vaultIsArchivedScope()) return;
+    closeVaultItemMenu();
+    const modal = document.getElementById('vault-move-modal');
+    const title = document.getElementById('vault-move-modal-title');
+    const select = document.getElementById('vault-move-select');
+    if (!modal || !title || !select) return;
+    vaultMoveContext = { type, item };
+    const count = type === 'bulk' && vaultSelection ? vaultSelection.getCount() : 1;
+    title.textContent = type === 'bulk' ? `Move ${count} files` : `Move ${type}`;
+    populateVaultMoveSelect(vaultMoveContext);
+    if (type === 'folder') select.value = item.parent_id || '';
+    else if (type === 'document') select.value = item.folder_id || '';
+    else select.value = vaultState.activeFolderId || '';
+    modal.classList.add('active');
+    setTimeout(() => select.focus(), 0);
+}
+
+function closeVaultMoveModal() {
+    const modal = document.getElementById('vault-move-modal');
+    if (modal) modal.classList.remove('active');
+    vaultMoveContext = null;
+}
+
+async function saveVaultMove() {
+    const select = document.getElementById('vault-move-select');
+    if (!select || !vaultMoveContext) return;
+    const destinationId = select.value || null;
+    const context = vaultMoveContext;
+    try {
+        if (context.type === 'bulk') {
+            await vaultBulkActions.move(destinationId, 'folder');
+        } else {
+            const endpoint = context.type === 'folder'
+                ? `/api/vault/folders/${context.item.id}`
+                : `/api/vault/documents/${context.item.id}`;
+            const payload = context.type === 'folder'
+                ? { parent_id: destinationId }
+                : { folder_id: destinationId };
+            const res = await fetch(endpoint, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                const error = await res.json().catch(() => ({}));
+                throw new Error(error.error || 'Move failed');
+            }
+            await Promise.all([loadVaultFolders(), loadVaultDocuments()]);
+            showToast(`${context.type === 'folder' ? 'Folder' : 'File'} moved`, 'success');
+        }
+        closeVaultMoveModal();
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || 'Could not move item', 'error');
+    }
 }
 
 function vaultDownloadDoc(doc) {
@@ -458,12 +828,45 @@ async function vaultTogglePin(doc) {
     }
 }
 
+function closeVaultPreviewModal() {
+    const modal = document.getElementById('vault-preview-modal');
+    const body = document.getElementById('vault-preview-body');
+    if (modal) modal.classList.remove('active');
+    if (body) body.innerHTML = '';
+    vaultPreviewDocument = null;
+}
+
 function vaultOpenDoc(doc) {
     const previewTypes = ['image', 'pdf', 'text', 'audio', 'video', 'code'];
-    const path = previewTypes.includes(doc.file_category)
-        ? `/api/vault/documents/${doc.id}/preview`
-        : `/api/vault/documents/${doc.id}/download`;
-    window.open(path, '_blank', 'noopener');
+    if (!previewTypes.includes(doc.file_category)) {
+        vaultDownloadDoc(doc);
+        return;
+    }
+    const modal = document.getElementById('vault-preview-modal');
+    const title = document.getElementById('vault-preview-title');
+    const body = document.getElementById('vault-preview-body');
+    const archiveBtn = document.getElementById('vault-preview-archive');
+    const editBtn = document.getElementById('vault-preview-edit');
+    if (!modal || !title || !body) return;
+    const path = `/api/vault/documents/${doc.id}/preview`;
+    vaultPreviewDocument = doc;
+    title.textContent = doc.title;
+    if (doc.file_category === 'image') {
+        body.innerHTML = `<img src="${path}" alt="${escapeHtml(doc.title)}">`;
+    } else if (doc.file_category === 'video') {
+        body.innerHTML = `<video src="${path}" controls playsinline></video>`;
+    } else if (doc.file_category === 'audio') {
+        body.innerHTML = `<audio src="${path}" controls></audio>`;
+    } else {
+        body.innerHTML = `<iframe src="${path}" title="Preview of ${escapeHtml(doc.title)}" sandbox></iframe>`;
+    }
+    if (archiveBtn) {
+        archiveBtn.innerHTML = vaultIsArchivedScope()
+            ? '<i class="fa-solid fa-rotate-left"></i> Restore'
+            : '<i class="fa-solid fa-box-archive"></i> Archive';
+    }
+    if (editBtn) editBtn.style.display = vaultIsArchivedScope() ? 'none' : '';
+    modal.classList.add('active');
 }
 
 function vaultArchiveDoc(doc) {
@@ -471,12 +874,46 @@ function vaultArchiveDoc(doc) {
         try {
             const res = await fetch(`/api/vault/documents/${doc.id}`, { method: 'DELETE' });
             if (!res.ok) throw new Error('Archive failed');
-            vaultState.documents = vaultState.documents.filter(item => item.id !== doc.id);
-            renderVaultItems();
+            closeVaultPreviewModal();
+            await loadVaultDocuments();
             showToast('Archived', 'success');
         } catch (err) {
             console.error(err);
             showToast('Could not archive document', 'error');
+        }
+    });
+}
+
+async function vaultRestoreDoc(doc) {
+    try {
+        const res = await fetch(`/api/vault/documents/${doc.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archived: false })
+        });
+        if (!res.ok) throw new Error('Restore failed');
+        closeVaultPreviewModal();
+        await loadVaultDocuments();
+        showToast('File restored', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not restore file', 'error');
+    }
+}
+
+function vaultDeleteDoc(doc) {
+    openConfirmModal(`Permanently delete "${doc.title}"? This cannot be undone.`, async () => {
+        try {
+            const res = await fetch(`/api/vault/documents/${doc.id}?permanent=true`, {
+                method: 'DELETE'
+            });
+            if (!res.ok) throw new Error('Delete failed');
+            closeVaultPreviewModal();
+            await Promise.all([loadVaultDocuments(), loadVaultStats()]);
+            showToast('File permanently deleted', 'success');
+        } catch (err) {
+            console.error(err);
+            showToast('Could not delete file', 'error');
         }
     });
 }
@@ -500,75 +937,44 @@ function vaultArchiveFolder(folder) {
     });
 }
 
-function openVaultBulkMoveModal() {
-    // Reuse the folder modal to select destination
-    const modal = document.getElementById('vault-folder-modal');
-    const title = document.getElementById('vault-folder-modal-title');
-    const nameInput = document.getElementById('vault-folder-name');
-    const idInput = document.getElementById('vault-folder-id');
-    const saveBtn = document.getElementById('vault-folder-save');
-
-    if (!modal || !title) return;
-
-    // Create or reuse a folder select dropdown
-    let selectHtml = '<select id="vault-bulk-move-select" class="form-control"><option value="">Root folder</option>';
-    const buildOptions = (parentId, prefix) => {
-        vaultState.folders
-            .filter(folder => (folder.parent_id || null) === parentId && folder.id !== vaultState.activeFolderId)
-            .forEach(folder => {
-                selectHtml += `<option value="${folder.id}">${prefix}${escapeHtml(folder.name)}</option>`;
-                buildOptions(folder.id, `${prefix}- `);
-            });
-    };
-    buildOptions(null, '');
-    selectHtml += '</select>';
-
-    title.textContent = `Move ${vaultSelection.getCount()} document(s)`;
-    if (nameInput) nameInput.style.display = 'none';
-    if (idInput) idInput.value = '';
-
-    // Add select to modal body
-    const formGroup = nameInput ? nameInput.parentElement : null;
-    if (formGroup) {
-        const label = formGroup.querySelector('label');
-        if (label) label.textContent = 'Destination folder';
-        formGroup.innerHTML = '<label>Destination folder</label>' + selectHtml;
+async function vaultRestoreFolder(folder) {
+    try {
+        const res = await fetch(`/api/vault/folders/${folder.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archived: false })
+        });
+        if (!res.ok) throw new Error('Restore failed');
+        await Promise.all([loadVaultFolders(), loadVaultDocuments()]);
+        showToast('Folder restored', 'success');
+    } catch (err) {
+        console.error(err);
+        showToast('Could not restore folder', 'error');
     }
-
-    // Override save button behavior
-    const newSaveBtn = saveBtn.cloneNode(true);
-    saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
-    newSaveBtn.textContent = 'Move';
-    newSaveBtn.addEventListener('click', async () => {
-        const select = document.getElementById('vault-bulk-move-select');
-        const folderId = select ? (select.value || null) : null;
-        if (vaultBulkActions) {
-            await vaultBulkActions.move(folderId, 'folder');
-        }
-        closeVaultFolderModal();
-        // Reset modal for folder creation
-        resetVaultFolderModal();
-    });
-
-    modal.classList.add('active');
 }
 
-function resetVaultFolderModal() {
-    const title = document.getElementById('vault-folder-modal-title');
-    const formGroup = document.querySelector('#vault-folder-modal .form-group');
-    const saveBtn = document.getElementById('vault-folder-save');
+function vaultDeleteFolder(folder) {
+    openConfirmModal(
+        `Permanently delete "${folder.name}" and everything inside it? This cannot be undone.`,
+        async () => {
+            try {
+                const res = await fetch(`/api/vault/folders/${folder.id}?permanent=true`, {
+                    method: 'DELETE'
+                });
+                if (!res.ok) throw new Error('Delete failed');
+                if (vaultState.activeFolderId === folder.id) vaultState.activeFolderId = null;
+                await Promise.all([loadVaultFolders(), loadVaultDocuments(), loadVaultStats()]);
+                showToast('Folder permanently deleted', 'success');
+            } catch (err) {
+                console.error(err);
+                showToast('Could not delete folder', 'error');
+            }
+        }
+    );
+}
 
-    if (title) title.textContent = 'New Folder';
-    if (formGroup) {
-        formGroup.innerHTML = '<label>Folder name</label><input type="text" id="vault-folder-name" class="form-control" placeholder="Enter folder name...">';
-    }
-    if (saveBtn) {
-        const newSaveBtn = saveBtn.cloneNode(true);
-        saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
-        newSaveBtn.id = 'vault-folder-save';
-        newSaveBtn.textContent = 'Save';
-        newSaveBtn.addEventListener('click', saveVaultFolder);
-    }
+function openVaultBulkMoveModal() {
+    openVaultMoveModal('bulk');
 }
 
 async function vaultHandleUpload() {
@@ -607,7 +1013,7 @@ async function vaultHandleUpload() {
         if (!res.ok) {
             let message = 'Upload failed';
             try {
-                const data = await res.json();
+                const data = await res.clone().json();
                 if (data && data.error) message = data.error;
             } catch (jsonErr) {
                 try {
@@ -677,13 +1083,24 @@ function initVaultPage() {
     const searchInput = document.getElementById('vault-search-input');
     const searchClear = document.getElementById('vault-search-clear');
     const sortSelect = document.getElementById('vault-sort-select');
+    const scopeSelect = document.getElementById('vault-scope-select');
     const emptyUpload = document.getElementById('vault-empty-upload');
+    const emptyFolder = document.getElementById('vault-empty-folder');
+    const documentSave = document.getElementById('vault-document-save');
+    const documentCancel = document.getElementById('vault-document-cancel');
+    const moveSave = document.getElementById('vault-move-save');
+    const moveCancel = document.getElementById('vault-move-cancel');
+    const previewClose = document.getElementById('vault-preview-close');
+    const previewEdit = document.getElementById('vault-preview-edit');
+    const previewArchive = document.getElementById('vault-preview-archive');
+    const previewDownload = document.getElementById('vault-preview-download');
 
     // Bulk action buttons
     const selectAll = document.getElementById('vault-select-all');
     const bulkClear = document.getElementById('vault-bulk-clear');
     const bulkPin = document.getElementById('vault-bulk-pin');
     const bulkMove = document.getElementById('vault-bulk-move');
+    const bulkArchive = document.getElementById('vault-bulk-archive');
     const bulkDelete = document.getElementById('vault-bulk-delete');
 
     if (selectAll) {
@@ -731,18 +1148,53 @@ function initVaultPage() {
     if (bulkDelete) {
         bulkDelete.addEventListener('click', () => {
             if (vaultBulkActions) {
-                vaultBulkActions.delete('Delete selected documents?');
+                vaultBulkActions.delete('Permanently delete selected files? This cannot be undone.');
             }
+        });
+    }
+
+    if (bulkArchive) {
+        bulkArchive.addEventListener('click', async () => {
+            if (!vaultBulkActions) return;
+            await vaultBulkActions.execute(vaultIsArchivedScope() ? 'unarchive' : 'archive');
         });
     }
 
     if (viewToggle) viewToggle.addEventListener('click', vaultToggleView);
     if (folderSave) folderSave.addEventListener('click', saveVaultFolder);
     if (folderCancel) folderCancel.addEventListener('click', closeVaultFolderModal);
+    if (documentSave) documentSave.addEventListener('click', saveVaultDocument);
+    if (documentCancel) documentCancel.addEventListener('click', closeVaultDocumentModal);
+    if (moveSave) moveSave.addEventListener('click', saveVaultMove);
+    if (moveCancel) moveCancel.addEventListener('click', closeVaultMoveModal);
     if (uploadCancel) uploadCancel.addEventListener('click', closeVaultUploadModal);
     if (uploadSubmit) uploadSubmit.addEventListener('click', vaultHandleUpload);
     if (browseBtn && fileInput) browseBtn.addEventListener('click', () => fileInput.click());
     if (emptyUpload) emptyUpload.addEventListener('click', openVaultUploadModal);
+    if (emptyFolder) emptyFolder.addEventListener('click', () => openVaultFolderModal());
+    if (previewClose) previewClose.addEventListener('click', closeVaultPreviewModal);
+    if (previewEdit) {
+        previewEdit.addEventListener('click', () => {
+            if (!vaultPreviewDocument) return;
+            const doc = vaultPreviewDocument;
+            closeVaultPreviewModal();
+            openVaultDocumentModal(doc);
+        });
+    }
+    if (previewArchive) {
+        previewArchive.addEventListener('click', () => {
+            if (!vaultPreviewDocument) return;
+            const doc = vaultPreviewDocument;
+            closeVaultPreviewModal();
+            if (vaultIsArchivedScope()) vaultRestoreDoc(doc);
+            else vaultArchiveDoc(doc);
+        });
+    }
+    if (previewDownload) {
+        previewDownload.addEventListener('click', () => {
+            if (vaultPreviewDocument) vaultDownloadDoc(vaultPreviewDocument);
+        });
+    }
 
     if (searchInput) {
         let searchTimer;
@@ -771,6 +1223,26 @@ function initVaultPage() {
             renderVaultItems();
         });
     }
+
+    if (scopeSelect) {
+        scopeSelect.addEventListener('change', (event) => {
+            vaultSetScope(event.target.value);
+        });
+    }
+
+    document.addEventListener('click', (event) => {
+        if (vaultActiveMenu && !vaultActiveMenu.contains(event.target)) {
+            closeVaultItemMenu();
+        }
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && vaultActiveMenu) {
+            event.preventDefault();
+            closeVaultItemMenu({ returnFocus: true });
+        }
+    });
+    window.addEventListener('resize', () => closeVaultItemMenu());
+    window.addEventListener('scroll', () => closeVaultItemMenu(), true);
 
     // File input change handler for showing selected files
     if (fileInput) {

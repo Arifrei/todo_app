@@ -7,6 +7,42 @@ for _name, _value in vars(_app_module).items():
     if not _name.startswith('__'):
         globals()[_name] = _value
 
+
+def _vault_folder_tree(user_id, folder_id):
+    folders = DocumentFolder.query.filter_by(user_id=user_id).all()
+    by_parent = {}
+    by_id = {folder.id: folder for folder in folders}
+    for folder in folders:
+        by_parent.setdefault(folder.parent_id, []).append(folder.id)
+
+    ordered_ids = []
+    stack = [folder_id]
+    while stack:
+        current_id = stack.pop()
+        if current_id in ordered_ids:
+            continue
+        ordered_ids.append(current_id)
+        stack.extend(by_parent.get(current_id, []))
+    return [by_id[item_id] for item_id in ordered_ids if item_id in by_id]
+
+
+def _vault_restore_folder_tree(user_id, folder_id, restored_at):
+    folders = _vault_folder_tree(user_id, folder_id)
+    folder_ids = [folder.id for folder in folders]
+    for folder in folders:
+        folder.archived_at = None
+        folder.updated_at = restored_at
+    if folder_ids:
+        Document.query.filter(
+            Document.user_id == user_id,
+            Document.folder_id.in_(folder_ids),
+        ).update(
+            {'archived_at': None, 'updated_at': restored_at},
+            synchronize_session=False,
+        )
+    return folders
+
+
 def vault_folder_detail(folder_id):
     """Get, update, or archive a vault folder."""
     user = get_current_user()
@@ -18,6 +54,33 @@ def vault_folder_detail(folder_id):
     if request.method == 'GET':
         return jsonify(folder.to_dict())
 
+    if request.method == 'DELETE' and parse_bool(request.args.get('permanent')):
+        folders = _vault_folder_tree(user.id, folder.id)
+        folder_ids = [item.id for item in folders]
+        docs = Document.query.filter(
+            Document.user_id == user.id,
+            Document.folder_id.in_(folder_ids),
+        ).all()
+        file_paths = [
+            os.path.join(
+                _vault_root_for_user(user.id),
+                os.path.basename(doc.stored_filename or ''),
+            )
+            for doc in docs
+        ]
+        for doc in docs:
+            db.session.delete(doc)
+        for item in reversed(folders):
+            db.session.delete(item)
+        db.session.commit()
+        for file_path in file_paths:
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            except OSError:
+                app.logger.warning('Could not remove vault file %s', file_path, exc_info=True)
+        return '', 204
+
     if request.method == 'DELETE':
         archived_at = _now_local()
         _vault_archive_folder_recursive(user.id, folder.id, archived_at)
@@ -27,8 +90,52 @@ def vault_folder_detail(folder_id):
     data = request.json or {}
     if 'name' in data:
         name_val = (data.get('name') or '').strip()
-        if name_val:
-            folder.name = name_val
+        if not name_val:
+            return jsonify({'error': 'Folder name is required'}), 400
+        folder.name = name_val
+    if 'parent_id' in data:
+        parent_id = data.get('parent_id')
+        if parent_id in (None, ''):
+            parent_id_int = None
+        else:
+            try:
+                parent_id_int = int(parent_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid parent_id'}), 400
+            if parent_id_int == folder.id:
+                return jsonify({'error': 'A folder cannot contain itself'}), 400
+            destination = DocumentFolder.query.filter_by(
+                id=parent_id_int,
+                user_id=user.id,
+                archived_at=None,
+            ).first()
+            if not destination:
+                return jsonify({'error': 'Destination folder not found'}), 404
+            descendant_ids = {item.id for item in _vault_folder_tree(user.id, folder.id)}
+            if parent_id_int in descendant_ids:
+                return jsonify({'error': 'A folder cannot be moved into one of its children'}), 400
+        folder.parent_id = parent_id_int
+        max_order = db.session.query(
+            db.func.coalesce(db.func.max(DocumentFolder.order_index), 0)
+        ).filter(
+            DocumentFolder.user_id == user.id,
+            DocumentFolder.parent_id == parent_id_int,
+            DocumentFolder.id != folder.id,
+        ).scalar()
+        folder.order_index = (max_order or 0) + 1
+    if 'archived' in data:
+        if parse_bool(data.get('archived')):
+            _vault_archive_folder_recursive(user.id, folder.id, _now_local())
+        else:
+            restored_at = _now_local()
+            _vault_restore_folder_tree(user.id, folder.id, restored_at)
+            if folder.parent_id is not None:
+                parent = DocumentFolder.query.filter_by(
+                    id=folder.parent_id,
+                    user_id=user.id,
+                ).first()
+                if not parent or parent.archived_at:
+                    folder.parent_id = None
     folder.updated_at = _now_local()
     db.session.commit()
     return jsonify(folder.to_dict())
@@ -56,7 +163,14 @@ def vault_document_preview(doc_id):
     if doc.get_file_category() not in ['image', 'pdf', 'text', 'audio', 'video', 'code']:
         return jsonify({'error': 'Preview not supported'}), 400
     vault_dir = _vault_root_for_user(user.id)
-    return send_from_directory(vault_dir, doc.stored_filename, as_attachment=False)
+    response = send_from_directory(vault_dir, doc.stored_filename, as_attachment=False)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    if doc.get_file_category() in ['text', 'code']:
+        response.mimetype = 'text/plain'
+        response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'"
+    elif (doc.file_extension or '').lower() == 'svg':
+        response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'"
+    return response
 
 
 
@@ -75,7 +189,11 @@ def vault_document_move(doc_id):
             folder_id_int = int(folder_id)
         except (TypeError, ValueError):
             return jsonify({'error': 'Invalid folder_id'}), 400
-        DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+        DocumentFolder.query.filter_by(
+            id=folder_id_int,
+            user_id=user.id,
+            archived_at=None,
+        ).first_or_404()
         doc.folder_id = folder_id_int
     doc.updated_at = _now_local()
     db.session.commit()
@@ -91,10 +209,11 @@ def vault_search():
     query = (request.args.get('q') or '').strip()
     if not query:
         return jsonify([])
+    archived_only = parse_bool(request.args.get('archived'))
     like = f"%{query}%"
     results = Document.query.filter(
         Document.user_id == user.id,
-        Document.archived_at.is_(None),
+        Document.archived_at.isnot(None) if archived_only else Document.archived_at.is_(None),
         or_(
             Document.title.ilike(like),
             Document.original_filename.ilike(like),

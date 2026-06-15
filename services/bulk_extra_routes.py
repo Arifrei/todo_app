@@ -30,8 +30,9 @@ def bulk_vault_documents():
         Document=Document,
         DocumentFolder=DocumentFolder,
         db=db,
-        app=app,
         os_module=os,
+        vault_root_for_user=_vault_root_for_user,
+        now_local=_now_local,
     )
 
 

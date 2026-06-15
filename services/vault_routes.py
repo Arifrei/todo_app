@@ -68,9 +68,15 @@ def vault_documents():
         return jsonify({'error': 'No file uploaded'}), 400
 
     folder_id = request.form.get('folder_id')
+    if folder_id not in (None, '') and not str(folder_id).isdigit():
+        return jsonify({'error': 'Invalid folder_id'}), 400
     folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
     if folder_id_int is not None:
-        DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+        DocumentFolder.query.filter_by(
+            id=folder_id_int,
+            user_id=user.id,
+            archived_at=None,
+        ).first_or_404()
 
     prepared = []
     mime_extension_overrides = {
@@ -176,9 +182,15 @@ def vault_folders():
         if not name:
             return jsonify({'error': 'Folder name required'}), 400
         parent_id = data.get('parent_id')
+        if parent_id not in (None, '') and not str(parent_id).isdigit():
+            return jsonify({'error': 'Invalid parent_id'}), 400
         parent_id_int = int(parent_id) if parent_id and str(parent_id).isdigit() else None
         if parent_id_int is not None:
-            DocumentFolder.query.filter_by(id=parent_id_int, user_id=user.id).first_or_404()
+            DocumentFolder.query.filter_by(
+                id=parent_id_int,
+                user_id=user.id,
+                archived_at=None,
+            ).first_or_404()
         max_order = db.session.query(db.func.coalesce(db.func.max(DocumentFolder.order_index), 0)).filter(
             DocumentFolder.user_id == user.id,
             DocumentFolder.parent_id == parent_id_int
@@ -214,9 +226,11 @@ def vault_document_detail(doc_id):
     Document = a.Document
     DocumentFolder = a.DocumentFolder
     _now_local = a._now_local
+    _vault_root_for_user = a._vault_root_for_user
     db = a.db
     get_current_user = a.get_current_user
     jsonify = a.jsonify
+    os = a.os
     parse_bool = a.parse_bool
     request = a.request
     tags_to_string = a.tags_to_string
@@ -229,6 +243,20 @@ def vault_document_detail(doc_id):
 
     if request.method == 'GET':
         return jsonify(doc.to_dict())
+
+    if request.method == 'DELETE' and parse_bool(request.args.get('permanent')):
+        file_path = os.path.join(
+            _vault_root_for_user(user.id),
+            os.path.basename(doc.stored_filename or ''),
+        )
+        db.session.delete(doc)
+        db.session.commit()
+        try:
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        except OSError:
+            a.app.logger.warning('Could not remove vault file %s', file_path, exc_info=True)
+        return '', 204
 
     if request.method == 'DELETE':
         doc.archived_at = _now_local()
@@ -255,8 +283,27 @@ def vault_document_detail(doc_id):
                 folder_id_int = int(folder_id)
             except (TypeError, ValueError):
                 return jsonify({'error': 'Invalid folder_id'}), 400
-            DocumentFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
+            DocumentFolder.query.filter_by(
+                id=folder_id_int,
+                user_id=user.id,
+                archived_at=None,
+            ).first_or_404()
             doc.folder_id = folder_id_int
+    if 'archived' in data:
+        archived = parse_bool(data.get('archived'))
+        if archived:
+            doc.archived_at = _now_local()
+            doc.pinned = False
+            doc.pin_order = 0
+        else:
+            doc.archived_at = None
+            if doc.folder_id is not None:
+                folder = DocumentFolder.query.filter_by(
+                    id=doc.folder_id,
+                    user_id=user.id,
+                ).first()
+                if not folder or folder.archived_at:
+                    doc.folder_id = None
     if 'pinned' in data:
         pinned = parse_bool(data.get('pinned'))
         if pinned and not doc.pinned:
