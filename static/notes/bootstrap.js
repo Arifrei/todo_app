@@ -166,6 +166,9 @@ function initNoteTitleSearch() {
     const clear = document.getElementById('notes-search-clear');
     if (!toggle || !panel || !input) return;
 
+    input.tabIndex = -1;
+    if (clear) clear.tabIndex = -1;
+
     toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         setNoteSearchOpen(!noteSearchState.open);
@@ -202,14 +205,20 @@ function setNoteSearchOpen(open) {
     const toggle = document.getElementById('notes-search-toggle');
     const panel = document.getElementById('notes-search-panel');
     const input = document.getElementById('notes-search-input');
+    const clear = document.getElementById('notes-search-clear');
     const fab = document.getElementById('notes-fab');
+    const control = document.getElementById('notes-search-control') || (toggle ? toggle.closest('.notes-search-control') : null);
     if (!toggle || !panel || !input) return;
 
     noteSearchState.open = !!open;
+    if (control) control.classList.toggle('active', noteSearchState.open);
     panel.classList.toggle('active', noteSearchState.open);
     panel.setAttribute('aria-hidden', noteSearchState.open ? 'false' : 'true');
     toggle.classList.toggle('active', noteSearchState.open);
     toggle.setAttribute('aria-expanded', noteSearchState.open ? 'true' : 'false');
+    toggle.setAttribute('aria-label', noteSearchState.open ? 'Close note search' : 'Search notes');
+    input.tabIndex = noteSearchState.open ? 0 : -1;
+    if (clear) clear.tabIndex = noteSearchState.open ? 0 : -1;
 
     if (noteSearchState.open) {
         noteFabExpanded = false;
@@ -276,16 +285,15 @@ function renderNoteSearchResults() {
     const clear = document.getElementById('notes-search-clear');
     if (!resultsEl) return;
 
+    const shouldShowResults = !!noteSearchState.query || noteSearchState.loading || !!noteSearchState.error;
+    resultsEl.classList.toggle('visible', shouldShowResults);
+
     if (clear) {
         clear.classList.toggle('visible', !!noteSearchState.query);
     }
 
     resultsEl.innerHTML = '';
     if (!noteSearchState.query) {
-        const hint = document.createElement('div');
-        hint.className = 'notes-search-empty';
-        hint.textContent = 'Search all note titles.';
-        resultsEl.appendChild(hint);
         return;
     }
 
@@ -333,11 +341,18 @@ function createNoteSearchResultItem(note) {
             <i class="fa-solid ${iconName}"></i>
         </span>
         <span class="notes-search-result-main">
-            <span class="notes-search-result-title">${escapeHtml(getNoteDisplayTitle(note))}</span>
+            <span class="notes-search-result-title"></span>
             <span class="notes-search-result-meta">${escapeHtml(typeLabel)} &middot; ${escapeHtml(folderPath)}</span>
         </span>
         ${isLocked ? '<i class="notes-search-result-lock fa-solid fa-lock"></i>' : ''}
     `;
+
+    const titleEl = item.querySelector('.notes-search-result-title');
+    appendHighlightedSearchText(
+        titleEl,
+        getNoteDisplayTitle(note),
+        noteSearchState.query
+    );
 
     item.addEventListener('click', () => {
         if (isLocked) {
@@ -351,6 +366,40 @@ function createNoteSearchResultItem(note) {
     });
 
     return item;
+}
+
+function appendHighlightedSearchText(element, text, query) {
+    if (!element) return;
+
+    const source = String(text || '');
+    const needle = String(query || '').trim();
+    if (!needle) {
+        element.textContent = source;
+        return;
+    }
+
+    const sourceLower = source.toLowerCase();
+    const needleLower = needle.toLowerCase();
+    let cursor = 0;
+    let matchIndex = sourceLower.indexOf(needleLower);
+
+    while (matchIndex !== -1) {
+        if (matchIndex > cursor) {
+            element.appendChild(document.createTextNode(source.slice(cursor, matchIndex)));
+        }
+
+        const highlight = document.createElement('mark');
+        highlight.className = 'notes-search-highlight';
+        highlight.textContent = source.slice(matchIndex, matchIndex + needle.length);
+        element.appendChild(highlight);
+
+        cursor = matchIndex + needle.length;
+        matchIndex = sourceLower.indexOf(needleLower, cursor);
+    }
+
+    if (cursor < source.length) {
+        element.appendChild(document.createTextNode(source.slice(cursor)));
+    }
 }
 
 function getNoteFolderPath(folderId) {
