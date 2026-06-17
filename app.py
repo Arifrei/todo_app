@@ -68,7 +68,15 @@ if DOTENV_PATH and os.path.exists(DOTENV_PATH):
 
 app = Flask(__name__)
 # Keep DB path aligned with migration scripts (instance/todo.db)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///todo.db")
+database_url = os.environ.get("DATABASE_URL", "sqlite:///todo.db")
+if database_url.startswith("postgres://"):
+    database_url = "postgresql://" + database_url[len("postgres://"):]
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+if database_url.startswith(("postgresql:", "postgresql+")):
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+    }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['PERMANENT_SESSION_LIFETIME'] = 365 * 24 * 60 * 60  # 1 year in seconds
