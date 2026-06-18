@@ -1192,6 +1192,10 @@ def _rollover_incomplete_events():
                     )
                 for created in created_calendar_phases + created_calendar_events:
                     start_embedding_job(uid, ENTITY_CALENDAR, created.id)
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Error during calendar rollover: {e}")
+            raise
         finally:
             # Release the lock
             try:

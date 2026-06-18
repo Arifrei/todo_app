@@ -491,7 +491,9 @@ class CalendarEvent(db.Model):
     reminder_sent = db.Column(db.Boolean, default=False)
     reminder_snoozed_until = db.Column(db.DateTime, nullable=True)
     rollover_enabled = db.Column(db.Boolean, default=False)
-    rolled_from_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    # Rollover copies keep the source id for audit/idempotency even after the
+    # original row is deleted, so this must not be a strict foreign key.
+    rolled_from_id = db.Column(db.Integer, nullable=True)
     recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=True)
     todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
     planner_simple_item_id = db.Column(db.Integer, db.ForeignKey('planner_simple_item.id'), nullable=True)
