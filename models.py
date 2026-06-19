@@ -9,8 +9,8 @@ db = SQLAlchemy()
 
 task_dependencies = db.Table(
     'task_dependency',
-    db.Column('task_id', db.Integer, db.ForeignKey('todo_item.id'), primary_key=True),
-    db.Column('depends_on_id', db.Integer, db.ForeignKey('todo_item.id'), primary_key=True)
+    db.Column('task_id', db.Integer, db.ForeignKey('todo_item.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('depends_on_id', db.Integer, db.ForeignKey('todo_item.id', ondelete='CASCADE'), primary_key=True)
 )
 
 
@@ -140,7 +140,7 @@ class TodoList(db.Model):
 
 class TodoItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=False)
+    list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id', ondelete='CASCADE'), nullable=False)
     content = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
@@ -152,11 +152,11 @@ class TodoItem(db.Model):
     completed_at = db.Column(db.DateTime, nullable=True)
 
     # If this item represents a child project, this links to that list
-    linked_list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id'), nullable=True)
+    linked_list_id = db.Column(db.Integer, db.ForeignKey('todo_list.id', ondelete='SET NULL'), nullable=True)
     linked_list = db.relationship('TodoList', foreign_keys=[linked_list_id], post_update=True)
 
     # If this task belongs to a phase, track it here
-    phase_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
+    phase_id = db.Column(db.Integer, db.ForeignKey('todo_item.id', ondelete='SET NULL'), nullable=True)
     phase = db.relationship('TodoItem', remote_side=[id], backref='phase_tasks', foreign_keys=[phase_id])
     linked_notes = db.relationship('Note', backref='task', lazy=True, foreign_keys='Note.todo_item_id')
     dependencies = db.relationship(
@@ -243,11 +243,11 @@ class Note(db.Model):
     """Standalone rich-text note owned by a user."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
-    calendar_event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
-    planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=True)
-    planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id'), nullable=True)
-    folder_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
+    todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id', ondelete='SET NULL'), nullable=True)
+    calendar_event_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id', ondelete='SET NULL'), nullable=True)
+    planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id', ondelete='SET NULL'), nullable=True)
+    planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id', ondelete='SET NULL'), nullable=True)
+    folder_id = db.Column(db.Integer, db.ForeignKey('note_folder.id', ondelete='SET NULL'), nullable=True)
     title = db.Column(db.String(150), nullable=False, default='Untitled Note')
     content = db.Column(db.Text, nullable=True)  # Stored as HTML
     note_type = db.Column(db.String(20), nullable=False, default='note')  # note | list
@@ -303,8 +303,8 @@ class NoteLink(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
-    source_note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
-    target_note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
+    source_note_id = db.Column(db.Integer, db.ForeignKey('note.id', ondelete='CASCADE'), nullable=False)
+    target_note_id = db.Column(db.Integer, db.ForeignKey('note.id', ondelete='CASCADE'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
@@ -313,7 +313,7 @@ class NoteListItem(db.Model):
     __tablename__ = 'note_list_item'
 
     id = db.Column(db.Integer, primary_key=True)
-    note_id = db.Column(db.Integer, db.ForeignKey('note.id'), nullable=False)
+    note_id = db.Column(db.Integer, db.ForeignKey('note.id', ondelete='CASCADE'), nullable=False)
     text = db.Column(db.String(300), nullable=False)
     note = db.Column(db.Text, nullable=True)
     inner_note = db.Column(db.Text, nullable=True)
@@ -401,7 +401,7 @@ class NoteFolder(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    parent_id = db.Column(db.Integer, db.ForeignKey('note_folder.id'), nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('note_folder.id', ondelete='SET NULL'), nullable=True)
     name = db.Column(db.String(120), nullable=False)
     order_index = db.Column(db.Integer, default=0)
     pinned = db.Column(db.Boolean, default=False)
@@ -481,9 +481,9 @@ class CalendarEvent(db.Model):
     allow_overlap = db.Column(db.Boolean, default=False)  # allow tasks to overlap this event
     display_mode = db.Column(db.String(20), default='both')  # both | timeline_only
     is_group = db.Column(db.Boolean, default=False)  # grouping header
-    phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    phase_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id', ondelete='SET NULL'), nullable=True)
     phase = db.relationship('CalendarEvent', remote_side=[id], backref='phase_events', foreign_keys=[phase_id])
-    group_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id'), nullable=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('calendar_event.id', ondelete='SET NULL'), nullable=True)
     group = db.relationship('CalendarEvent', remote_side=[id], backref='group_items', foreign_keys=[group_id])
     order_index = db.Column(db.Integer, default=0)
     reminder_minutes_before = db.Column(db.Integer, nullable=True)
@@ -494,13 +494,13 @@ class CalendarEvent(db.Model):
     # Rollover copies keep the source id for audit/idempotency even after the
     # original row is deleted, so this must not be a strict foreign key.
     rolled_from_id = db.Column(db.Integer, nullable=True)
-    recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=True)
-    todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id'), nullable=True)
-    planner_simple_item_id = db.Column(db.Integer, db.ForeignKey('planner_simple_item.id'), nullable=True)
-    planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=True)
-    planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id'), nullable=True)
-    note_list_item_id = db.Column(db.Integer, db.ForeignKey('note_list_item.id'), nullable=True)
-    do_feed_item_id = db.Column(db.Integer, db.ForeignKey('do_feed_item.id'), nullable=True)
+    recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id', ondelete='SET NULL'), nullable=True)
+    todo_item_id = db.Column(db.Integer, db.ForeignKey('todo_item.id', ondelete='SET NULL'), nullable=True)
+    planner_simple_item_id = db.Column(db.Integer, db.ForeignKey('planner_simple_item.id', ondelete='SET NULL'), nullable=True)
+    planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id', ondelete='SET NULL'), nullable=True)
+    planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id', ondelete='SET NULL'), nullable=True)
+    note_list_item_id = db.Column(db.Integer, db.ForeignKey('note_list_item.id', ondelete='SET NULL'), nullable=True)
+    do_feed_item_id = db.Column(db.Integer, db.ForeignKey('do_feed_item.id', ondelete='SET NULL'), nullable=True)
     recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
     item_note = db.Column(db.Text, nullable=True)
     external_source = db.Column(db.String(50), nullable=True)
@@ -603,7 +603,7 @@ class RecurrenceException(db.Model):
     """Skip a specific recurrence day (e.g., deleted instance)."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id'), nullable=False)
+    recurrence_id = db.Column(db.Integer, db.ForeignKey('recurring_event.id', ondelete='CASCADE'), nullable=False)
     day = db.Column(db.Date, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -738,7 +738,7 @@ class PlannerFolder(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    parent_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id', ondelete='SET NULL'), nullable=True)
     name = db.Column(db.String(150), nullable=False)
     folder_type = db.Column(db.String(20), nullable=False, default='simple')  # simple | multi
     order_index = db.Column(db.Integer, default=0)
@@ -780,7 +780,7 @@ class PlannerSimpleItem(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id', ondelete='CASCADE'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     value = db.Column(db.String(600), nullable=False)
     description = db.Column(db.Text, nullable=True)
@@ -815,7 +815,7 @@ class PlannerGroup(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id', ondelete='CASCADE'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     order_index = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -847,8 +847,8 @@ class PlannerMultiItem(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id'), nullable=False)
-    group_id = db.Column(db.Integer, db.ForeignKey('planner_group.id'), nullable=True)
+    folder_id = db.Column(db.Integer, db.ForeignKey('planner_folder.id', ondelete='CASCADE'), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('planner_group.id', ondelete='SET NULL'), nullable=True)
     title = db.Column(db.String(200), nullable=False)
     scheduled_date = db.Column(db.Date, nullable=True)
     order_index = db.Column(db.Integer, default=0)
@@ -883,7 +883,7 @@ class PlannerMultiLine(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id'), nullable=False)
+    item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id', ondelete='CASCADE'), nullable=False)
     line_type = db.Column(db.String(20), nullable=False, default='text')  # text | url
     value = db.Column(db.String(600), nullable=False)
     scheduled_date = db.Column(db.Date, nullable=True)
@@ -967,7 +967,7 @@ class DocumentFolder(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    parent_id = db.Column(db.Integer, db.ForeignKey('document_folder.id'), nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('document_folder.id', ondelete='SET NULL'), nullable=True)
     name = db.Column(db.String(120), nullable=False)
     order_index = db.Column(db.Integer, default=0)
     archived_at = db.Column(db.DateTime, nullable=True)
@@ -1000,7 +1000,7 @@ class Document(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    folder_id = db.Column(db.Integer, db.ForeignKey('document_folder.id'), nullable=True)
+    folder_id = db.Column(db.Integer, db.ForeignKey('document_folder.id', ondelete='SET NULL'), nullable=True)
     title = db.Column(db.String(255), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
     stored_filename = db.Column(db.String(255), nullable=False)  # UUID-based filename on disk
