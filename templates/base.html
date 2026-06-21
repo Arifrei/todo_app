@@ -243,6 +243,12 @@
         <div class="blob blob-2"></div>
         <div class="blob blob-3"></div>
     </div>
+    {% set current_path = request.path %}
+    {% set mobile_is_calendar = current_path.startswith('/calendar') %}
+    {% set mobile_is_notes = current_path.startswith('/notes') %}
+    {% set mobile_is_quick_access = current_path.startswith('/quick-access') %}
+    {% set mobile_is_tasks = current_path.startswith('/tasks') or current_path.startswith('/list') %}
+    {% set mobile_is_more = current_path == '/' or current_path.startswith('/inbox') or current_path.startswith('/vault') or current_path.startswith('/recalls') or current_path.startswith('/bookmarks') or current_path.startswith('/feed') or current_path.startswith('/ai') or current_path.startswith('/settings') %}
 
     <div class="app-container">
         <div class="mobile-topbar">
@@ -262,7 +268,7 @@
                    {% if request.path.startswith('/inbox') %}aria-current="page"{% endif %}>
                     <i class="fa-solid fa-box-open"></i>
                 </a>
-                <button class="btn-icon-mobile" id="mobile-quick-access-btn" type="button" aria-label="Quick Access" title="Quick Access">
+                <button class="btn-icon-mobile" id="mobile-quick-access-btn" type="button" aria-label="Quick Access" aria-controls="mobile-quick-access-sheet" aria-expanded="false" title="Quick Access">
                     <i class="fa-solid fa-star"></i>
                 </button>
             </div>
@@ -373,6 +379,87 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+
+    <div class="mobile-quick-access-backdrop" id="mobile-quick-access-backdrop" hidden></div>
+    <section class="mobile-quick-access-sheet" id="mobile-quick-access-sheet" role="dialog" aria-modal="true" aria-labelledby="mobile-quick-access-title" aria-hidden="true" tabindex="-1" hidden>
+        <div class="mobile-quick-access-grip" aria-hidden="true"></div>
+        <div class="mobile-quick-access-header">
+            <div class="mobile-quick-access-heading">
+                <span class="mobile-quick-access-kicker">Pinned</span>
+                <h2 id="mobile-quick-access-title">Quick Access</h2>
+            </div>
+            <div class="mobile-quick-access-actions">
+                <a class="mobile-quick-access-manage" href="/quick-access">Manage</a>
+                <button class="mobile-sheet-close" id="mobile-quick-access-close" type="button" aria-label="Close quick access">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+        <div class="mobile-quick-access-list" id="mobile-quick-access-list">
+            <div class="mobile-quick-access-state">Loading...</div>
+        </div>
+    </section>
+
+    <div class="mobile-more-popover" id="mobile-more-popover" role="menu" aria-label="More modules" hidden>
+        <a class="mobile-more-item{{ ' active' if current_path == '/' else '' }}" href="/" role="menuitem"{% if current_path == '/' %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-house"></i></span>
+            <span>Home</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/inbox') else '' }}" href="/inbox" role="menuitem"{% if current_path.startswith('/inbox') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-box-open"></i></span>
+            <span>Inbox</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/vault') else '' }}" href="/vault" role="menuitem"{% if current_path.startswith('/vault') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-folder-open"></i></span>
+            <span>Vault</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/recalls') else '' }}" href="/recalls" role="menuitem"{% if current_path.startswith('/recalls') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-inbox"></i></span>
+            <span>Recalls</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/bookmarks') else '' }}" href="/bookmarks" role="menuitem"{% if current_path.startswith('/bookmarks') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-bookmark"></i></span>
+            <span>Bookmarks</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/feed') else '' }}" href="/feed" role="menuitem"{% if current_path.startswith('/feed') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-bolt"></i></span>
+            <span>EverFeed</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/ai') else '' }}" href="/ai" role="menuitem"{% if current_path.startswith('/ai') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-robot"></i></span>
+            <span>Assistant</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/settings') else '' }}" href="/settings" role="menuitem"{% if current_path.startswith('/settings') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-gear"></i></span>
+            <span>Settings</span>
+        </a>
+    </div>
+
+    <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Mobile primary navigation">
+        <button class="mobile-bottom-nav__handle" id="mobile-bottom-nav-handle" type="button" aria-label="Show mobile navigation" aria-controls="mobile-bottom-nav" aria-expanded="false">
+            <span aria-hidden="true"></span>
+        </button>
+        <a class="mobile-bottom-nav__action{{ ' active' if mobile_is_calendar else '' }}" href="/calendar"{% if mobile_is_calendar %} aria-current="page"{% endif %}>
+            <span class="mobile-bottom-nav__icon"><i class="fa-solid fa-calendar-day"></i></span>
+            <span class="mobile-bottom-nav__label">Calendar</span>
+        </a>
+        <a class="mobile-bottom-nav__action{{ ' active' if mobile_is_notes else '' }}" href="/notes"{% if mobile_is_notes %} aria-current="page"{% endif %}>
+            <span class="mobile-bottom-nav__icon"><i class="fa-solid fa-note-sticky"></i></span>
+            <span class="mobile-bottom-nav__label">Notes</span>
+        </a>
+        <button class="mobile-bottom-nav__action mobile-bottom-nav__action--quick{{ ' active' if mobile_is_quick_access else '' }}" id="mobile-bottom-quick-access-btn" type="button" aria-label="Open quick access" aria-controls="mobile-quick-access-sheet" aria-expanded="false">
+            <span class="mobile-bottom-nav__quick-icon"><i class="fa-solid fa-star"></i></span>
+            <span class="mobile-bottom-nav__label">Quick Access</span>
+        </button>
+        <a class="mobile-bottom-nav__action{{ ' active' if mobile_is_tasks else '' }}" href="/tasks"{% if mobile_is_tasks %} aria-current="page"{% endif %}>
+            <span class="mobile-bottom-nav__icon"><i class="fa-solid fa-list-check"></i></span>
+            <span class="mobile-bottom-nav__label">Tasks</span>
+        </a>
+        <button class="mobile-bottom-nav__action{{ ' active' if mobile_is_more else '' }}" id="mobile-bottom-more-btn" type="button" aria-label="Open more modules" aria-controls="mobile-more-popover" aria-haspopup="menu" aria-expanded="false">
+            <span class="mobile-bottom-nav__icon"><i class="fa-solid fa-ellipsis"></i></span>
+            <span class="mobile-bottom-nav__label">More</span>
+        </button>
+    </nav>
 
     <!-- Global Confirm Modal -->
     <div class="modal" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-message">

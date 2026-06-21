@@ -1,0 +1,17 @@
+<header class="appheader">
+    <div class="appheader__bar">
+        {% if shell_back_url %}
+        <a class="appheader__back" href="{{ shell_back_url }}" aria-label="Back">‹</a>
+        {% endif %}
+        <div class="appheader__titles">
+            <div class="eyebrow">{{ shell_eyebrow }}</div>
+            <h1>{{ shell_title }}</h1>
+        </div>
+        <div class="appheader__actions">
+            {% block header_actions %}{% endblock %}
+            <button class="iconbtn iconbtn--ghost js-qa-open" type="button" aria-label="Quick Access" title="Quick Access">
+                <span class="qa-star" aria-hidden="true">★</span>
+            </button>
+        </div>
+    </div>
+</header>

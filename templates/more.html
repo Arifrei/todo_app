@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="more-grid">
+    {% set tiles = [
+        {'href': '/notes', 'icon': 'fa-solid fa-note-sticky', 'label': 'Notes', 'meta': 'Dense notes, folders, and lists'},
+        {'href': '/vault', 'icon': 'fa-solid fa-folder-open', 'label': 'Vault', 'meta': 'Documents and protected files'},
+        {'href': '/inbox', 'icon': 'fa-solid fa-box-open', 'label': 'Inbox', 'meta': 'Capture and route ideas'},
+        {'href': '/quick-access', 'icon': 'fa-solid fa-star', 'label': 'Quick Access', 'meta': 'Manage pinned shortcuts'},
+        {'href': '/bookmarks', 'icon': 'fa-solid fa-bookmark', 'label': 'Bookmarks', 'meta': 'Saved links'},
+        {'href': '/feed', 'icon': 'fa-solid fa-bolt', 'label': 'EverFeed', 'meta': 'Saved feed items'},
+        {'href': '/recalls', 'icon': 'fa-solid fa-inbox', 'label': 'Recalls', 'meta': 'Things to remember later'},
+        {'href': '/settings', 'icon': 'fa-solid fa-gear', 'label': 'Settings', 'meta': 'Account and notifications'}
+    ] %}
+    {% for tile in tiles %}
+        {% set href = tile.href %}
+        {% set icon = tile.icon %}
+        {% set label = tile.label %}
+        {% set meta = tile.meta %}
+        {% include "partials/_module_tile.html" %}
+    {% endfor %}
+</div>
+{% endblock %}

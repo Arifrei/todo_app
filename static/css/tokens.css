@@ -1,0 +1,162 @@
+@font-face {
+    font-family: "Bricolage Grotesque";
+    src: url("../fonts/BricolageGrotesque.woff2") format("woff2");
+    font-weight: 600 800;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Hanken Grotesk";
+    src: url("../fonts/HankenGrotesk.woff2") format("woff2");
+    font-weight: 400 800;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("../fonts/JetBrainsMono.woff2") format("woff2");
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+    --ink: #0F172A;
+    --muted: #64748B;
+    --faint: #A6ABB5;
+    --disabled: #94A3B8;
+    --line: #EAE5DB;
+    --surface: #FFFFFF;
+    --bg: linear-gradient(180deg, #FFFFFF 0%, #EEF3F8 100%);
+
+    --m-tasks: #0C7585;
+    --m-tasks-2: #16A3B2;
+    --m-tasks-tint: #D9EEF1;
+    --m-tasks-rgb: 12,117,133;
+    --m-cal: #BE7E2A;
+    --m-cal-2: #D9A94E;
+    --m-cal-tint: #FEF0D9;
+    --m-cal-rgb: 190,126,42;
+    --m-ai: #B8475E;
+    --m-ai-2: #D2697E;
+    --m-ai-tint: #F6DDE3;
+    --m-ai-rgb: 184,71,94;
+    --m-notes: #5246C0;
+    --m-notes-2: #7E72D6;
+    --m-notes-tint: #E7E4F6;
+    --m-notes-rgb: 82,70,192;
+    --m-vault: #2A7D5E;
+    --m-vault-2: #3DA17C;
+    --m-vault-tint: #DEF7EC;
+    --m-vault-rgb: 42,125,94;
+    --m-inbox: #3A55B0;
+    --m-inbox-2: #5C7AD0;
+    --m-inbox-tint: #E2E7F6;
+    --m-inbox-rgb: 58,85,176;
+    --m-saved: #BC6240;
+    --m-saved-2: #D17E5C;
+    --m-saved-tint: #F4E1D8;
+    --m-saved-rgb: 188,98,64;
+
+    --accent: var(--m-tasks);
+    --accent-2: var(--m-tasks-2);
+    --accent-tint: var(--m-tasks-tint);
+    --accent-rgb: var(--m-tasks-rgb);
+
+    --r-card: 14px;
+    --r-sm: 11px;
+    --r-pill: 999px;
+    --r-sheet: 26px;
+    --shadow-card: 0 2px 7px rgba(35,32,25,.05);
+    --shadow-pop: 0 8px 20px rgba(var(--accent-rgb), .30);
+    --shadow-sheet: 0 -12px 40px rgba(15,23,42,.28);
+
+    --font-display: "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif;
+    --font-body: "Hanken Grotesk", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* Legacy variable bridge for existing page CSS and JS-generated markup. */
+    --primary-color: var(--accent);
+    --primary-hover: var(--accent);
+    --primary-light: var(--accent-tint);
+    --secondary-color: var(--accent-2);
+    --secondary-hover: var(--accent-2);
+    --secondary-light: var(--accent-tint);
+    --accent-color: var(--accent);
+    --accent-light: var(--accent-tint);
+    --info-color: var(--accent-2);
+    --info-light: var(--accent-tint);
+    --teal: var(--accent-2);
+    --teal-light: var(--accent-tint);
+    --indigo: var(--m-notes);
+    --indigo-light: var(--m-notes-tint);
+    --text-color: var(--ink);
+    --text-muted: var(--muted);
+    --border-color: var(--line);
+    --white: var(--surface);
+    --bg-color: #EEF3F8;
+    --bg-light: #F8FAFC;
+    --bg-white: var(--surface);
+    --card-bg: var(--surface);
+    --bg-secondary: #F4F7FB;
+    --gray-50: #F8FAFC;
+    --gray-100: #F1F5F9;
+    --gray-200: #E2E8F0;
+    --danger-color: #DC2626;
+    --danger-light: #FEE2E2;
+    --warning-color: #D97706;
+    --warning-light: #FEF3C7;
+}
+
+body[data-module="home"],
+body[data-module="tasks"] {
+    --accent: var(--m-tasks);
+    --accent-2: var(--m-tasks-2);
+    --accent-tint: var(--m-tasks-tint);
+    --accent-rgb: var(--m-tasks-rgb);
+}
+
+body[data-module="calendar"] {
+    --accent: var(--m-cal);
+    --accent-2: var(--m-cal-2);
+    --accent-tint: var(--m-cal-tint);
+    --accent-rgb: var(--m-cal-rgb);
+}
+
+body[data-module="assistant"] {
+    --accent: var(--m-ai);
+    --accent-2: var(--m-ai-2);
+    --accent-tint: var(--m-ai-tint);
+    --accent-rgb: var(--m-ai-rgb);
+}
+
+body[data-module="notes"] {
+    --accent: var(--m-notes);
+    --accent-2: var(--m-notes-2);
+    --accent-tint: var(--m-notes-tint);
+    --accent-rgb: var(--m-notes-rgb);
+}
+
+body[data-module="vault"] {
+    --accent: var(--m-vault);
+    --accent-2: var(--m-vault-2);
+    --accent-tint: var(--m-vault-tint);
+    --accent-rgb: var(--m-vault-rgb);
+}
+
+body[data-module="inbox"] {
+    --accent: var(--m-inbox);
+    --accent-2: var(--m-inbox-2);
+    --accent-tint: var(--m-inbox-tint);
+    --accent-rgb: var(--m-inbox-rgb);
+}
+
+body[data-module="saved"],
+body[data-module="more"] {
+    --accent: var(--m-saved);
+    --accent-2: var(--m-saved-2);
+    --accent-tint: var(--m-saved-tint);
+    --accent-rgb: var(--m-saved-rgb);
+}

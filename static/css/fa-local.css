@@ -1,0 +1,85 @@
+.fa,
+.fa-solid,
+.fa-regular {
+    display: inline-block;
+    font-family: var(--font-body);
+    font-style: normal;
+    font-variant: normal;
+    font-weight: 800;
+    line-height: 1;
+    text-rendering: auto;
+}
+
+.fa::before,
+.fa-solid::before,
+.fa-regular::before {
+    display: inline-block;
+}
+
+.fa-house::before { content: "⌂"; }
+.fa-box-open::before { content: "▣"; }
+.fa-list-check::before { content: "☑"; }
+.fa-calendar-day::before,
+.fa-calendar-days::before { content: "□"; }
+.fa-note-sticky::before { content: "▤"; }
+.fa-folder-open::before,
+.fa-folder::before,
+.fa-folder-tree::before { content: "▰"; }
+.fa-inbox::before { content: "▥"; }
+.fa-bookmark::before { content: "▮"; }
+.fa-bolt::before { content: "↯"; }
+.fa-star::before { content: "★"; }
+.fa-robot::before { content: "✳"; }
+.fa-gear::before { content: "⚙"; }
+.fa-right-from-bracket::before { content: "⇥"; }
+.fa-plus::before { content: "+"; }
+.fa-minus::before { content: "-"; }
+.fa-check::before,
+.fa-circle-check::before,
+.fa-square-check::before { content: "✓"; }
+.fa-xmark::before,
+.fa-times::before { content: "×"; }
+.fa-chevron-left::before,
+.fa-arrow-left::before { content: "‹"; }
+.fa-chevron-right::before { content: "›"; }
+.fa-chevron-down::before,
+.fa-caret-down::before { content: "⌄"; }
+.fa-chevron-up::before { content: "⌃"; }
+.fa-ellipsis-vertical::before { content: "⋮"; }
+.fa-calendar-plus::before { content: "▣"; }
+.fa-lock::before { content: "■"; }
+.fa-pen::before { content: "✎"; }
+.fa-trash::before { content: "⌫"; }
+.fa-download::before { content: "⇩"; }
+.fa-upload::before { content: "⇧"; }
+.fa-share::before,
+.fa-share-nodes::before { content: "↗"; }
+.fa-magnifying-glass::before { content: "⌕"; }
+.fa-circle-info::before,
+.fa-circle-question::before { content: "i"; }
+.fa-triangle-exclamation::before,
+.fa-circle-exclamation::before { content: "!"; }
+.fa-microphone::before { content: "●"; }
+.fa-paper-plane::before { content: "➤"; }
+.fa-expand::before { content: "□"; }
+.fa-user::before { content: "●"; }
+.fa-mobile-screen-button::before { content: "▯"; }
+.fa-cubes::before { content: "▦"; }
+.fa-feather::before { content: "⌁"; }
+.fa-filter::before,
+.fa-sliders::before { content: "≡"; }
+.fa-layer-group::before { content: "▤"; }
+.fa-list-ul::before { content: "☰"; }
+.fa-clock::before { content: "◷"; }
+.fa-arrow-down-wide-short::before { content: "⇅"; }
+.fa-repeat::before,
+.fa-rotate::before { content: "↻"; }
+.fa-bell::before { content: "◉"; }
+.fa-envelope::before { content: "✉"; }
+.fa-regular.fa-square::before,
+.fa-square::before { content: "□"; }
+.fa-briefcase::before { content: "▣"; }
+.fa-graduation-cap::before { content: "▱"; }
+.fa-heart::before { content: "♥"; }
+.fa-link::before { content: "↗"; }
+.fa-bars::before { content: "☰"; }
