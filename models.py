@@ -499,7 +499,16 @@ class CalendarEvent(db.Model):
     planner_simple_item_id = db.Column(db.Integer, db.ForeignKey('planner_simple_item.id', ondelete='SET NULL'), nullable=True)
     planner_multi_item_id = db.Column(db.Integer, db.ForeignKey('planner_multi_item.id', ondelete='SET NULL'), nullable=True)
     planner_multi_line_id = db.Column(db.Integer, db.ForeignKey('planner_multi_line.id', ondelete='SET NULL'), nullable=True)
-    note_list_item_id = db.Column(db.Integer, db.ForeignKey('note_list_item.id', ondelete='SET NULL'), nullable=True)
+    note_list_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            'note_list_item.id',
+            ondelete='SET NULL',
+            use_alter=True,
+            name='fk_calendar_event_note_list_item_id_note_list_item',
+        ),
+        nullable=True,
+    )
     do_feed_item_id = db.Column(db.Integer, db.ForeignKey('do_feed_item.id', ondelete='SET NULL'), nullable=True)
     recurrence = db.relationship('RecurringEvent', backref='instances', foreign_keys=[recurrence_id])
     item_note = db.Column(db.Text, nullable=True)
