@@ -246,9 +246,10 @@
     {% set current_path = request.path %}
     {% set mobile_is_calendar = current_path.startswith('/calendar') %}
     {% set mobile_is_notes = current_path.startswith('/notes') %}
+    {% set mobile_is_inbox = current_path.startswith('/inbox') %}
     {% set mobile_is_quick_access = current_path.startswith('/quick-access') %}
     {% set mobile_is_tasks = current_path.startswith('/tasks') or current_path.startswith('/list') %}
-    {% set mobile_is_more = current_path == '/' or current_path.startswith('/inbox') or current_path.startswith('/vault') or current_path.startswith('/recalls') or current_path.startswith('/bookmarks') or current_path.startswith('/feed') or current_path.startswith('/ai') or current_path.startswith('/settings') %}
+    {% set mobile_is_more = current_path == '/' or current_path.startswith('/vault') or current_path.startswith('/recalls') or current_path.startswith('/bookmarks') or current_path.startswith('/feed') or current_path.startswith('/ai') or current_path.startswith('/settings') %}
 
     <div class="app-container">
         <div class="mobile-topbar">
@@ -261,14 +262,7 @@
                 <img src="{{ url_for('static', filename='myo.png') }}" alt="Simply Tasks">
             </div>
             <div class="mobile-topbar-actions">
-                <a class="btn-icon-mobile mobile-inbox-btn{{ ' active' if request.path.startswith('/inbox') else '' }}"
-                   href="/inbox"
-                   aria-label="Inbox"
-                   title="Inbox"
-                   {% if request.path.startswith('/inbox') %}aria-current="page"{% endif %}>
-                    <i class="fa-solid fa-box-open"></i>
-                </a>
-                <button class="btn-icon-mobile" id="mobile-quick-access-btn" type="button" aria-label="Quick Access" aria-controls="mobile-quick-access-sheet" aria-expanded="false" title="Quick Access">
+                <button class="btn-icon-mobile mobile-topbar-quick-access{{ ' active' if mobile_is_quick_access else '' }}" id="mobile-quick-access-btn" type="button" aria-label="Quick Access" aria-controls="mobile-quick-access-sheet" aria-expanded="false" title="Quick Access">
                     <i class="fa-solid fa-star"></i>
                 </button>
             </div>
@@ -405,10 +399,6 @@
             <span class="mobile-more-icon"><i class="fa-solid fa-house"></i></span>
             <span>Home</span>
         </a>
-        <a class="mobile-more-item{{ ' active' if current_path.startswith('/inbox') else '' }}" href="/inbox" role="menuitem"{% if current_path.startswith('/inbox') %} aria-current="page"{% endif %}>
-            <span class="mobile-more-icon"><i class="fa-solid fa-box-open"></i></span>
-            <span>Inbox</span>
-        </a>
         <a class="mobile-more-item{{ ' active' if current_path.startswith('/vault') else '' }}" href="/vault" role="menuitem"{% if current_path.startswith('/vault') %} aria-current="page"{% endif %}>
             <span class="mobile-more-icon"><i class="fa-solid fa-folder-open"></i></span>
             <span>Vault</span>
@@ -447,10 +437,10 @@
             <span class="mobile-bottom-nav__icon"><i class="fa-solid fa-note-sticky"></i></span>
             <span class="mobile-bottom-nav__label">Notes</span>
         </a>
-        <button class="mobile-bottom-nav__action mobile-bottom-nav__action--quick{{ ' active' if mobile_is_quick_access else '' }}" id="mobile-bottom-quick-access-btn" type="button" aria-label="Open quick access" aria-controls="mobile-quick-access-sheet" aria-expanded="false">
-            <span class="mobile-bottom-nav__quick-icon"><i class="fa-solid fa-star"></i></span>
-            <span class="mobile-bottom-nav__label">Quick Access</span>
-        </button>
+        <a class="mobile-bottom-nav__action mobile-bottom-nav__action--quick mobile-bottom-nav__action--inbox{{ ' active' if mobile_is_inbox else '' }}" href="/inbox"{% if mobile_is_inbox %} aria-current="page"{% endif %}>
+            <span class="mobile-bottom-nav__quick-icon"><i class="fa-solid fa-box-open"></i></span>
+            <span class="mobile-bottom-nav__label">Inbox</span>
+        </a>
         <a class="mobile-bottom-nav__action{{ ' active' if mobile_is_tasks else '' }}" href="/tasks"{% if mobile_is_tasks %} aria-current="page"{% endif %}>
             <span class="mobile-bottom-nav__icon"><i class="fa-solid fa-list-check"></i></span>
             <span class="mobile-bottom-nav__label">Tasks</span>
