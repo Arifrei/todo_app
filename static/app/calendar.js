@@ -714,7 +714,16 @@ async function updateCalendarEvent(id, payload, options = {}) {
     }
 }
 
-async function deleteCalendarEvent(id) {
+function getCalendarDeleteConfirmMessage(id) {
+    const item = Array.isArray(calendarState.events)
+        ? calendarState.events.find(ev => Number(ev.id) === Number(id))
+        : null;
+    const title = item && item.title ? String(item.title).trim() : '';
+    if (!title) return 'Delete this calendar item?';
+    return `Delete "${title}"?`;
+}
+
+async function performCalendarEventDelete(id) {
     try {
         await fetch(`/api/calendar/events/${id}`, { method: 'DELETE' });
         if (window.isNativeApp && window.isNativeApp()) {
@@ -727,6 +736,24 @@ async function deleteCalendarEvent(id) {
     } catch (err) {
         console.error(err);
     }
+}
+
+async function deleteCalendarEvent(id, options = {}) {
+    const shouldConfirm = !options || options.confirm !== false;
+    if (!shouldConfirm) {
+        await performCalendarEventDelete(id);
+        return;
+    }
+
+    const message = getCalendarDeleteConfirmMessage(id);
+    if (typeof openConfirmModal === 'function') {
+        openConfirmModal(message, async () => {
+            await performCalendarEventDelete(id);
+        });
+        return;
+    }
+
+    console.error('Calendar delete confirmation modal is unavailable.');
 }
 
 async function commitCalendarOrder() {

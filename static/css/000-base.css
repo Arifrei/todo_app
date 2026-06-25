@@ -4921,20 +4921,20 @@ body:has(.ai-fullpage) .ai-panel {
     #mobile-quick-access-btn {
         align-items: center;
         appearance: none;
-        background: #ffffff;
+        background: var(--white);
         border: 1px solid var(--border-color);
-        border-radius: 20px;
-        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
-        color: #b45309;
+        border-radius: 12px;
+        box-shadow: var(--shadow-sm);
+        color: var(--text-color);
         cursor: pointer;
         display: inline-flex;
         font-size: 1rem;
-        height: 54px;
+        height: 42px;
         justify-content: center;
-        min-height: 54px;
-        min-width: 54px;
+        min-height: 42px;
+        min-width: 42px;
         padding: 0;
-        width: 54px;
+        width: 42px;
         -webkit-tap-highlight-color: transparent;
     }
 
@@ -4948,15 +4948,9 @@ body:has(.ai-fullpage) .ai-panel {
     }
 
     #mobile-quick-access-btn i {
-        display: none;
-    }
-
-    #mobile-quick-access-btn::before {
-        content: "*";
-        font-size: 1.55rem;
-        font-weight: 900;
+        display: inline-block;
+        font-size: 1rem;
         line-height: 1;
-        transform: translateY(-1px);
     }
 
     .content {
