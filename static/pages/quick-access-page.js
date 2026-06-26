@@ -8,6 +8,7 @@ const QA_ICON_OPTIONS = [
     { icon: 'fa-solid fa-list-check', label: 'Tasks' },
     { icon: 'fa-solid fa-note-sticky', label: 'Note' },
     { icon: 'fa-solid fa-folder', label: 'Folder' },
+    { icon: 'fa-solid fa-layer-group', label: 'Area' },
     { icon: 'fa-solid fa-bolt', label: 'Quick' },
     { icon: 'fa-solid fa-link', label: 'Link' },
     { icon: 'fa-solid fa-briefcase', label: 'Work' },
@@ -260,11 +261,13 @@ function openAddQuickAccessModal() {
     resetQANavState();
     resetQANoteNavState();
     resetQAFolderNavState();
+    resetQAAreaNavState();
     handleQuickAccessTypeChange();
 
     // Load lists and notes for dropdowns
     loadListsForQuickAccess();
     loadNotesForQuickAccess();
+    loadAreasForQuickAccess();
 }
 
 function closeAddQuickAccessModal() {
@@ -275,6 +278,7 @@ function closeAddQuickAccessModal() {
     resetQANavState();
     resetQANoteNavState();
     resetQAFolderNavState();
+    resetQAAreaNavState();
 }
 
 // Close modal when clicking outside
@@ -291,10 +295,13 @@ function handleQuickAccessTypeChange() {
     document.getElementById('qa-list-group').style.display = type === 'list' ? 'block' : 'none';
     document.getElementById('qa-note-group').style.display = type === 'note' ? 'block' : 'none';
     document.getElementById('qa-folder-group').style.display = type === 'folder' ? 'block' : 'none';
+    document.getElementById('qa-area-group').style.display = type === 'area' ? 'block' : 'none';
     document.getElementById('qa-date-group').style.display = type === 'calendar' ? 'block' : 'none';
 
     if (type === 'folder') {
         loadFoldersForQuickAccess();
+    } else if (type === 'area') {
+        loadAreasForQuickAccess(qaAreaNavState.selectedAreaId);
     }
 }
 
@@ -878,6 +885,96 @@ function highlightSelectedQAFolder() {
     }
 }
 
+let qaAreaNavState = {
+    areas: [],
+    selectedAreaId: null,
+    selectedAreaName: ''
+};
+
+function resetQAAreaNavState() {
+    qaAreaNavState = {
+        areas: [],
+        selectedAreaId: null,
+        selectedAreaName: ''
+    };
+}
+
+async function loadAreasForQuickAccess(selectedAreaId = null) {
+    try {
+        const res = await fetch('/api/areas?archived=0');
+        qaAreaNavState.areas = res.ok ? await res.json() : [];
+        if (selectedAreaId) {
+            qaAreaNavState.selectedAreaId = Number(selectedAreaId);
+            const area = qaAreaNavState.areas.find(entry => Number(entry.id) === Number(selectedAreaId));
+            qaAreaNavState.selectedAreaName = area ? area.name || '' : qaAreaNavState.selectedAreaName;
+        }
+        renderQAAreaNavigation();
+    } catch (error) {
+        console.error('Failed to load areas:', error);
+    }
+}
+
+function renderQAAreaNavigation() {
+    const container = document.getElementById('qa-area-nav-container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!qaAreaNavState.areas.length) {
+        const empty = document.createElement('div');
+        empty.className = 'qa-nav-empty';
+        empty.textContent = 'No active areas available.';
+        container.appendChild(empty);
+        return;
+    }
+
+    qaAreaNavState.areas
+        .slice()
+        .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || String(a.name || '').localeCompare(String(b.name || '')))
+        .forEach(area => {
+            const item = document.createElement('button');
+            item.className = 'qa-nav-item';
+            item.dataset.areaId = area.id;
+            item.innerHTML = `
+                <i class="fa-solid fa-layer-group"></i>
+                <span>${escapeHtml(area.name || 'Untitled area')}</span>
+                <span class="qa-nav-type">Area</span>
+            `;
+            item.onclick = () => selectQAArea(area);
+            container.appendChild(item);
+        });
+
+    highlightSelectedQAArea();
+}
+
+function selectQAArea(area) {
+    qaAreaNavState.selectedAreaId = area.id;
+    qaAreaNavState.selectedAreaName = area.name || '';
+
+    const titleInput = document.getElementById('qa-title');
+    if (titleInput && !titleInput.value.trim()) {
+        titleInput.value = area.name || '';
+    }
+
+    const iconInput = document.getElementById('qa-icon');
+    if (iconInput && normalizeQAIconClass(iconInput.value) === QA_ICON_DEFAULT) {
+        syncQAIconSelection('fa-solid fa-layer-group');
+    }
+
+    highlightSelectedQAArea();
+}
+
+function highlightSelectedQAArea() {
+    if (!qaAreaNavState.selectedAreaId) return;
+    const container = document.getElementById('qa-area-nav-container');
+    if (!container) return;
+    const items = container.querySelectorAll('.qa-nav-item');
+    items.forEach(item => item.classList.remove('selected'));
+    const selectedItem = container.querySelector(`[data-area-id="${qaAreaNavState.selectedAreaId}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
+    }
+}
+
 function extractCalendarDate(url) {
     if (!url) return '';
     const match = url.match(/[?&]day=([^&]+)/);
@@ -904,7 +1001,9 @@ function openEditQuickAccessModal(id, event) {
     document.getElementById('qa-date').value = item.item_type === 'calendar' ? extractCalendarDate(item.url) : '';
 
     resetQANavState();
+    resetQANoteNavState();
     resetQAFolderNavState();
+    resetQAAreaNavState();
     if (item.item_type === 'list' && item.reference_id) {
         qaNavState.selectedListId = item.reference_id;
         qaNavState.selectedListTitle = item.title || '';
@@ -923,6 +1022,14 @@ function openEditQuickAccessModal(id, event) {
         loadFoldersForQuickAccess(item.reference_id);
     } else {
         loadFoldersForQuickAccess();
+    }
+
+    if (item.item_type === 'area' && item.reference_id) {
+        qaAreaNavState.selectedAreaId = Number(item.reference_id);
+        qaAreaNavState.selectedAreaName = item.title || '';
+        loadAreasForQuickAccess(item.reference_id);
+    } else {
+        loadAreasForQuickAccess();
     }
 
     handleQuickAccessTypeChange();
@@ -971,6 +1078,14 @@ async function saveQuickAccessItem() {
         }
         url = `/notes/folder/${folderId}`;
         referenceId = parseInt(folderId);
+    } else if (type === 'area') {
+        const areaId = qaAreaNavState.selectedAreaId;
+        if (!areaId) {
+            showToast('Please select an area', 'warning');
+            return;
+        }
+        url = `/areas/${areaId}`;
+        referenceId = parseInt(areaId);
     } else if (type === 'calendar') {
         const dateValue = document.getElementById('qa-date').value;
         if (!dateValue) {

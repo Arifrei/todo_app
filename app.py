@@ -22,7 +22,7 @@ from backend.embedding_service import (
     delete_embedding_for_entity,
     refresh_embedding_for_entity,
 )
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, InboxItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, InboxItem, Area, AreaSection, AreaBlock, AreaBlockItem, AreaItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -98,8 +98,8 @@ scheduler = None
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
     app.logger.setLevel(logging.INFO)
 
-DEFAULT_SIDEBAR_ORDER = ['home', 'inbox', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
-DEFAULT_HOMEPAGE_ORDER = ['inbox', 'tasks', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
+DEFAULT_SIDEBAR_ORDER = ['home', 'inbox', 'tasks', 'areas', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings']
+DEFAULT_HOMEPAGE_ORDER = ['inbox', 'tasks', 'areas', 'calendar', 'notes', 'vault', 'recalls', 'bookmarks', 'feed', 'quick-access', 'ai', 'settings', 'download']
 CALENDAR_ITEM_NOTE_MAX_CHARS = 300
 NOTE_LIST_CONVERSION_MIN_LINES = 2
 NOTE_LIST_CONVERSION_MAX_LINES = 100
@@ -395,6 +395,21 @@ def inbox_page():
     from services.inbox_routes import inbox_page as _impl
     return _impl()
 
+@app.route('/areas')
+def areas_page():
+    from services.areas_routes import areas_page as _impl
+    return _impl()
+
+@app.route('/areas/<int:area_id>')
+def area_detail_page(area_id):
+    from services.areas_routes import area_detail_page as _impl
+    return _impl(area_id)
+
+@app.route('/areas/<int:area_id>/blocks/<int:block_id>')
+def area_block_editor_page(area_id, block_id):
+    from services.areas_routes import area_block_editor_page as _impl
+    return _impl(area_id, block_id)
+
 @app.route('/download/app')
 def download_app():
     from services.inline_routes import download_app as _impl
@@ -515,6 +530,146 @@ def map_inbox_item_route(item_id):
 @app.route('/api/inbox/<int:item_id>', methods=['DELETE'])
 def delete_inbox_item(item_id):
     from services.inbox_routes import delete_inbox_item as _impl
+    return _impl(item_id)
+
+@app.route('/api/areas', methods=['GET', 'POST'])
+def handle_areas():
+    from services.areas_routes import handle_areas as _impl
+    return _impl()
+
+@app.route('/api/areas/<int:area_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_detail(area_id):
+    from services.areas_routes import area_detail as _impl
+    return _impl(area_id)
+
+@app.route('/api/areas/<int:area_id>/restore', methods=['POST'])
+def restore_area(area_id):
+    from services.areas_routes import restore_area as _impl
+    return _impl(area_id)
+
+@app.route('/api/areas/<int:area_id>/workspace', methods=['GET'])
+def area_workspace(area_id):
+    from services.areas_routes import area_workspace as _impl
+    return _impl(area_id)
+
+@app.route('/api/areas/<int:area_id>/sections', methods=['GET', 'POST'])
+def area_sections(area_id):
+    from services.areas_routes import area_sections as _impl
+    return _impl(area_id)
+
+@app.route('/api/area-sections/<int:section_id>', methods=['PUT', 'DELETE'])
+def area_section_detail(section_id):
+    from services.areas_routes import area_section_detail as _impl
+    return _impl(section_id)
+
+@app.route('/api/areas/<int:area_id>/blocks', methods=['GET', 'POST'])
+def area_blocks(area_id):
+    from services.areas_routes import area_blocks as _impl
+    return _impl(area_id)
+
+@app.route('/api/areas/<int:area_id>/blocks/reorder', methods=['POST'])
+def reorder_area_blocks(area_id):
+    from services.areas_routes import reorder_area_blocks as _impl
+    return _impl(area_id)
+
+@app.route('/api/area-blocks/<int:block_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_block_detail(block_id):
+    from services.areas_routes import area_block_detail as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-blocks/<int:block_id>/move', methods=['POST'])
+def move_area_block(block_id):
+    from services.areas_routes import move_area_block as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-blocks/<int:block_id>/items', methods=['GET', 'POST'])
+def area_block_items(block_id):
+    from services.areas_routes import area_block_items as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-block-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def area_block_item_detail(item_id):
+    from services.areas_routes import area_block_item_detail as _impl
+    return _impl(item_id)
+
+@app.route('/api/area-list-blocks/<int:block_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_list_block_detail(block_id):
+    from services.areas_routes import area_list_block_detail as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-list-blocks/<int:block_id>/list-items', methods=['GET', 'POST'])
+def area_list_block_items(block_id):
+    from services.areas_routes import area_list_block_items as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-list-blocks/<int:block_id>/list-items/duplicates', methods=['GET'])
+def area_list_block_item_duplicates(block_id):
+    from services.areas_routes import area_list_block_item_duplicates as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-list-blocks/<int:block_id>/list-items/reorder', methods=['POST'])
+def reorder_area_list_block_items(block_id):
+    from services.areas_routes import reorder_area_list_block_items as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-list-blocks/<int:block_id>/list-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def area_list_block_item_detail(block_id, item_id):
+    from services.areas_routes import area_list_block_item_detail as _impl
+    return _impl(block_id, item_id)
+
+@app.route('/api/area-task-blocks', methods=['GET'])
+def area_task_blocks_for_area():
+    from services.areas_routes import area_task_blocks_for_area as _impl
+    return _impl()
+
+@app.route('/api/area-task-blocks/<int:block_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_task_block_detail(block_id):
+    from services.areas_routes import area_task_block_detail as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-task-blocks/<int:block_id>/items', methods=['GET', 'POST'])
+def area_task_block_items(block_id):
+    from services.areas_routes import area_task_block_items as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-task-blocks/<int:block_id>/reorder', methods=['POST'])
+def reorder_area_task_block_items(block_id):
+    from services.areas_routes import reorder_area_task_block_items as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-task-blocks/<int:block_id>/bulk_import', methods=['POST'])
+def area_task_block_bulk_import(block_id):
+    from services.areas_routes import area_task_block_bulk_import as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-task-blocks/<int:block_id>/export', methods=['GET'])
+def area_task_block_export(block_id):
+    from services.areas_routes import area_task_block_export as _impl
+    return _impl(block_id)
+
+@app.route('/api/area-task-items/bulk', methods=['POST'])
+def area_task_items_bulk():
+    from services.areas_routes import area_task_items_bulk as _impl
+    return _impl()
+
+@app.route('/api/area-task-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def area_task_item_detail(item_id):
+    from services.areas_routes import area_task_item_detail as _impl
+    return _impl(item_id)
+
+@app.route('/api/area-task-items/<int:item_id>/move', methods=['POST'])
+def move_area_task_item(item_id):
+    from services.areas_routes import move_area_task_item as _impl
+    return _impl(item_id)
+
+@app.route('/api/areas/<int:area_id>/items', methods=['GET', 'POST'])
+def area_items(area_id):
+    from services.areas_routes import area_items as _impl
+    return _impl(area_id)
+
+@app.route('/api/area-items/<int:item_id>', methods=['PUT', 'DELETE'])
+def area_item_detail(item_id):
+    from services.areas_routes import area_item_detail as _impl
     return _impl(item_id)
 
 

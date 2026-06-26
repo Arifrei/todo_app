@@ -1,10 +1,16 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="notes-layout notes-editor-only" id="list-editor-page" data-note-id="{{ note_id or '' }}">
+<div class="notes-layout notes-editor-only{% if area_list_context %} area-list-editor-page{% endif %}" id="list-editor-page" data-note-id="{{ note_id or '' }}">
     <header class="notes-header">
-        <div>
+        <div class="{% if area_list_context %}area-editor-heading-wrap{% endif %}">
             <h1>List</h1>
+            {% if area_list_context %}
+            <a class="area-editor-area-bubble" href="/areas/{{ area_list_context.area_id }}" title="{{ area_list_context.area_name or 'Area' }}">
+                <i class="fa-solid fa-layer-group"></i>
+                <span>{{ area_list_context.area_name or 'Area' }}</span>
+            </a>
+            {% endif %}
         </div>
         <div class="notes-header-actions">
             <div class="list-search u-hidden" id="list-search">
@@ -17,8 +23,8 @@
             <button class="btn btn-icon-only" id="list-back-btn" aria-label="Back" title="Back">
                 <i class="fa-solid fa-arrow-left"></i>
             </button>
-            <button class="btn btn-icon-only" id="list-notes-btn" aria-label="Notes" title="Notes">
-                <i class="fa-solid fa-note-sticky"></i>
+            <button class="btn btn-icon-only" id="list-notes-btn" aria-label="{% if area_list_context %}Area{% else %}Notes{% endif %}" title="{% if area_list_context %}Area{% else %}Notes{% endif %}">
+                <i class="fa-solid {% if area_list_context %}fa-layer-group{% else %}fa-note-sticky{% endif %}"></i>
             </button>
             <button class="btn mobile-icon-only" id="list-cancel-btn" type="button" disabled>
                 <i class="fa-solid fa-rotate-left"></i>
@@ -58,9 +64,11 @@
                     <button class="dropdown-item" id="list-search-toggle" type="button" aria-controls="list-search" aria-expanded="false">
                         <i class="fa-solid fa-magnifying-glass"></i> Search list
                     </button>
+                    {% if not area_list_context %}
                     <button class="dropdown-item" id="list-protect-btn">
                         <i class="fa-solid fa-lock"></i> <span>Protect</span>
                     </button>
+                    {% endif %}
                     <button class="dropdown-item" id="list-share-btn">
                         <i class="fa-solid fa-share-nodes"></i> Share
                     </button>
@@ -70,9 +78,11 @@
                     <button class="dropdown-item" id="list-section-reorder-toggle" type="button" aria-pressed="false">
                         <i class="fa-solid fa-grip-lines"></i> Reorder sections
                     </button>
+                    {% if not area_list_context %}
                     <button class="dropdown-item" id="list-archive-btn">
                         <i class="fa-solid fa-box-archive"></i> <span>Archive</span>
                     </button>
+                    {% endif %}
                     <button class="dropdown-item danger" id="list-delete-btn">
                         <i class="fa-solid fa-trash"></i> Delete
                     </button>
@@ -243,6 +253,12 @@
 {% endblock %}
 
 {% block page_scripts %}
+{% if area_list_context %}
+<script>
+    window.AREA_LIST_CONTEXT = {{ area_list_context|tojson }};
+</script>
+<script src="{{ url_for('static', filename='pages/area-list-adapter.js') }}?v=area-list-adapter-20260625" defer></script>
+{% endif %}
 <script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
 <script src="{{ url_for('static', filename='notes/markdown.js') }}" defer></script>
 <script src="{{ url_for('static', filename='notes/detail.js') }}" defer></script>

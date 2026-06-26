@@ -83,6 +83,7 @@ function getQuickAccessItemSubtitle(item) {
         list: 'Project or list',
         note: 'Note',
         folder: 'Folder',
+        area: 'Area',
         calendar: 'Calendar date'
     };
     if (item.system_label) return item.system_label;

@@ -70,6 +70,7 @@
                 <option value="list">Project/List</option>
                 <option value="note">Note</option>
                 <option value="folder">Note Folder</option>
+                <option value="area">Area</option>
                 <option value="calendar">Calendar Date</option>
             </select>
         </div>
@@ -110,6 +111,12 @@
                 <!-- Folder navigation options populated by JS -->
             </div>
         </div>
+        <div class="form-group u-hidden" id="qa-area-group">
+            <label>Select Area</label>
+            <div id="qa-area-nav-container" class="qa-nav-container">
+                <!-- Area options populated by JS -->
+            </div>
+        </div>
         <div class="form-group u-hidden" id="qa-date-group">
             <label>Select Date</label>
             <input type="date" id="qa-date" class="form-control">
@@ -124,7 +131,7 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='pages/quick-access-page.js') }}" defer></script>
+<script src="{{ url_for('static', filename='pages/quick-access-page.js') }}?v=quick-access-area-20260626" defer></script>
 {% endblock %}
 
 

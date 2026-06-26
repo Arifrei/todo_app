@@ -1,0 +1,224 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="areas-page" id="areas-page" data-area-id="{{ area_id or '' }}">
+    {% if area_id %}
+    <div class="area-compact-bar">
+        <a class="areas-back-link" href="/areas" aria-label="Back to areas">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        <div class="areas-detail-actions">
+            <div class="area-actions-menu" id="area-actions-menu">
+                <button class="btn-icon header-menu-trigger" type="button" id="area-actions-menu-btn" title="More area options" aria-label="More area options" aria-haspopup="menu" aria-expanded="false" aria-controls="area-actions-dropdown">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
+                <div class="header-menu-dropdown area-actions-dropdown" id="area-actions-dropdown" role="menu" aria-label="Area options">
+                    <button class="header-menu-item" type="button" id="area-detail-edit-btn" role="menuitem">
+                        <i class="fa-solid fa-pen"></i>
+                        <span>Edit</span>
+                    </button>
+                    <button class="header-menu-item danger" type="button" id="area-detail-archive-btn" role="menuitem">
+                        <i class="fa-solid fa-box-archive"></i>
+                        <span>Archive</span>
+                    </button>
+                </div>
+            </div>
+            <div class="area-add-menu" id="area-add-menu">
+                <button class="btn btn-primary header-add-circle area-add-trigger" type="button" id="area-primary-add-btn" aria-label="Add area item" title="Add area item" aria-haspopup="menu" aria-expanded="false" aria-controls="area-add-dropdown">
+                    <i class="fa-solid fa-plus"></i>
+                </button>
+                <div class="area-add-dropdown" id="area-add-dropdown" role="menu" aria-label="Add area item">
+                    <button type="button" role="menuitem" data-area-add-type="line">
+                        <i class="fa-solid fa-grip-lines"></i>
+                        <span>Line</span>
+                    </button>
+                    <button type="button" role="menuitem" data-area-add-type="note">
+                        <i class="fa-regular fa-note-sticky"></i>
+                        <span>Note</span>
+                    </button>
+                    <button type="button" role="menuitem" data-area-add-type="list">
+                        <i class="fa-solid fa-list-ul"></i>
+                        <span>List</span>
+                    </button>
+                    <button type="button" role="menuitem" data-area-add-type="task_list">
+                        <i class="fa-solid fa-list-check"></i>
+                        <span>Task list</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <section class="area-workspace-shell area-workspace-clean">
+        <main class="area-workspace-main">
+            <div class="area-type-grid" id="area-type-grid">
+                <section class="area-type-pane line" data-area-pane="line">
+                    <header>
+                        <span><i class="fa-solid fa-grip-lines"></i> Lines</span>
+                        <strong id="area-lines-count">0</strong>
+                    </header>
+                    <div class="area-type-pane-body" id="area-lines-pane"></div>
+                </section>
+                <section class="area-type-pane note" data-area-pane="note">
+                    <header>
+                        <span><i class="fa-regular fa-note-sticky"></i> Notes</span>
+                        <strong id="area-notes-count">0</strong>
+                    </header>
+                    <div class="area-type-pane-body" id="area-notes-pane"></div>
+                </section>
+                <section class="area-type-pane list" data-area-pane="list">
+                    <header>
+                        <span><i class="fa-solid fa-list-ul"></i> Lists</span>
+                        <strong id="area-lists-count">0</strong>
+                    </header>
+                    <div class="area-type-pane-body" id="area-lists-pane"></div>
+                </section>
+                <section class="area-type-pane task" data-area-pane="task_list">
+                    <header>
+                        <span><i class="fa-solid fa-list-check"></i> Task lists</span>
+                        <strong id="area-tasks-count">0</strong>
+                    </header>
+                    <div class="area-type-pane-body" id="area-tasks-pane"></div>
+                </section>
+            </div>
+        </main>
+    </section>
+    {% else %}
+    <header class="header-row">
+        <div>
+            <h1>Areas</h1>
+            <p class="u-text-muted">Long-lived responsibilities and the control centers inside them.</p>
+        </div>
+        <button class="btn btn-primary header-add-circle" type="button" id="area-add-btn" aria-label="Add area" title="Add area">
+            <i class="fa-solid fa-plus"></i>
+        </button>
+    </header>
+
+    <div class="areas-toolbar">
+        <div>
+            <label class="module-search-label" for="area-search">Search areas</label>
+            <div class="module-search areas-search">
+                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                <input type="text" id="area-search" placeholder="Search areas...">
+                <button class="search-clear" type="button" id="area-search-clear" aria-label="Clear search">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+        <div class="areas-filter-group" role="tablist" aria-label="Area status filter">
+            <button class="area-filter-chip active" type="button" data-archived="0">Active</button>
+            <button class="area-filter-chip" type="button" data-archived="1">Archived</button>
+            <button class="area-filter-chip" type="button" data-archived="all">All</button>
+        </div>
+    </div>
+
+    <div class="areas-grid" id="areas-grid"></div>
+    {% endif %}
+</div>
+
+<div class="modal" id="area-modal" role="dialog" aria-modal="true" aria-labelledby="area-modal-title">
+    <div class="modal-content area-modal-content" tabindex="-1">
+        <h2 id="area-modal-title">Area</h2>
+        <div class="form-group">
+            <label for="area-name-input">Name</label>
+            <input type="text" id="area-name-input" class="form-control" maxlength="120" placeholder="Area name">
+        </div>
+        <div class="form-group">
+            <label for="area-description-input">Description</label>
+            <textarea id="area-description-input" class="form-control" rows="3" placeholder="Optional context"></textarea>
+        </div>
+        <div class="form-group area-color-group">
+            <label for="area-color-input">Color</label>
+            <input type="color" id="area-color-input" class="form-control area-color-input" value="#3b82f6">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="area-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-modal-save">
+                <i class="fa-solid fa-check"></i>
+                <span>Save</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="area-section-modal" role="dialog" aria-modal="true" aria-labelledby="area-section-modal-title">
+    <div class="modal-content area-modal-content" tabindex="-1">
+        <h2 id="area-section-modal-title">Section</h2>
+        <div class="form-group">
+            <label for="area-section-title-input">Name</label>
+            <input type="text" id="area-section-title-input" class="form-control" maxlength="120" placeholder="Section name">
+        </div>
+        <div class="form-group">
+            <label for="area-section-description-input">Description</label>
+            <textarea id="area-section-description-input" class="form-control" rows="3" placeholder="Optional cue"></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="area-section-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-section-modal-save">
+                <i class="fa-solid fa-check"></i>
+                <span>Save</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="area-block-modal" role="dialog" aria-modal="true" aria-labelledby="area-block-modal-title">
+    <div class="modal-content area-modal-content area-block-modal-content" tabindex="-1">
+        <h2 id="area-block-modal-title">Add block</h2>
+        <div class="form-group" id="area-block-section-group">
+            <label for="area-block-section-select">Section</label>
+            <select id="area-block-section-select" class="form-control"></select>
+        </div>
+        <div class="form-group" id="area-block-title-group">
+            <label for="area-block-title-input">Title</label>
+            <input type="text" id="area-block-title-input" class="form-control" maxlength="180" placeholder="Title">
+        </div>
+        <div class="form-group" id="area-block-content-group">
+            <label for="area-block-content-input">Content</label>
+            <textarea id="area-block-content-input" class="form-control" rows="6" placeholder="Write here"></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="area-block-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-block-modal-save">
+                <i class="fa-solid fa-check"></i>
+                <span>Save</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="area-move-modal" role="dialog" aria-modal="true" aria-labelledby="area-move-modal-title">
+    <div class="modal-content area-modal-content area-move-modal-content" tabindex="-1">
+        <h2 id="area-move-modal-title">Move item</h2>
+        <p class="u-muted-modal-msg" id="area-move-item-label"></p>
+        <div class="form-group">
+            <label for="area-move-target">Destination</label>
+            <select id="area-move-target" class="form-control">
+                <option value="area">Another area</option>
+                <option value="notes">Notes module</option>
+                <option value="tasks">Tasks module</option>
+            </select>
+        </div>
+        <div class="form-group" id="area-move-area-group">
+            <label for="area-move-area">Area</label>
+            <select id="area-move-area" class="form-control"></select>
+        </div>
+        <div class="form-group" id="area-move-folder-group" hidden>
+            <label for="area-move-folder">Notes folder</label>
+            <select id="area-move-folder" class="form-control"></select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="area-move-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-move-save">
+                <i class="fa-solid fa-arrow-right"></i>
+                <span>Move</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='pages/areas-page.js') }}?v=areas-page-20260626-area-quick-drag" defer></script>
+{% endblock %}

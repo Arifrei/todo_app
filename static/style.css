@@ -1,7 +1,8 @@
 @import url('css/000-base.css');
-@import url('css/100-notes.css');
+@import url('css/100-notes.css?v=notes-section-tight-20260625');
 @import url('css/200-calendar.css');
 @import url('css/300-feed-recalls-bookmarks.css');
 @import url('css/400-vault-planner.css');
 @import url('css/500-unified.css');
 @import url('css/600-inbox.css');
+@import url('css/700-areas.css?v=areas-quick-drag-bubble-20260626');

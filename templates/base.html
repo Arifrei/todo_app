@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='areas-quick-drag-bubble-20260626') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='mobile-enhancements.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
@@ -248,7 +248,7 @@
     {% set mobile_is_notes = current_path.startswith('/notes') %}
     {% set mobile_is_quick_access = current_path.startswith('/quick-access') %}
     {% set mobile_is_tasks = current_path.startswith('/tasks') or current_path.startswith('/list') %}
-    {% set mobile_is_more = current_path == '/' or current_path.startswith('/inbox') or current_path.startswith('/vault') or current_path.startswith('/recalls') or current_path.startswith('/bookmarks') or current_path.startswith('/feed') or current_path.startswith('/ai') or current_path.startswith('/settings') %}
+    {% set mobile_is_more = current_path == '/' or current_path.startswith('/inbox') or current_path.startswith('/areas') or current_path.startswith('/vault') or current_path.startswith('/recalls') or current_path.startswith('/bookmarks') or current_path.startswith('/feed') or current_path.startswith('/ai') or current_path.startswith('/settings') %}
 
     <div class="app-container">
         <div class="mobile-topbar">
@@ -295,6 +295,12 @@
                         <a href="/tasks" class="{{ 'active' if request.path.startswith('/tasks') or request.path.startswith('/list') else '' }}"{% if request.path.startswith('/tasks') or request.path.startswith('/list') %} aria-current="page"{% endif %}>
                             <span class="icon-bubble"><i class="fa-solid fa-list-check"></i></span>
                             <span class="nav-label">Tasks</span>
+                        </a>
+                    </li>
+                    <li data-nav-id="areas">
+                        <a href="/areas" class="{{ 'active' if request.path.startswith('/areas') else '' }}"{% if request.path.startswith('/areas') %} aria-current="page"{% endif %}>
+                            <span class="icon-bubble"><i class="fa-solid fa-layer-group"></i></span>
+                            <span class="nav-label">Areas</span>
                         </a>
                     </li>
                     <li data-nav-id="calendar">
@@ -412,6 +418,10 @@
         <a class="mobile-more-item{{ ' active' if current_path.startswith('/vault') else '' }}" href="/vault" role="menuitem"{% if current_path.startswith('/vault') %} aria-current="page"{% endif %}>
             <span class="mobile-more-icon"><i class="fa-solid fa-folder-open"></i></span>
             <span>Vault</span>
+        </a>
+        <a class="mobile-more-item{{ ' active' if current_path.startswith('/areas') else '' }}" href="/areas" role="menuitem"{% if current_path.startswith('/areas') %} aria-current="page"{% endif %}>
+            <span class="mobile-more-icon"><i class="fa-solid fa-layer-group"></i></span>
+            <span>Areas</span>
         </a>
         <a class="mobile-more-item{{ ' active' if current_path.startswith('/recalls') else '' }}" href="/recalls" role="menuitem"{% if current_path.startswith('/recalls') %} aria-current="page"{% endif %}>
             <span class="mobile-more-icon"><i class="fa-solid fa-inbox"></i></span>
