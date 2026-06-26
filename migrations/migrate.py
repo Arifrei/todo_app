@@ -335,6 +335,290 @@ def ensure_note_folder_table(cur):
     add_column(cur, "note_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_area_table(cur):
+    """Create or align the Areas table."""
+    if not table_exists(cur, "area"):
+        cur.execute(
+            """
+            CREATE TABLE area (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name VARCHAR(120) NOT NULL,
+                description TEXT,
+                color VARCHAR(20),
+                icon VARCHAR(80),
+                order_index INTEGER DEFAULT 0,
+                archived_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_user_archived_order "
+            "ON area(user_id, archived_at, order_index)"
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_area_user_name ON area(user_id, name)")
+        print("[add] area table created")
+        return
+    add_column(cur, "area", "user_id", "INTEGER")
+    add_column(cur, "area", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
+    add_column(cur, "area", "description", "TEXT")
+    add_column(cur, "area", "color", "VARCHAR(20)")
+    add_column(cur, "area", "icon", "VARCHAR(80)")
+    add_column(cur, "area", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area", "archived_at", "TIMESTAMP")
+    add_column(cur, "area", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "area", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_user_archived_order "
+        "ON area(user_id, archived_at, order_index)"
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_area_user_name ON area(user_id, name)")
+
+
+def ensure_area_item_table(cur):
+    """Create or align the Area Items table."""
+    if not table_exists(cur, "area_item"):
+        cur.execute(
+            """
+            CREATE TABLE area_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                area_id INTEGER NOT NULL,
+                text VARCHAR(300) NOT NULL,
+                details TEXT,
+                status VARCHAR(20) NOT NULL DEFAULT 'open',
+                scheduled_date DATE,
+                completed_at TIMESTAMP,
+                order_index INTEGER DEFAULT 0,
+                linked_note_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_item_user_area_order "
+            "ON area_item(user_id, area_id, order_index)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_item_user_status "
+            "ON area_item(user_id, status)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_item_user_scheduled "
+            "ON area_item(user_id, scheduled_date)"
+        )
+        print("[add] area_item table created")
+        return
+    add_column(cur, "area_item", "user_id", "INTEGER")
+    add_column(cur, "area_item", "area_id", "INTEGER")
+    add_column(cur, "area_item", "text", "VARCHAR(300) NOT NULL DEFAULT ''")
+    add_column(cur, "area_item", "details", "TEXT")
+    add_column(cur, "area_item", "status", "VARCHAR(20) NOT NULL DEFAULT 'open'")
+    add_column(cur, "area_item", "scheduled_date", "DATE")
+    add_column(cur, "area_item", "completed_at", "TIMESTAMP")
+    add_column(cur, "area_item", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area_item", "linked_note_id", "INTEGER")
+    add_column(cur, "area_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "area_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_item_user_area_order "
+        "ON area_item(user_id, area_id, order_index)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_item_user_status "
+        "ON area_item(user_id, status)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_item_user_scheduled "
+        "ON area_item(user_id, scheduled_date)"
+    )
+
+
+def ensure_area_section_table(cur):
+    """Create or align the Area workspace Sections table."""
+    if not table_exists(cur, "area_section"):
+        cur.execute(
+            """
+            CREATE TABLE area_section (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                area_id INTEGER NOT NULL,
+                title VARCHAR(120) NOT NULL,
+                description TEXT,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_section_user_area_order "
+            "ON area_section(user_id, area_id, order_index)"
+        )
+        print("[add] area_section table created")
+        return
+    add_column(cur, "area_section", "user_id", "INTEGER")
+    add_column(cur, "area_section", "area_id", "INTEGER")
+    add_column(cur, "area_section", "title", "VARCHAR(120) NOT NULL DEFAULT ''")
+    add_column(cur, "area_section", "description", "TEXT")
+    add_column(cur, "area_section", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area_section", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "area_section", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_section_user_area_order "
+        "ON area_section(user_id, area_id, order_index)"
+    )
+
+
+def ensure_area_block_table(cur):
+    """Create or align the Area workspace Blocks table."""
+    if not table_exists(cur, "area_block"):
+        cur.execute(
+            """
+            CREATE TABLE area_block (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                area_id INTEGER NOT NULL,
+                section_id INTEGER,
+                block_type VARCHAR(30) NOT NULL,
+                title VARCHAR(180),
+                content TEXT,
+                checkbox_mode BOOLEAN DEFAULT 0 NOT NULL,
+                list_mode VARCHAR(20) NOT NULL DEFAULT 'standard',
+                order_index INTEGER DEFAULT 0,
+                source_note_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_user_area_order "
+            "ON area_block(user_id, area_id, order_index)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_user_section_order "
+            "ON area_block(user_id, section_id, order_index)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_user_type "
+            "ON area_block(user_id, block_type)"
+        )
+        print("[add] area_block table created")
+        return
+    add_column(cur, "area_block", "user_id", "INTEGER")
+    add_column(cur, "area_block", "area_id", "INTEGER")
+    add_column(cur, "area_block", "section_id", "INTEGER")
+    add_column(cur, "area_block", "block_type", "VARCHAR(30) NOT NULL DEFAULT 'line'")
+    add_column(cur, "area_block", "title", "VARCHAR(180)")
+    add_column(cur, "area_block", "content", "TEXT")
+    add_column(cur, "area_block", "checkbox_mode", "BOOLEAN DEFAULT 0 NOT NULL", default_sql="0")
+    add_column(cur, "area_block", "list_mode", "VARCHAR(20) NOT NULL DEFAULT 'standard'", default_sql="'standard'")
+    cur.execute("UPDATE area_block SET checkbox_mode = 1 WHERE block_type = 'task_list' AND checkbox_mode = 0")
+    cur.execute("UPDATE area_block SET list_mode = 'standard' WHERE list_mode IS NULL OR list_mode = ''")
+    add_column(cur, "area_block", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area_block", "source_note_id", "INTEGER")
+    add_column(cur, "area_block", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "area_block", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_user_area_order "
+        "ON area_block(user_id, area_id, order_index)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_user_section_order "
+        "ON area_block(user_id, section_id, order_index)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_user_type "
+        "ON area_block(user_id, block_type)"
+    )
+
+
+def ensure_area_block_item_table(cur):
+    """Create or align the Area workspace Block Items table."""
+    if not table_exists(cur, "area_block_item"):
+        cur.execute(
+            """
+            CREATE TABLE area_block_item (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                area_id INTEGER NOT NULL,
+                block_id INTEGER NOT NULL,
+                item_type VARCHAR(30) NOT NULL DEFAULT 'item',
+                text VARCHAR(500) NOT NULL,
+                details TEXT,
+                note TEXT,
+                inner_note TEXT,
+                link_text VARCHAR(200),
+                link_url VARCHAR(500),
+                linked_block_id INTEGER,
+                status VARCHAR(20) NOT NULL DEFAULT 'open',
+                checked BOOLEAN DEFAULT 0 NOT NULL,
+                scheduled_date DATE,
+                completed_at TIMESTAMP,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_block_order "
+            "ON area_block_item(user_id, block_id, order_index)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_area_order "
+            "ON area_block_item(user_id, area_id, order_index)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_status "
+            "ON area_block_item(user_id, status)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_scheduled "
+            "ON area_block_item(user_id, scheduled_date)"
+        )
+        print("[add] area_block_item table created")
+        return
+    add_column(cur, "area_block_item", "user_id", "INTEGER")
+    add_column(cur, "area_block_item", "area_id", "INTEGER")
+    add_column(cur, "area_block_item", "block_id", "INTEGER")
+    add_column(cur, "area_block_item", "item_type", "VARCHAR(30) NOT NULL DEFAULT 'item'", default_sql="'item'")
+    add_column(cur, "area_block_item", "text", "VARCHAR(500) NOT NULL DEFAULT ''")
+    add_column(cur, "area_block_item", "details", "TEXT")
+    add_column(cur, "area_block_item", "note", "TEXT")
+    add_column(cur, "area_block_item", "inner_note", "TEXT")
+    add_column(cur, "area_block_item", "link_text", "VARCHAR(200)")
+    add_column(cur, "area_block_item", "link_url", "VARCHAR(500)")
+    add_column(cur, "area_block_item", "linked_block_id", "INTEGER")
+    add_column(cur, "area_block_item", "status", "VARCHAR(20) NOT NULL DEFAULT 'open'")
+    add_column(cur, "area_block_item", "checked", "BOOLEAN DEFAULT 0 NOT NULL", default_sql="0")
+    add_column(cur, "area_block_item", "scheduled_date", "DATE")
+    add_column(cur, "area_block_item", "completed_at", "TIMESTAMP")
+    add_column(cur, "area_block_item", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area_block_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "area_block_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_block_order "
+        "ON area_block_item(user_id, block_id, order_index)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_area_order "
+        "ON area_block_item(user_id, area_id, order_index)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_status "
+        "ON area_block_item(user_id, status)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_block_item_user_scheduled "
+        "ON area_block_item(user_id, scheduled_date)"
+    )
+
+
 def ensure_calendar_event_table(cur):
     if not table_exists(cur, "calendar_event"):
         cur.execute(
@@ -1020,6 +1304,11 @@ def main():
         ensure_note_list_item_table(cur)
         ensure_inbox_item_table(cur)
         ensure_note_folder_table(cur)
+        ensure_area_table(cur)
+        ensure_area_item_table(cur)
+        ensure_area_section_table(cur)
+        ensure_area_block_table(cur)
+        ensure_area_block_item_table(cur)
         ensure_calendar_event_table(cur)
         ensure_teamwork_ignored_task_table(cur)
         ensure_recurring_event_table(cur)

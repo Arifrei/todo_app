@@ -43,6 +43,7 @@ class User(UserMixin, db.Model):
 
     # Relationships
     lists = db.relationship('TodoList', backref='owner', lazy=True, cascade="all, delete-orphan")
+    areas = db.relationship('Area', backref='owner', lazy=True, cascade="all, delete-orphan")
     inbox_items = db.relationship('InboxItem', backref='owner', lazy=True, cascade="all, delete-orphan")
     notifications = db.relationship('Notification', backref='user', lazy=True, cascade="all, delete-orphan")
     notification_settings = db.relationship('NotificationSetting', backref='user', lazy=True, cascade="all, delete-orphan")
@@ -422,6 +423,332 @@ class NoteFolder(db.Model):
             'is_pin_protected': bool(self.is_pin_protected),
             'archived_at': self.archived_at.isoformat() if self.archived_at else None,
             'is_archived': bool(self.archived_at),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Area(db.Model):
+    """Long-lived responsibility area owned by a user."""
+    __tablename__ = 'area'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    color = db.Column(db.String(20), nullable=True)
+    icon = db.Column(db.String(80), nullable=True)
+    order_index = db.Column(db.Integer, default=0)
+    archived_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = db.relationship(
+        'AreaItem',
+        backref='area',
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="AreaItem.order_index",
+    )
+    sections = db.relationship(
+        'AreaSection',
+        backref='area',
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="AreaSection.order_index",
+    )
+    blocks = db.relationship(
+        'AreaBlock',
+        backref='area',
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="AreaBlock.order_index",
+    )
+
+    __table_args__ = (
+        db.Index('idx_area_user_archived_order', 'user_id', 'archived_at', 'order_index'),
+        db.Index('idx_area_user_name', 'user_id', 'name'),
+    )
+
+    def to_dict(self, include_counts=False):
+        data = {
+            'id': self.id,
+            'user_id': self.user_id,
+            'name': self.name,
+            'description': self.description,
+            'color': self.color or '#3b82f6',
+            'icon': self.icon or 'fa-solid fa-layer-group',
+            'order_index': self.order_index or 0,
+            'archived_at': self.archived_at.isoformat() if self.archived_at else None,
+            'is_archived': bool(self.archived_at),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_counts:
+            legacy_items = list(self.items or [])
+            blocks = list(self.blocks or [])
+            block_items = [
+                item
+                for block in blocks
+                if block.block_type in {'list', 'task_list'}
+                for item in (block.items or [])
+            ]
+            task_items = [
+                item
+                for block in blocks
+                if block.block_type == 'task_list'
+                for item in (block.items or [])
+                if (item.item_type or 'item') == 'item'
+            ]
+            list_items = [
+                item
+                for block in blocks
+                if block.block_type == 'list'
+                for item in (block.items or [])
+                if (item.item_type or 'item') == 'item'
+            ]
+            data['section_count'] = len(self.sections or [])
+            data['block_count'] = len(blocks)
+            data['note_count'] = sum(1 for block in blocks if block.block_type == 'note')
+            data['list_count'] = sum(1 for block in blocks if block.block_type in {'list', 'task_list'})
+            data['item_count'] = len(legacy_items) + len(block_items) + len(blocks)
+            data['open_count'] = (
+                sum(1 for item in legacy_items if item.status == 'open')
+                + sum(1 for item in task_items if item.status == 'open')
+                + sum(1 for item in list_items if not item.checked)
+            )
+            data['later_count'] = (
+                sum(1 for item in legacy_items if item.status == 'later')
+                + sum(1 for item in task_items if item.status == 'later')
+            )
+            data['done_count'] = (
+                sum(1 for item in legacy_items if item.status == 'done')
+                + sum(1 for item in task_items if item.status == 'done')
+                + sum(1 for item in list_items if item.checked)
+            )
+        return data
+
+
+class AreaSection(db.Model):
+    """Named lane inside an Area workspace."""
+    __tablename__ = 'area_section'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=False)
+    title = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    blocks = db.relationship(
+        'AreaBlock',
+        backref='section',
+        lazy=True,
+        order_by="AreaBlock.order_index",
+    )
+
+    __table_args__ = (
+        db.Index('idx_area_section_user_area_order', 'user_id', 'area_id', 'order_index'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'area_id': self.area_id,
+            'title': self.title,
+            'description': self.description,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AreaBlock(db.Model):
+    """Typed content block inside an Area workspace."""
+    __tablename__ = 'area_block'
+
+    BLOCK_TYPES = {'line', 'note', 'list', 'task_list'}
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=False)
+    section_id = db.Column(db.Integer, db.ForeignKey('area_section.id', ondelete='SET NULL'), nullable=True)
+    block_type = db.Column(db.String(30), nullable=False)
+    title = db.Column(db.String(180), nullable=True)
+    content = db.Column(db.Text, nullable=True)
+    checkbox_mode = db.Column(db.Boolean, default=False, nullable=False)
+    list_mode = db.Column(db.String(20), nullable=False, default='standard')
+    order_index = db.Column(db.Integer, default=0)
+    source_note_id = db.Column(db.Integer, db.ForeignKey('note.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    source_note = db.relationship('Note', foreign_keys=[source_note_id])
+    items = db.relationship(
+        'AreaBlockItem',
+        backref='block',
+        lazy=True,
+        cascade="all, delete-orphan",
+        foreign_keys='AreaBlockItem.block_id',
+        order_by="AreaBlockItem.order_index",
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "block_type IN ('line', 'note', 'list', 'task_list')",
+            name='ck_area_block_type',
+        ),
+        db.Index('idx_area_block_user_area_order', 'user_id', 'area_id', 'order_index'),
+        db.Index('idx_area_block_user_section_order', 'user_id', 'section_id', 'order_index'),
+        db.Index('idx_area_block_user_type', 'user_id', 'block_type'),
+    )
+
+    def to_dict(self, include_items=True):
+        items = list(self.items or [])
+        item_count = len(items)
+        open_count = sum(1 for item in items if item.status == 'open' and not item.checked)
+        done_count = sum(1 for item in items if item.status == 'done' or item.checked)
+        list_mode = (self.list_mode or 'standard').lower()
+        if list_mode not in {'standard', 'revolving'}:
+            list_mode = 'standard'
+        data = {
+            'id': self.id,
+            'user_id': self.user_id,
+            'area_id': self.area_id,
+            'section_id': self.section_id,
+            'block_type': self.block_type,
+            'type': self.block_type,
+            'title': self.title,
+            'content': self.content,
+            'checkbox_mode': bool(self.checkbox_mode),
+            'list_mode': list_mode,
+            'order_index': self.order_index or 0,
+            'source_note_id': self.source_note_id,
+            'item_count': item_count,
+            'open_count': open_count,
+            'later_count': sum(1 for item in items if item.status == 'later'),
+            'done_count': done_count,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_items:
+            data['items'] = [item.to_dict() for item in items]
+        return data
+
+
+class AreaBlockItem(db.Model):
+    """Row inside an Area list or task-list block."""
+    __tablename__ = 'area_block_item'
+
+    STATUSES = {'open', 'done', 'later'}
+    ITEM_TYPES = {'item', 'section', 'subsection', 'linked_note', 'linked_list'}
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=False)
+    block_id = db.Column(db.Integer, db.ForeignKey('area_block.id', ondelete='CASCADE'), nullable=False)
+    item_type = db.Column(db.String(30), nullable=False, default='item')
+    text = db.Column(db.String(500), nullable=False)
+    details = db.Column(db.Text, nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    inner_note = db.Column(db.Text, nullable=True)
+    link_text = db.Column(db.String(200), nullable=True)
+    link_url = db.Column(db.String(500), nullable=True)
+    linked_block_id = db.Column(db.Integer, db.ForeignKey('area_block.id', ondelete='SET NULL'), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='open')
+    checked = db.Column(db.Boolean, default=False, nullable=False)
+    scheduled_date = db.Column(db.Date, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('open', 'done', 'later')",
+            name='ck_area_block_item_status',
+        ),
+        db.CheckConstraint(
+            "item_type IN ('item', 'section', 'subsection', 'linked_note', 'linked_list')",
+            name='ck_area_block_item_type',
+        ),
+        db.Index('idx_area_block_item_user_block_order', 'user_id', 'block_id', 'order_index'),
+        db.Index('idx_area_block_item_user_area_order', 'user_id', 'area_id', 'order_index'),
+        db.Index('idx_area_block_item_user_status', 'user_id', 'status'),
+        db.Index('idx_area_block_item_user_scheduled', 'user_id', 'scheduled_date'),
+    )
+
+    linked_block = db.relationship('AreaBlock', foreign_keys=[linked_block_id])
+
+    def to_dict(self):
+        linked_block = self.linked_block
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'area_id': self.area_id,
+            'block_id': self.block_id,
+            'item_type': self.item_type or 'item',
+            'text': self.text,
+            'details': self.details,
+            'note': self.note,
+            'inner_note': self.inner_note,
+            'link_text': self.link_text,
+            'link_url': self.link_url,
+            'linked_block_id': self.linked_block_id,
+            'linked_block_type': linked_block.block_type if linked_block else None,
+            'linked_block_title': linked_block.title if linked_block else None,
+            'status': self.status,
+            'checked': bool(self.checked),
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AreaItem(db.Model):
+    """Actionable item inside an Area."""
+    __tablename__ = 'area_item'
+
+    STATUSES = {'open', 'done', 'later'}
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=False)
+    text = db.Column(db.String(300), nullable=False)
+    details = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='open')
+    scheduled_date = db.Column(db.Date, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    order_index = db.Column(db.Integer, default=0)
+    linked_note_id = db.Column(db.Integer, db.ForeignKey('note.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    linked_note = db.relationship('Note', foreign_keys=[linked_note_id])
+
+    __table_args__ = (
+        db.Index('idx_area_item_user_area_order', 'user_id', 'area_id', 'order_index'),
+        db.Index('idx_area_item_user_status', 'user_id', 'status'),
+        db.Index('idx_area_item_user_scheduled', 'user_id', 'scheduled_date'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'area_id': self.area_id,
+            'text': self.text,
+            'details': self.details,
+            'status': self.status,
+            'scheduled_date': self.scheduled_date.isoformat() if self.scheduled_date else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'order_index': self.order_index or 0,
+            'linked_note_id': self.linked_note_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -951,7 +1278,7 @@ class QuickAccessItem(db.Model):
     title = db.Column(db.String(200), nullable=False)
     icon = db.Column(db.String(50), nullable=False, default='fa-solid fa-bookmark')
     url = db.Column(db.String(500), nullable=False)
-    item_type = db.Column(db.String(30), nullable=False, default='custom')  # custom | list | note | calendar | system
+    item_type = db.Column(db.String(30), nullable=False, default='custom')  # custom | list | note | folder | area | calendar | system
     reference_id = db.Column(db.Integer, nullable=True)  # ID of referenced list/note/event if applicable
     order_index = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

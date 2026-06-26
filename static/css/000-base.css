@@ -809,6 +809,7 @@ body {
 }
 
 .module-icon.tasks { background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); }
+.module-icon.areas { background: linear-gradient(135deg, #2563eb, #14b8a6); }
 .module-icon.calendar { background: linear-gradient(135deg, #0ea5e9, #2563eb); }
 .module-icon.notes { background: linear-gradient(135deg, #f97316, #f59e0b); }
 .module-icon.vault { background: linear-gradient(135deg, #14b8a6, #0ea5e9); }

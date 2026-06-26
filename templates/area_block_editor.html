@@ -1,0 +1,189 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div
+    class="notes-layout notes-editor-only area-block-editor-page"
+    id="area-block-editor-page"
+    data-area-id="{{ area_id }}"
+    data-block-id="{{ block_id }}"
+    data-block-type="{{ block_type }}"
+>
+    <header class="notes-header area-editor-header">
+        <div class="area-editor-heading-wrap">
+            <h1 id="area-editor-heading">Area item</h1>
+            <a class="area-editor-area-bubble" id="area-editor-area-bubble" href="/areas/{{ area_id }}" hidden>
+                <i class="fa-solid fa-layer-group"></i>
+                <span>Area</span>
+            </a>
+        </div>
+        <div class="notes-header-actions area-editor-actions">
+            <button class="btn btn-icon-only" id="area-editor-back-btn" type="button" aria-label="Back" title="Back">
+                <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <a class="btn btn-icon-only" id="area-editor-area-btn" href="/areas/{{ area_id }}" aria-label="Area" title="Area">
+                <i class="fa-solid fa-layer-group"></i>
+            </a>
+            <button class="btn btn-primary" id="area-editor-save-btn" type="button">
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>Save</span>
+            </button>
+        </div>
+    </header>
+
+    <section class="notes-editor card area-editor-panel" id="area-note-panel" hidden>
+        <div class="note-meta">
+            <input id="area-block-title" type="text" placeholder="Untitled note" autocomplete="off" aria-label="Area note title" />
+            <div class="note-meta-right">
+                <span class="note-updated" id="area-editor-updated-label">Loading...</span>
+            </div>
+        </div>
+        <div class="note-toolbar" id="area-note-toolbar">
+            <select id="area-note-font-size" class="note-tool note-font-size" title="Font size">
+                <option value="12">12</option>
+                <option value="14">14</option>
+                <option value="16" selected>16</option>
+                <option value="18">18</option>
+                <option value="20">20</option>
+                <option value="24">24</option>
+            </select>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" type="button" data-area-note-command="bold" title="Bold" aria-label="Bold"><i class="fa-solid fa-bold"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="italic" title="Italic" aria-label="Italic"><i class="fa-solid fa-italic"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="underline" title="Underline" aria-label="Underline"><i class="fa-solid fa-underline"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="strikeThrough" title="Strikethrough" aria-label="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" type="button" data-area-note-command="insertUnorderedList" title="Bullet list" aria-label="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="insertOrderedList" title="Numbered list" aria-label="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="checkbox" title="Checkbox" aria-label="Insert checkbox"><i class="fa-regular fa-square-check"></i></button>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" type="button" data-area-note-command="quote" title="Quote block" aria-label="Quote block"><i class="fa-solid fa-quote-left"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="code" title="Code" aria-label="Code"><i class="fa-solid fa-code"></i></button>
+            <button class="note-tool" type="button" data-area-note-command="removeFormat" title="Clear formatting" aria-label="Clear formatting"><i class="fa-solid fa-eraser"></i></button>
+        </div>
+        <div id="area-note-editor" class="note-editor-surface" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Area note content editor" data-placeholder="Start typing your note..."></div>
+    </section>
+
+    <section class="notes-editor card list-editor-card area-editor-panel area-list-editor-panel" id="area-list-panel" hidden>
+        <div class="note-meta list-meta">
+            <input id="area-list-title" type="text" placeholder="Untitled list" autocomplete="off" aria-label="Area list title" />
+            <div class="note-meta-right list-meta-right">
+                <span class="note-updated" id="area-list-updated-label">Loading...</span>
+            </div>
+        </div>
+        <div class="area-editor-command-row">
+            <form class="area-editor-composer" id="area-list-add-row-form">
+                <input id="area-list-new-item" type="text" placeholder="Add list item" autocomplete="off">
+                <button class="btn btn-primary" type="submit">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Add item</span>
+                </button>
+            </form>
+            <div class="area-list-tool-row" aria-label="List tools">
+                <button class="btn btn-secondary" id="area-list-add-section-btn" type="button">
+                    <i class="fa-solid fa-layer-group"></i>
+                    <span>Section</span>
+                </button>
+                <button class="btn btn-secondary" id="area-list-add-subsection-btn" type="button">
+                    <i class="fa-solid fa-turn-down"></i>
+                    <span>Subsection</span>
+                </button>
+                <button class="btn btn-secondary" id="area-list-link-note-btn" type="button">
+                    <i class="fa-regular fa-note-sticky"></i>
+                    <span>Note</span>
+                </button>
+                <button class="btn btn-secondary" id="area-list-link-list-btn" type="button">
+                    <i class="fa-solid fa-list-ul"></i>
+                    <span>List</span>
+                </button>
+            </div>
+        </div>
+        <div class="list-editor-surface area-list-editor-surface" id="area-list-surface">
+            <div class="list-pill-stack area-list-stack" id="area-list-stack"></div>
+        </div>
+    </section>
+
+    <section class="notes-editor card list-editor-card area-editor-panel area-task-editor-panel" id="area-task-panel" hidden>
+        <div class="note-meta list-meta">
+            <input id="area-task-title" type="text" placeholder="Task list" autocomplete="off" aria-label="Area task list title" />
+            <div class="note-meta-right list-meta-right">
+                <span class="note-updated" id="area-task-updated-label">Loading...</span>
+            </div>
+        </div>
+        <div class="area-editor-command-row">
+            <form class="area-editor-composer" id="area-task-add-row-form">
+                <input id="area-task-new-item" type="text" placeholder="Add task" autocomplete="off">
+                <button class="btn btn-primary" type="submit">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Add task</span>
+                </button>
+            </form>
+        </div>
+        <div class="list-editor-surface area-list-editor-surface area-task-editor-surface" id="area-task-surface">
+            <div class="list-pill-stack area-list-stack" id="area-task-stack"></div>
+        </div>
+    </section>
+</div>
+
+<div class="modal" id="area-row-modal" role="dialog" aria-modal="true" aria-labelledby="area-row-modal-title">
+    <div class="modal-content area-editor-modal" tabindex="-1">
+        <h2 id="area-row-modal-title">Add item</h2>
+        <div class="form-group">
+            <label for="area-row-text">Title</label>
+            <input type="text" id="area-row-text" class="form-control" maxlength="500" placeholder="Title">
+        </div>
+        <div class="form-group area-row-target-group" id="area-row-target-group" hidden>
+            <label for="area-row-target">Target</label>
+            <select id="area-row-target" class="form-control"></select>
+        </div>
+        <div class="form-group area-row-details-group" id="area-row-details-group">
+            <label for="area-row-details">Details</label>
+            <textarea id="area-row-details" class="form-control" rows="3" placeholder="Optional details"></textarea>
+        </div>
+        <div class="form-group area-row-date-group" id="area-row-date-group">
+            <label for="area-row-date">Date</label>
+            <input type="date" id="area-row-date" class="form-control">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="area-row-cancel-btn">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-row-save-btn">
+                <i class="fa-solid fa-check"></i>
+                <span>Save</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="area-inner-note-modal" role="dialog" aria-modal="true" aria-labelledby="area-inner-note-title">
+    <div class="modal-content list-item-note-modal-content" tabindex="-1">
+        <h2 id="area-inner-note-title">Row note</h2>
+        <div class="list-item-note-toolbar" id="area-inner-note-toolbar">
+            <button class="note-tool" type="button" data-area-inner-command="bold" title="Bold" aria-label="Bold"><i class="fa-solid fa-bold"></i></button>
+            <button class="note-tool" type="button" data-area-inner-command="italic" title="Italic" aria-label="Italic"><i class="fa-solid fa-italic"></i></button>
+            <button class="note-tool" type="button" data-area-inner-command="strikeThrough" title="Strikethrough" aria-label="Strikethrough"><i class="fa-solid fa-strikethrough"></i></button>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" type="button" data-area-inner-command="insertUnorderedList" title="Bullet list" aria-label="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
+            <button class="note-tool" type="button" data-area-inner-command="insertOrderedList" title="Numbered list" aria-label="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
+            <button class="note-tool" type="button" data-area-inner-command="quote" title="Quote block" aria-label="Quote block"><i class="fa-solid fa-quote-left"></i></button>
+        </div>
+        <div
+            id="area-inner-note-editor"
+            class="form-control list-item-note-input note-editor-surface"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Row note editor"
+            data-placeholder="Type row details..."
+        ></div>
+        <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="area-inner-note-clear-btn">Clear</button>
+            <button class="btn" type="button" id="area-inner-note-cancel-btn">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-inner-note-save-btn">Save</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', filename='notes/markdown.js') }}" defer></script>
+<script src="{{ url_for('static', filename='pages/area-block-editor.js') }}?v=area-editor-20260626-area-bubble-drag" defer></script>
+{% endblock %}

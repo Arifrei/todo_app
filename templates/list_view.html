@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="list-view{% if todo_list.type == 'light' %} light-list-view{% endif %}">
+<div class="list-view{% if todo_list.type == 'light' %} light-list-view{% endif %}{% if area_task_context %} area-task-list-view{% endif %}">
 {# Phase headers: anything marked is_phase or legacy status == 'phase' #}
 {% set phases = items|selectattr('is_phase', 'equalto', True)|list + items|selectattr('status', 'equalto', 'phase')|list %}
 {% set tag_ns = namespace(all=[]) %}
@@ -34,7 +34,11 @@
 <!-- Compact Sticky Header -->
 <div class="list-header-compact sticky-header">
     <div class="header-left">
-        {% if parent_list %}
+        {% if area_task_context %}
+        <a href="/areas/{{ area_task_context.area_id }}" class="btn btn-back btn-small" aria-label="Back to area">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        {% elif parent_list %}
         <a href="/list/{{ parent_list.id }}" class="btn btn-back btn-small" aria-label="Back to {{ parent_list.title }}">
             <i class="fa-solid fa-arrow-left"></i>
         </a>
@@ -43,13 +47,19 @@
             <i class="fa-solid fa-arrow-left"></i>
         </a>
         {% endif %}
-        <a href="/tasks" class="btn btn-home" aria-label="Tasks home">
-            <i class="fa-solid fa-list-check"></i>
+        <a href="{% if area_task_context %}/areas/{{ area_task_context.area_id }}{% else %}/tasks{% endif %}" class="btn btn-home" aria-label="{% if area_task_context %}Area{% else %}Tasks home{% endif %}">
+            <i class="fa-solid {% if area_task_context %}fa-layer-group{% else %}fa-list-check{% endif %}"></i>
         </a>
     </div>
 
-    <div class="header-center">
+    <div class="header-center{% if area_task_context %} area-task-heading-wrap{% endif %}">
         <h1 id="list-title-display">{{ todo_list.title }}</h1>
+        {% if area_task_context %}
+        <a class="area-editor-area-bubble" href="/areas/{{ area_task_context.area_id }}" title="{{ area_task_context.area_name or 'Area' }}">
+            <i class="fa-solid fa-layer-group"></i>
+            <span>{{ area_task_context.area_name or 'Area' }}</span>
+        </a>
+        {% endif %}
     </div>
 
     <div class="header-right">
@@ -98,14 +108,14 @@
             <button class="header-menu-item" data-onclick="openBulkImportModal(); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-list-check"></i> Bulk Add
             </button>
-            <a class="header-menu-item" href="/api/lists/{{ todo_list.id }}/export" download>
+            <a class="header-menu-item" href="{% if area_task_context %}/api/area-task-blocks/{{ todo_list.id }}/export{% else %}/api/lists/{{ todo_list.id }}/export{% endif %}" download>
                 <i class="fa-solid fa-download"></i> Export
             </a>
             <div class="header-menu-divider"></div>
             <button class="header-menu-item" data-onclick="openEditListModal(); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-pen"></i> Rename List
             </button>
-            <button class="header-menu-item danger" data-onclick="deleteList({{ todo_list.id }});">
+            <button class="header-menu-item danger" data-onclick="{% if area_task_context %}deleteAreaTaskList({{ todo_list.id }});{% else %}deleteList({{ todo_list.id }});{% endif %}">
                 <i class="fa-solid fa-trash"></i> Delete List
             </button>
         </div>
@@ -261,7 +271,7 @@
                     {% endif %}
                     {% if item.linked_notes|length %}
                         {% for note in item.linked_notes %}
-                        <a class="meta-chip note linked-note-chip" href="/notes/{{ note.id }}" title="Open note {{ note.title or ('#' ~ note.id) }}">
+                        <a class="meta-chip note linked-note-chip" href="{% if area_task_context and note.area_block_id %}/areas/{{ area_task_context.area_id }}/blocks/{{ note.area_block_id }}{% else %}/notes/{{ note.id }}{% endif %}" title="Open note {{ note.title or ('#' ~ note.id) }}">
                             <i class="fa-solid fa-note-sticky"></i>
                             {{ note.title or ('Note #' ~ note.id) }}
                         </a>
@@ -672,6 +682,12 @@ Task 3 ::: notes"></textarea>
 {% endblock %}
 
 {% block page_scripts %}
+{% if area_task_context %}
+<script>
+    window.AREA_TASK_CONTEXT = {{ area_task_context|tojson }};
+</script>
+<script src="{{ url_for('static', filename='pages/area-task-adapter.js') }}?v=area-task-adapter-20260625" defer></script>
+{% endif %}
 <script src="{{ url_for('static', filename='app/core.js') }}" defer></script>
 <script src="{{ url_for('static', filename='app/tasks.js') }}" defer></script>
 {% endblock %}

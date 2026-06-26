@@ -1403,7 +1403,7 @@
 .list-section {
     border: 1px solid var(--border-color);
     border-radius: 14px;
-    padding: 0.6rem;
+    padding: 0.45rem 0.6rem 0.6rem;
     background: rgba(15, 23, 42, 0.03);
     display: flex;
     flex-direction: column;
@@ -1419,11 +1419,11 @@
 }
 
 .list-section.has-title {
-    padding-top: 1.7rem;
+    padding-top: 1.45rem;
 }
 
 .list-section.no-title {
-    padding-top: 0.6rem;
+    padding-top: 0.45rem;
 }
 
 .list-section + .list-section {
@@ -1432,7 +1432,7 @@
 
 .list-section-header {
     position: absolute;
-    top: 0.4rem;
+    top: 0.28rem;
     left: 0.8rem;
     right: 0.8rem;
     display: flex;
@@ -1515,7 +1515,7 @@
 }
 
 .list-subsection {
-    margin: 0.45rem 0 0.15rem 1rem;
+    margin: 0.25rem 0 0.15rem 1rem;
     padding-left: 0.8rem;
     border-left: 2px solid rgba(59, 130, 246, 0.18);
 }
@@ -1525,7 +1525,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.45rem;
-    padding: 0.15rem 0 0.35rem;
+    padding: 0.05rem 0 0.2rem;
     color: var(--text-muted);
     font-size: 0.78rem;
     font-weight: 700;

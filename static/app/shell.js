@@ -57,6 +57,7 @@
             list: 'Task destination',
             note: 'Note',
             folder: 'Notes folder',
+            area: 'Area',
             calendar: 'Calendar date',
             system: 'System shortcut'
         };
