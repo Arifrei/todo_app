@@ -20,7 +20,8 @@
       "Bash(curl:*)",
       "Bash(gradlew:*)",
       "Bash(./gradlew:*)",
-      "Bash(cmd:*)"
+      "Bash(cmd:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

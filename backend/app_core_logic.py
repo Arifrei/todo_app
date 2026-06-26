@@ -1885,6 +1885,16 @@ def _start_scheduler():
             )
     except Exception as e:
         app.logger.error(f"Error scheduling Teamwork calendar sync: {e}")
+    if os.environ.get('ENABLE_SMS_INBOX', '0') == '1':
+        from backend.sms_inbox import fetch_and_process_emails
+        scheduler.add_job(
+            fetch_and_process_emails,
+            'interval',
+            minutes=1,
+            id='sms_inbox_poll',
+            replace_existing=True,
+            max_instances=1,
+        )
     # Note: Calendar reminders now use server-scheduled jobs (scheduled per-event)
     # Legacy minute-polling has been replaced with precise scheduling
     scheduler.start()

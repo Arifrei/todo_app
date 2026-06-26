@@ -109,35 +109,6 @@
     overflow-wrap: anywhere;
 }
 
-.inbox-suggestion {
-    padding: 0.8rem 0.9rem;
-    border: 1px solid rgba(16, 185, 129, 0.22);
-    border-radius: 12px;
-    background: rgba(209, 250, 229, 0.42);
-}
-
-.inbox-suggestion strong {
-    display: block;
-}
-
-.inbox-suggestion-unavailable {
-    border-color: var(--border-color);
-    background: var(--bg-light);
-}
-
-.inbox-suggestion-detecting {
-    border-color: rgba(59, 130, 246, 0.22);
-    background: rgba(219, 234, 254, 0.42);
-}
-
-.inbox-suggestion-detecting strong {
-    color: var(--primary-color);
-}
-
-.inbox-suggestion-detecting i {
-    margin-right: 0.35rem;
-}
-
 .inbox-card-actions {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

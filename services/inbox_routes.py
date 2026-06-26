@@ -21,8 +21,6 @@ MONTH_PATTERN = (
 WEEKDAY_PATTERN = (
     r'monday|tuesday|wednesday|thursday|friday|saturday|sunday'
 )
-
-
 class InboxValidationError(ValueError):
     pass
 
@@ -1250,14 +1248,9 @@ def process_inbox_suggestion(item_id):
 def queue_inbox_suggestion(a, inbox_item):
     if inbox_item.status != 'open':
         return
-    inbox_item.suggestion_status = 'processing'
-    inbox_item.suggestion_reason = 'Detecting the best destination...'
+    inbox_item.suggestion_status = 'failed'
+    inbox_item.suggestion_reason = 'Map this item manually.'
     a.db.session.commit()
-    start_app_context_job(
-        a.app,
-        process_inbox_suggestion,
-        args=(inbox_item.id,),
-    )
 
 
 def _append_note_html(existing_html, text):

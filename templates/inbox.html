@@ -14,13 +14,13 @@
         <label for="inbox-capture-input">Quick add</label>
         <div class="inbox-capture-row">
             <textarea id="inbox-capture-input" rows="2" maxlength="5000"
-                      placeholder="Call Sam tomorrow at 3pm, remind me 15 minutes before..."></textarea>
+                      placeholder="Jot something down..."></textarea>
             <button class="btn btn-primary" id="inbox-capture-submit" type="submit">
                 <i class="fa-solid fa-plus"></i>
                 Add
             </button>
         </div>
-        <p>Press <strong>Ctrl+Enter</strong> to add. Dates, times, reminders, project names, and note names help auto-detection.</p>
+        <p>Press <strong>Ctrl+Enter</strong> to add.</p>
     </form>
 
     <section class="inbox-items" id="inbox-items" aria-live="polite">
@@ -32,8 +32,7 @@
     <div class="modal-content inbox-map-content" tabindex="-1">
         <div class="inbox-map-header">
             <div>
-                <h2 id="inbox-map-title">Map inbox item</h2>
-                <p id="inbox-map-capture"></p>
+                <h2>Move inbox item</h2>
             </div>
             <button class="btn-icon" id="inbox-map-close" type="button" aria-label="Close mapping dialog">
                 <i class="fa-solid fa-xmark"></i>
@@ -41,6 +40,11 @@
         </div>
 
         <form id="inbox-map-form">
+            <div class="form-group">
+                <label for="inbox-map-title">Title</label>
+                <textarea class="form-control" id="inbox-map-title" rows="2" maxlength="5000"></textarea>
+            </div>
+
             <div class="form-group">
                 <label for="inbox-map-kind">Destination</label>
                 <select class="form-control" id="inbox-map-kind">
@@ -61,10 +65,6 @@
                         <label for="inbox-task-phase">Phase</label>
                         <select class="form-control" id="inbox-task-phase"></select>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label for="inbox-task-title">Task</label>
-                    <input class="form-control" id="inbox-task-title" maxlength="200">
                 </div>
                 <div class="inbox-form-grid">
                     <div class="form-group">
@@ -92,10 +92,6 @@
             </div>
 
             <div class="inbox-map-fields" data-kind="calendar">
-                <div class="form-group">
-                    <label for="inbox-calendar-title">Title</label>
-                    <input class="form-control" id="inbox-calendar-title" maxlength="200">
-                </div>
                 <div class="inbox-form-grid inbox-schedule-grid">
                     <div class="form-group"><label for="inbox-calendar-date">Date</label><input class="form-control" type="date" id="inbox-calendar-date"></div>
                     <div class="form-group"><label for="inbox-calendar-start">Start</label><input class="form-control" type="time" id="inbox-calendar-start"></div>
@@ -116,10 +112,6 @@
                     <label for="inbox-note-target">Note</label>
                     <select class="form-control" id="inbox-note-target"></select>
                 </div>
-                <div class="form-group">
-                    <label for="inbox-note-text">Text to append</label>
-                    <textarea class="form-control" id="inbox-note-text" rows="5"></textarea>
-                </div>
             </div>
 
             <div class="inbox-map-fields" data-kind="note_list">
@@ -136,10 +128,6 @@
                         <label for="inbox-note-list-subsection">Subsection</label>
                         <select class="form-control" id="inbox-note-list-subsection"></select>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label for="inbox-note-list-text">List item</label>
-                    <input class="form-control" id="inbox-note-list-text" maxlength="300">
                 </div>
                 <div class="form-group">
                     <label for="inbox-note-list-note">Item note</label>

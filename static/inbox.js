@@ -2,7 +2,6 @@ const inboxState = {
     items: [],
     destinations: null,
     activeItem: null,
-    detectionTimer: null,
     activeCreates: 0,
     nextTemporaryId: -1
 };
@@ -36,10 +35,7 @@ async function inboxReadResponse(response) {
 
 async function loadInboxItems(silent = false) {
     const container = document.getElementById('inbox-items');
-    if (silent && inboxState.activeCreates > 0) {
-        scheduleInboxDetectionPoll();
-        return;
-    }
+    if (silent && inboxState.activeCreates > 0) return;
     try {
         const response = await fetch('/api/inbox');
         inboxState.items = await inboxReadResponse(response);
@@ -50,21 +46,6 @@ async function loadInboxItems(silent = false) {
             showToast(error.message, 'error');
         }
     }
-}
-
-function scheduleInboxDetectionPoll() {
-    if (inboxState.detectionTimer) {
-        clearTimeout(inboxState.detectionTimer);
-        inboxState.detectionTimer = null;
-    }
-    const hasPendingDetection = inboxState.items.some(item => (
-        item.temporary || ['pending', 'processing', 'refining'].includes(item.suggestion_status)
-    ));
-    if (!hasPendingDetection) return;
-    inboxState.detectionTimer = window.setTimeout(async () => {
-        inboxState.detectionTimer = null;
-        await loadInboxItems(true);
-    }, 900);
 }
 
 function renderInboxItems() {
@@ -78,49 +59,18 @@ function renderInboxItems() {
         return;
     }
     container.innerHTML = inboxState.items.map(item => {
-        const suggestion = item.suggestion || {};
-        const isDetecting = (
-            !suggestion.label
-            && (item.temporary || ['pending', 'processing'].includes(item.suggestion_status))
-        );
-        const suggestionHtml = isDetecting
-            ? `
-                <div class="inbox-suggestion inbox-suggestion-detecting">
-                    <strong><i class="fa-solid fa-spinner fa-spin"></i> Detecting destination...</strong>
-                </div>
-            `
-            : suggestion.label
-            ? `
-                <div class="inbox-suggestion">
-                    <strong>${escapeHtml(suggestion.label)}</strong>
-                </div>
-            `
-            : `
-                <div class="inbox-suggestion inbox-suggestion-unavailable">
-                    <strong>Manual mapping needed</strong>
-                </div>
-            `;
         return `
             <article class="inbox-card" data-inbox-id="${item.id}">
                 <div class="inbox-card-meta">
                     <span><i class="fa-regular fa-clock"></i> ${escapeHtml(inboxFormatDate(item.created_at))}</span>
                 </div>
                 <div class="inbox-card-content">${escapeHtml(item.content).replace(/\n/g, '<br>')}</div>
-                ${suggestionHtml}
                 <div class="inbox-card-actions">
-                    <button class="btn btn-primary inbox-accept-btn" type="button"
-                            data-inbox-id="${item.id}" title="Accept suggestion"
-                            aria-label="Accept suggestion" ${suggestion.label && !item.temporary ? '' : 'disabled'}>
-                        <i class="fa-solid fa-check"></i>
-                        <span class="inbox-action-label inbox-action-label-full">Accept suggestion</span>
-                        <span class="inbox-action-label inbox-action-label-short">Accept</span>
-                    </button>
-                    <button class="btn inbox-manual-btn" type="button" data-inbox-id="${item.id}"
-                            title="Map manually" aria-label="Map manually"
+                    <button class="btn btn-primary inbox-manual-btn" type="button" data-inbox-id="${item.id}"
+                            title="Move" aria-label="Move"
                             ${item.temporary ? 'disabled' : ''}>
-                        <i class="fa-solid fa-sliders"></i>
-                        <span class="inbox-action-label inbox-action-label-full">Map manually</span>
-                        <span class="inbox-action-label inbox-action-label-short">Map</span>
+                        <i class="fa-solid fa-arrow-right"></i>
+                        <span class="inbox-action-label">Move</span>
                     </button>
                     <button class="btn btn-danger inbox-delete-btn" type="button" data-inbox-id="${item.id}"
                             title="Delete inbox item" aria-label="Delete inbox item"
@@ -132,7 +82,6 @@ function renderInboxItems() {
             </article>
         `;
     }).join('');
-    scheduleInboxDetectionPoll();
 }
 
 function inboxFormatDate(value) {
@@ -154,9 +103,6 @@ async function addInboxItem() {
         id: temporaryId,
         content,
         status: 'open',
-        suggestion_status: 'processing',
-        suggestion: null,
-        suggestion_reason: 'Detecting the best destination...',
         created_at: new Date().toISOString(),
         temporary: true
     };
@@ -186,22 +132,7 @@ async function addInboxItem() {
         showToast(error.message, 'error');
     } finally {
         inboxState.activeCreates = Math.max(0, inboxState.activeCreates - 1);
-        scheduleInboxDetectionPoll();
         if (input) input.focus();
-    }
-}
-
-async function acceptInboxSuggestion(itemId, button) {
-    inboxSetBusy(button, true, 'Inserting...');
-    try {
-        const response = await fetch(`/api/inbox/${itemId}/accept`, { method: 'POST' });
-        const payload = await inboxReadResponse(response);
-        inboxState.items = inboxState.items.filter(item => item.id !== itemId);
-        renderInboxItems();
-        showToast(payload.result?.label || 'Inbox item mapped', 'success');
-    } catch (error) {
-        showToast(error.message, 'error');
-        inboxSetBusy(button, false);
     }
 }
 
@@ -312,44 +243,36 @@ async function openInboxMapper(itemId) {
         return;
     }
     inboxState.activeItem = item;
-    const suggestion = item.suggestion || {};
-    const kind = ['task', 'calendar', 'note', 'note_list'].includes(suggestion.kind)
-        ? suggestion.kind
-        : 'task';
-    document.getElementById('inbox-map-capture').textContent = item.content;
+    const kind = 'task';
     document.getElementById('inbox-map-kind').value = kind;
+    inboxFillValue('inbox-map-title', item.content);
 
-    inboxSetSelectOptions('inbox-task-list', inboxState.destinations.task_lists || [], 'Choose a project or list', suggestion.list_id);
-    updateInboxTaskPhases(suggestion.phase_id);
-    inboxSetSelectOptions('inbox-note-target', inboxState.destinations.notes || [], 'Choose a note', suggestion.note_id);
-    inboxSetSelectOptions('inbox-note-list-target', inboxState.destinations.note_lists || [], 'Choose a Notes list', suggestion.note_id);
-    updateInboxNoteListSections(suggestion.section_id, suggestion.subsection_id);
+    inboxSetSelectOptions('inbox-task-list', inboxState.destinations.task_lists || [], 'Choose a project or list');
+    updateInboxTaskPhases();
+    inboxSetSelectOptions('inbox-note-target', inboxState.destinations.notes || [], 'Choose a note');
+    inboxSetSelectOptions('inbox-note-list-target', inboxState.destinations.note_lists || [], 'Choose a Notes list');
+    updateInboxNoteListSections();
 
-    inboxFillValue('inbox-task-title', suggestion.title || item.content);
-    inboxFillValue('inbox-task-description', suggestion.description);
-    inboxFillValue('inbox-task-notes', suggestion.notes);
-    inboxFillValue('inbox-task-tags', Array.isArray(suggestion.tags) ? suggestion.tags.join(', ') : suggestion.tags);
-    inboxFillValue('inbox-task-date', suggestion.due_date);
-    inboxFillValue('inbox-task-start', suggestion.start_time);
-    inboxFillValue('inbox-task-end', suggestion.end_time);
+    inboxFillValue('inbox-task-description', '');
+    inboxFillValue('inbox-task-notes', '');
+    inboxFillValue('inbox-task-tags', '');
+    inboxFillValue('inbox-task-date', '');
+    inboxFillValue('inbox-task-start', '');
+    inboxFillValue('inbox-task-end', '');
 
-    inboxFillValue('inbox-calendar-title', suggestion.title || item.content);
-    inboxFillValue('inbox-calendar-date', suggestion.day || suggestion.due_date || suggestion.scheduled_date);
-    inboxFillValue('inbox-calendar-start', suggestion.start_time);
-    inboxFillValue('inbox-calendar-end', suggestion.end_time);
-    document.getElementById('inbox-calendar-event').checked = Boolean(suggestion.is_event);
+    inboxFillValue('inbox-calendar-date', '');
+    inboxFillValue('inbox-calendar-start', '');
+    inboxFillValue('inbox-calendar-end', '');
+    document.getElementById('inbox-calendar-event').checked = false;
 
-    inboxFillValue('inbox-note-text', suggestion.text || item.content);
-    inboxFillValue('inbox-note-list-text', suggestion.text || item.content);
-    inboxFillValue('inbox-note-list-note', suggestion.note);
-    inboxFillValue('inbox-note-list-date', suggestion.scheduled_date || suggestion.due_date);
-    inboxFillValue('inbox-note-list-start', suggestion.start_time);
-    inboxFillValue('inbox-note-list-end', suggestion.end_time);
+    inboxFillValue('inbox-note-list-note', '');
+    inboxFillValue('inbox-note-list-date', '');
+    inboxFillValue('inbox-note-list-start', '');
+    inboxFillValue('inbox-note-list-end', '');
 
-    const reminderValue = formatInboxReminderMinutes(suggestion.reminder_minutes_before);
-    inboxFillValue('inbox-task-reminder', reminderValue);
-    inboxFillValue('inbox-calendar-reminder', reminderValue);
-    inboxFillValue('inbox-note-list-reminder', reminderValue);
+    inboxFillValue('inbox-task-reminder', '');
+    inboxFillValue('inbox-calendar-reminder', '');
+    inboxFillValue('inbox-note-list-reminder', '');
     showInboxMapKind(kind);
     const modal = document.getElementById('inbox-map-modal');
     modal.classList.add('active');
@@ -367,12 +290,13 @@ function inboxNullableNumber(value) {
 
 function collectInboxDestination() {
     const kind = document.getElementById('inbox-map-kind').value;
+    const title = document.getElementById('inbox-map-title').value;
     if (kind === 'task') {
         return {
             kind,
             list_id: inboxNullableNumber(document.getElementById('inbox-task-list').value),
             phase_id: inboxNullableNumber(document.getElementById('inbox-task-phase').value),
-            title: document.getElementById('inbox-task-title').value,
+            title,
             description: document.getElementById('inbox-task-description').value,
             notes: document.getElementById('inbox-task-notes').value,
             tags: document.getElementById('inbox-task-tags').value,
@@ -385,7 +309,7 @@ function collectInboxDestination() {
     if (kind === 'calendar') {
         return {
             kind,
-            title: document.getElementById('inbox-calendar-title').value,
+            title,
             day: document.getElementById('inbox-calendar-date').value,
             start_time: document.getElementById('inbox-calendar-start').value,
             end_time: document.getElementById('inbox-calendar-end').value,
@@ -397,7 +321,7 @@ function collectInboxDestination() {
         return {
             kind,
             note_id: inboxNullableNumber(document.getElementById('inbox-note-target').value),
-            text: document.getElementById('inbox-note-text').value
+            text: title
         };
     }
     return {
@@ -405,7 +329,7 @@ function collectInboxDestination() {
         note_id: inboxNullableNumber(document.getElementById('inbox-note-list-target').value),
         section_id: inboxNullableNumber(document.getElementById('inbox-note-list-section').value),
         subsection_id: inboxNullableNumber(document.getElementById('inbox-note-list-subsection').value),
-        text: document.getElementById('inbox-note-list-text').value,
+        text: title,
         note: document.getElementById('inbox-note-list-note').value,
         scheduled_date: document.getElementById('inbox-note-list-date').value,
         start_time: document.getElementById('inbox-note-list-start').value,
@@ -450,11 +374,6 @@ function initInboxPage() {
         }
     });
     document.getElementById('inbox-items')?.addEventListener('click', event => {
-        const accept = event.target.closest('.inbox-accept-btn');
-        if (accept) {
-            acceptInboxSuggestion(Number(accept.dataset.inboxId), accept);
-            return;
-        }
         const manual = event.target.closest('.inbox-manual-btn');
         if (manual) {
             openInboxMapper(Number(manual.dataset.inboxId));
