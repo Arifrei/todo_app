@@ -1210,26 +1210,8 @@ def _rollover_incomplete_events():
 
 
 def _cleanup_completed_tasks():
-    """Delete done tasks that have been completed for 5+ days."""
-    with app.app_context():
-        try:
-            cutoff = datetime.now(pytz.UTC).replace(tzinfo=None) - timedelta(days=5)
-            items = TodoItem.query.join(TodoList, TodoItem.list_id == TodoList.id).filter(
-                TodoItem.status == 'done',
-                TodoItem.completed_at.isnot(None),
-                TodoItem.completed_at <= cutoff,
-                TodoItem.is_phase.is_(False),
-                TodoItem.linked_list_id.is_(None)
-            ).all()
-            if not items:
-                return
-            for item in items:
-                db.session.delete(item)
-            db.session.commit()
-            app.logger.info(f"Auto-deleted {len(items)} completed tasks older than 5 days")
-        except Exception as e:
-            app.logger.error(f"Error cleaning completed tasks: {e}")
-            db.session.rollback()
+    """Retain completed tasks indefinitely."""
+    return None
 
 
 
@@ -1854,14 +1836,6 @@ def _start_scheduler():
         return
     scheduler = BackgroundScheduler(timezone=app.config.get('DEFAULT_TIMEZONE', 'America/New_York'))
     scheduler.add_job(_rollover_incomplete_events, 'cron', hour=0, minute=10)
-    scheduler.add_job(
-        _cleanup_completed_tasks,
-        'cron',
-        hour=0,
-        minute=20,
-        id='cleanup_completed_tasks',
-        replace_existing=True
-    )
     # Daily digest runs hourly; per-user digest_hour gates delivery.
     scheduler.add_job(
         _send_daily_email_digest,
@@ -1904,11 +1878,6 @@ def _start_scheduler():
         _rollover_incomplete_events()
     except Exception as e:
         app.logger.error(f"Error running rollover catch-up: {e}")
-    try:
-        _cleanup_completed_tasks()
-    except Exception as e:
-        app.logger.error(f"Error running completed task cleanup: {e}")
-
     # Schedule existing reminders on startup
     _schedule_existing_reminders()
 

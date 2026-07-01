@@ -536,6 +536,7 @@ class AreaSection(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=False)
+    block_type = db.Column(db.String(30), nullable=False, default='line')
     title = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text, nullable=True)
     order_index = db.Column(db.Integer, default=0)
@@ -551,6 +552,7 @@ class AreaSection(db.Model):
 
     __table_args__ = (
         db.Index('idx_area_section_user_area_order', 'user_id', 'area_id', 'order_index'),
+        db.Index('idx_area_section_user_area_type_order', 'user_id', 'area_id', 'block_type', 'order_index'),
     )
 
     def to_dict(self):
@@ -558,6 +560,8 @@ class AreaSection(db.Model):
             'id': self.id,
             'user_id': self.user_id,
             'area_id': self.area_id,
+            'block_type': self.block_type or 'line',
+            'type': self.block_type or 'line',
             'title': self.title,
             'description': self.description,
             'order_index': self.order_index or 0,

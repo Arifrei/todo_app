@@ -52,6 +52,10 @@
                     <option value="calendar">Calendar item</option>
                     <option value="note">Append to a note</option>
                     <option value="note_list">Item in a Notes list</option>
+                    <option value="area_line">Line in an area</option>
+                    <option value="area_note">Append to an Area note</option>
+                    <option value="area_list">Item in an Area list</option>
+                    <option value="area_task">Task in an Area task list</option>
                 </select>
             </div>
 
@@ -141,6 +145,66 @@
                         <label for="inbox-note-list-reminder">Reminder</label>
                         <input class="form-control" type="text" id="inbox-note-list-reminder" placeholder="e.g., 30m">
                     </div>
+                </div>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="area_line">
+                <div class="form-group">
+                    <label for="inbox-area-line-target">Area</label>
+                    <select class="form-control" id="inbox-area-line-target"></select>
+                </div>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="area_note">
+                <div class="form-group">
+                    <label for="inbox-area-note-target">Area note</label>
+                    <select class="form-control" id="inbox-area-note-target"></select>
+                </div>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="area_list">
+                <div class="inbox-form-grid">
+                    <div class="form-group">
+                        <label for="inbox-area-list-target">Area list</label>
+                        <select class="form-control" id="inbox-area-list-target"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-area-list-section">Section</label>
+                        <select class="form-control" id="inbox-area-list-section"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-area-list-subsection">Subsection</label>
+                        <select class="form-control" id="inbox-area-list-subsection"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-area-list-note">Item note</label>
+                    <textarea class="form-control" id="inbox-area-list-note" rows="2"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-area-list-date">Date</label>
+                    <input class="form-control" type="date" id="inbox-area-list-date">
+                </div>
+            </div>
+
+            <div class="inbox-map-fields" data-kind="area_task">
+                <div class="form-group">
+                    <label for="inbox-area-task-target">Area task list</label>
+                    <select class="form-control" id="inbox-area-task-target"></select>
+                </div>
+                <div class="inbox-form-grid">
+                    <div class="form-group">
+                        <label for="inbox-area-task-description">Description</label>
+                        <textarea class="form-control" id="inbox-area-task-description" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="inbox-area-task-notes">Notes</label>
+                        <textarea class="form-control" id="inbox-area-task-notes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="inbox-area-task-date">Date</label>
+                    <input class="form-control" type="date" id="inbox-area-task-date">
                 </div>
             </div>
 

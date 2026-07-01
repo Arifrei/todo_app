@@ -21,10 +21,12 @@ TASK_STATUS_TO_AREA_TASK = {
 }
 DEFAULT_AREA_COLOR = '#3b82f6'
 DEFAULT_AREA_ICON = 'fa-solid fa-layer-group'
+DEFAULT_SECTION_TITLE = 'Untitled list'
 DEFAULT_SECTIONS = (
-    ('Focus', 'Current priorities, quick lines, and open loops.'),
-    ('Notes', 'Full context and durable reference.'),
-    ('Lists', 'Checklists and task runs.'),
+    ('line', DEFAULT_SECTION_TITLE, 'Quick lines and open loops.'),
+    ('note', DEFAULT_SECTION_TITLE, 'Notes and durable reference.'),
+    ('list', DEFAULT_SECTION_TITLE, 'Lists and checklists.'),
+    ('task_list', DEFAULT_SECTION_TITLE, 'Area task lists.'),
 )
 
 
@@ -119,7 +121,7 @@ def _validate_linked_note(a, user, raw_note_id):
     return note_id, None
 
 
-def _validate_section(a, user, area, raw_section_id):
+def _validate_section(a, user, area, raw_section_id, block_type=None):
     if raw_section_id in (None, ''):
         return None, None
     try:
@@ -129,6 +131,8 @@ def _validate_section(a, user, area, raw_section_id):
     section = _area_section_query_for_user(a, user).filter_by(id=section_id, area_id=area.id).first()
     if not section:
         return None, 'Section not found'
+    if block_type and (section.block_type or 'line') != block_type:
+        return None, 'Section does not match this item type'
     return section_id, None
 
 
@@ -171,19 +175,73 @@ def _apply_area_payload(a, area, data, *, creating=False):
 def _seed_area_workspace(a, user, area):
     if _area_section_query_for_user(a, user).filter_by(area_id=area.id).first():
         return
-    for index, (title, description) in enumerate(DEFAULT_SECTIONS, start=1):
+    for block_type, title, description in DEFAULT_SECTIONS:
         a.db.session.add(
             a.AreaSection(
                 user_id=user.id,
                 area_id=area.id,
+                block_type=block_type,
                 title=title,
                 description=description,
-                order_index=index,
+                order_index=1,
             )
         )
 
 
+def _ensure_section_for_type(a, user, area, block_type, *, exclude_section_id=None):
+    block_type = (block_type or 'line').lower()
+    query = _area_section_query_for_user(a, user).filter_by(area_id=area.id, block_type=block_type)
+    if exclude_section_id is not None:
+        query = query.filter(a.AreaSection.id != exclude_section_id)
+    section = query.order_by(a.AreaSection.order_index.asc(), a.AreaSection.id.asc()).first()
+    if section:
+        return section
+
+    section = a.AreaSection(
+        user_id=user.id,
+        area_id=area.id,
+        block_type=block_type,
+        title=DEFAULT_SECTION_TITLE,
+        order_index=_next_order(a, a.AreaSection, user_id=user.id, area_id=area.id, block_type=block_type),
+    )
+    a.db.session.add(section)
+    a.db.session.flush()
+    return section
+
+
+def _ensure_area_workspace_lists(a, user, area):
+    for block_type, _title, _description in DEFAULT_SECTIONS:
+        _ensure_section_for_type(a, user, area, block_type)
+
+    sections = _area_section_query_for_user(a, user).filter_by(area_id=area.id).all()
+    section_map = {section.id: section for section in sections}
+    default_by_type = {
+        block_type: _ensure_section_for_type(a, user, area, block_type)
+        for block_type, _title, _description in DEFAULT_SECTIONS
+    }
+
+    changed = False
+    blocks = _area_block_query_for_user(a, user).filter_by(area_id=area.id).all()
+    for block in blocks:
+        block_type = block.block_type or 'line'
+        section = section_map.get(block.section_id)
+        if section and (section.block_type or 'line') == block_type:
+            continue
+        block.section_id = default_by_type[block_type].id
+        changed = True
+    if changed:
+        a.db.session.flush()
+
+
 def _apply_section_payload(section, data, *, creating=False):
+    if creating or 'block_type' in data or 'type' in data:
+        block_type = _trim(data.get('block_type') or data.get('type') or 'line', 30).lower()
+        if block_type not in AREA_BLOCK_TYPES:
+            return 'Section type must be line, note, list, or task_list'
+        if not creating and block_type != (section.block_type or 'line') and section.blocks:
+            return 'Section type cannot change while it has items'
+        section.block_type = block_type
+
     if creating or 'title' in data:
         title = _trim(data.get('title'), 120)
         if not title:
@@ -255,10 +313,14 @@ def _apply_block_payload(a, user, area, block, data, *, creating=False):
         block.block_type = block_type
 
     if 'section_id' in data:
-        section_id, section_error = _validate_section(a, user, area, data.get('section_id'))
+        section_id, section_error = _validate_section(a, user, area, data.get('section_id'), block.block_type)
         if section_error:
             return section_error
+        if section_id is None:
+            section_id = _ensure_section_for_type(a, user, area, block.block_type).id
         block.section_id = section_id
+    elif creating:
+        block.section_id = _ensure_section_for_type(a, user, area, block.block_type).id
 
     if 'title' in data:
         block.title = _trim(data.get('title'), 180) or None
@@ -803,6 +865,8 @@ def area_workspace(area_id):
     if not user:
         return a.jsonify({'error': 'No user selected'}), 401
     area = _area_query_for_user(a, user).filter_by(id=area_id).first_or_404()
+    _ensure_area_workspace_lists(a, user, area)
+    a.db.session.commit()
 
     sections = _area_section_query_for_user(a, user).filter_by(area_id=area.id).order_by(
         a.AreaSection.order_index.asc(),
@@ -833,20 +897,32 @@ def area_sections(area_id):
     if not user:
         return a.jsonify({'error': 'No user selected'}), 401
     area = _area_query_for_user(a, user).filter_by(id=area_id).first_or_404()
+    _ensure_area_workspace_lists(a, user, area)
+    a.db.session.commit()
 
     if a.request.method == 'GET':
-        sections = _area_section_query_for_user(a, user).filter_by(area_id=area.id).order_by(
+        query = _area_section_query_for_user(a, user).filter_by(area_id=area.id)
+        block_type = _trim(a.request.args.get('type') or a.request.args.get('block_type'), 30).lower()
+        if block_type:
+            if block_type not in AREA_BLOCK_TYPES:
+                return a.jsonify({'error': 'Invalid section type'}), 400
+            query = query.filter(a.AreaSection.block_type == block_type)
+        sections = query.order_by(
             a.AreaSection.order_index.asc(),
             a.AreaSection.id.asc(),
         ).all()
         return a.jsonify([section.to_dict() for section in sections])
 
     data = a.request.get_json(silent=True) or {}
+    block_type = _trim(data.get('block_type') or data.get('type') or 'line', 30).lower()
+    if block_type not in AREA_BLOCK_TYPES:
+        return a.jsonify({'error': 'Section type must be line, note, list, or task_list'}), 400
     section = a.AreaSection(
         user_id=user.id,
         area_id=area.id,
+        block_type=block_type,
         title='',
-        order_index=_next_order(a, a.AreaSection, user_id=user.id, area_id=area.id),
+        order_index=_next_order(a, a.AreaSection, user_id=user.id, area_id=area.id, block_type=block_type),
     )
     error = _apply_section_payload(section, data, creating=True)
     if error:
@@ -871,8 +947,15 @@ def area_section_detail(section_id):
         a.db.session.commit()
         return a.jsonify(section.to_dict())
 
+    replacement = _ensure_section_for_type(
+        a,
+        user,
+        section.area,
+        section.block_type or 'line',
+        exclude_section_id=section.id,
+    )
     for block in list(section.blocks or []):
-        block.section_id = None
+        block.section_id = replacement.id
     a.db.session.delete(section)
     a.db.session.commit()
     return '', 204
@@ -884,8 +967,10 @@ def area_blocks(area_id):
     if not user:
         return a.jsonify({'error': 'No user selected'}), 401
     area = _area_query_for_user(a, user).filter_by(id=area_id).first_or_404()
+    _ensure_area_workspace_lists(a, user, area)
 
     if a.request.method == 'GET':
+        a.db.session.commit()
         query = _area_block_query_for_user(a, user).filter_by(area_id=area.id)
         block_type = _trim(a.request.args.get('type') or a.request.args.get('block_type'), 30).lower()
         if block_type:
@@ -897,7 +982,7 @@ def area_blocks(area_id):
             if raw_section_id in (None, '', 'none', 'null'):
                 query = query.filter(a.AreaBlock.section_id.is_(None))
             else:
-                section_id, section_error = _validate_section(a, user, area, raw_section_id)
+                section_id, section_error = _validate_section(a, user, area, raw_section_id, block_type or None)
                 if section_error:
                     return a.jsonify({'error': section_error}), 400
                 query = query.filter(a.AreaBlock.section_id == section_id)
@@ -1016,9 +1101,12 @@ def _move_area_block_to_area(a, user, block, data):
     destination_area, area_error = _validate_destination_area(a, user, data.get('area_id'))
     if area_error:
         return None, area_error
-    section_id, section_error = _validate_section(a, user, destination_area, data.get('section_id'))
+    _ensure_area_workspace_lists(a, user, destination_area)
+    section_id, section_error = _validate_section(a, user, destination_area, data.get('section_id'), block.block_type)
     if section_error:
         return None, section_error
+    if section_id is None:
+        section_id = _ensure_section_for_type(a, user, destination_area, block.block_type).id
 
     block.area_id = destination_area.id
     block.section_id = section_id
@@ -1098,6 +1186,393 @@ def _area_task_block_to_todo_list(a, user, block):
     return todo_list
 
 
+def _cleanup_note_source_after_area_move(a, user, note):
+    if note.note_type == 'list':
+        list_item_ids = [item.id for item in (note.list_items or [])]
+        if list_item_ids:
+            linked_events = a.CalendarEvent.query.filter(
+                a.CalendarEvent.user_id == user.id,
+                a.CalendarEvent.note_list_item_id.in_(list_item_ids),
+            ).all()
+            for linked_event in linked_events:
+                a._cancel_reminder_job(linked_event)
+                a.delete_embedding(user.id, a.ENTITY_CALENDAR, linked_event.id)
+                a.db.session.delete(linked_event)
+
+    a.NoteLink.query.filter(
+        a.or_(a.NoteLink.source_note_id == note.id, a.NoteLink.target_note_id == note.id)
+    ).delete(synchronize_session=False)
+    a.db.session.delete(note)
+
+
+def _note_to_area_block(a, user, note, area, section_id=None):
+    note_type = note.note_type or 'note'
+    is_list = note_type == 'list'
+    block = a.AreaBlock(
+        user_id=user.id,
+        area_id=area.id,
+        section_id=section_id,
+        block_type='list' if is_list else 'note',
+        title=note.title or ('Untitled List' if is_list else 'Untitled Note'),
+        content='' if is_list else (note.content or ''),
+        checkbox_mode=bool(note.checkbox_mode) if is_list else False,
+        list_mode=_normalize_area_list_mode(note.list_mode) if is_list else 'standard',
+        order_index=_next_order(a, a.AreaBlock, user_id=user.id, area_id=area.id),
+    )
+    a.db.session.add(block)
+    a.db.session.flush()
+
+    if is_list:
+        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        items = sorted(note.list_items or [], key=lambda item: ((item.order_index or 0), item.id or 0))
+        for index, item in enumerate(items, start=1):
+            item_type, text = _parse_area_list_text(item.text)
+            checked = bool(item.checked)
+            a.db.session.add(
+                a.AreaBlockItem(
+                    user_id=user.id,
+                    area_id=area.id,
+                    block_id=block.id,
+                    item_type=item_type,
+                    text=text or 'Untitled item',
+                    note=item.note,
+                    inner_note=item.inner_note,
+                    link_text=item.link_text,
+                    link_url=item.link_url,
+                    status='done' if checked else 'open',
+                    checked=checked,
+                    scheduled_date=item.scheduled_date,
+                    completed_at=completed_at if checked else None,
+                    order_index=index,
+                )
+            )
+
+    return block
+
+
+def move_note_to_area_block(a, user, note, raw_area_id, raw_section_id=None):
+    destination_area, area_error = _validate_destination_area(a, user, raw_area_id)
+    if area_error:
+        return None, area_error
+    _ensure_area_workspace_lists(a, user, destination_area)
+    target_block_type = 'list' if (note.note_type or 'note') == 'list' else 'note'
+    section_id, section_error = _validate_section(a, user, destination_area, raw_section_id, target_block_type)
+    if section_error:
+        return None, section_error
+    if section_id is None:
+        section_id = _ensure_section_for_type(a, user, destination_area, target_block_type).id
+
+    block = _note_to_area_block(a, user, note, destination_area, section_id)
+    _cleanup_note_source_after_area_move(a, user, note)
+    return block, None
+
+
+def _cleanup_todo_list_source_after_area_move(a, user, todo_list):
+    todo_item_ids_to_remove = set()
+    for item in list(todo_list.items or []):
+        todo_item_ids_to_remove.add(item.id)
+        if item.linked_list:
+            for child_item in (item.linked_list.items or []):
+                todo_item_ids_to_remove.add(child_item.id)
+
+    if todo_item_ids_to_remove:
+        linked_events = a.CalendarEvent.query.filter(
+            a.CalendarEvent.user_id == user.id,
+            a.CalendarEvent.todo_item_id.in_(list(todo_item_ids_to_remove)),
+        ).all()
+        for linked_event in linked_events:
+            a._cancel_reminder_job(linked_event)
+            a.delete_embedding(user.id, a.ENTITY_CALENDAR, linked_event.id)
+            a.db.session.delete(linked_event)
+
+    for item in list(todo_list.items or []):
+        if item.linked_list:
+            a.delete_embedding(user.id, a.ENTITY_TODO_LIST, item.linked_list.id)
+            a.db.session.delete(item.linked_list)
+        a.delete_embedding(user.id, a.ENTITY_TODO_ITEM, item.id)
+    a.delete_embedding(user.id, a.ENTITY_TODO_LIST, todo_list.id)
+    a.db.session.delete(todo_list)
+
+
+def _todo_list_to_area_task_block(a, user, todo_list, area, section_id=None):
+    block = a.AreaBlock(
+        user_id=user.id,
+        area_id=area.id,
+        section_id=section_id,
+        block_type='task_list',
+        title=todo_list.title or 'Task list',
+        checkbox_mode=True,
+        list_mode='standard',
+        order_index=_next_order(a, a.AreaBlock, user_id=user.id, area_id=area.id),
+    )
+    a.db.session.add(block)
+    a.db.session.flush()
+
+    source_items = sorted(todo_list.items or [], key=lambda item: ((item.order_index or 0), item.id or 0))
+    phase_titles = {
+        item.id: item.content
+        for item in source_items
+        if item.ensure_phase_canonical().is_phase_header()
+    }
+    order_index = 1
+    for item in source_items:
+        item.ensure_phase_canonical()
+        if item.is_phase_header():
+            continue
+        details = item.description
+        phase_title = phase_titles.get(item.phase_id)
+        if phase_title:
+            phase_line = f'Phase: {phase_title}'
+            details = f'{phase_line}\n\n{details}' if details else phase_line
+        status = _ui_task_status_to_area(item.status)
+        a.db.session.add(
+            a.AreaBlockItem(
+                user_id=user.id,
+                area_id=area.id,
+                block_id=block.id,
+                item_type='item',
+                text=_trim(item.content, 500) or 'Task',
+                details=details,
+                note=item.notes,
+                status=status,
+                checked=status == 'done',
+                scheduled_date=item.due_date,
+                completed_at=item.completed_at,
+                order_index=order_index,
+            )
+        )
+        order_index += 1
+
+    return block
+
+
+def move_todo_list_to_area_block(a, user, todo_list, raw_area_id, raw_section_id=None):
+    if todo_list.type not in {'list', 'light'}:
+        return None, 'Only task lists and light task lists can move to Areas'
+    destination_area, area_error = _validate_destination_area(a, user, raw_area_id)
+    if area_error:
+        return None, area_error
+    _ensure_area_workspace_lists(a, user, destination_area)
+    section_id, section_error = _validate_section(a, user, destination_area, raw_section_id, 'task_list')
+    if section_error:
+        return None, section_error
+    if section_id is None:
+        section_id = _ensure_section_for_type(a, user, destination_area, 'task_list').id
+
+    block = _todo_list_to_area_task_block(a, user, todo_list, destination_area, section_id)
+    _cleanup_todo_list_source_after_area_move(a, user, todo_list)
+    return block, None
+
+
+def _area_list_marker_kind(item):
+    item_type = getattr(item, 'item_type', None) or 'item'
+    return item_type if item_type in {'section', 'subsection'} else None
+
+
+def _area_list_insert_index(items, *, section_id=None, subsection_id=None):
+    ordered = sorted(items, key=lambda item: ((item.order_index or 0), (item.id or 0)))
+
+    if subsection_id is not None:
+        marker_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if item.id == subsection_id and _area_list_marker_kind(item) == 'subsection'
+            ),
+            None,
+        )
+        if marker_index is None:
+            return None, 'The selected subsection no longer exists.'
+        for index in range(marker_index + 1, len(ordered)):
+            if _area_list_marker_kind(ordered[index]) in {'section', 'subsection'}:
+                return index, None
+        return len(ordered), None
+
+    if section_id is not None:
+        marker_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if item.id == section_id and _area_list_marker_kind(item) == 'section'
+            ),
+            None,
+        )
+        if marker_index is None:
+            return None, 'The selected section no longer exists.'
+        insert_index = len(ordered)
+        for index in range(marker_index + 1, len(ordered)):
+            marker_kind = _area_list_marker_kind(ordered[index])
+            if marker_kind in {'section', 'subsection'}:
+                insert_index = index
+                break
+        return insert_index, None
+
+    first_section = next(
+        (index for index, item in enumerate(ordered) if _area_list_marker_kind(item) == 'section'),
+        None,
+    )
+    return (first_section if first_section is not None else len(ordered)), None
+
+
+def _validate_area_list_route(items, *, section_id=None, subsection_id=None):
+    if subsection_id is None:
+        return section_id, None
+
+    ordered = sorted(items, key=lambda item: ((item.order_index or 0), (item.id or 0)))
+    current_section_id = None
+    subsection_parent_id = None
+    for item in ordered:
+        marker_kind = _area_list_marker_kind(item)
+        if marker_kind == 'section':
+            current_section_id = item.id
+        elif item.id == subsection_id and marker_kind == 'subsection':
+            subsection_parent_id = current_section_id
+            break
+
+    if subsection_parent_id is None:
+        return None, 'The selected subsection no longer exists.'
+    if section_id is not None and subsection_parent_id != section_id:
+        return None, 'The selected subsection is not in that section.'
+    return subsection_parent_id, None
+
+
+def _move_area_line_to_area_list(a, user, block, data):
+    if block.block_type != 'line':
+        return None, 'Only lines can move into an Area list'
+    try:
+        destination_id = int(data.get('destination_block_id') or data.get('list_block_id'))
+    except (TypeError, ValueError):
+        return None, 'Choose an Area list'
+    destination = _area_block_query_for_user(a, user).filter_by(id=destination_id, block_type='list').first()
+    if not destination:
+        return None, 'Destination is not a valid Area list'
+
+    items = _area_block_item_query_for_user(a, user).filter_by(block_id=destination.id).order_by(
+        a.AreaBlockItem.order_index.asc(),
+        a.AreaBlockItem.id.asc(),
+    ).all()
+    section_id = _parse_order_index(data.get('section_item_id') or data.get('section_id'))
+    subsection_id = _parse_order_index(data.get('subsection_item_id') or data.get('subsection_id'))
+    section_id, route_error = _validate_area_list_route(
+        items,
+        section_id=section_id,
+        subsection_id=subsection_id,
+    )
+    if route_error:
+        return None, route_error
+
+    insert_index, insert_error = _area_list_insert_index(
+        items,
+        section_id=section_id,
+        subsection_id=subsection_id,
+    )
+    if insert_error:
+        return None, insert_error
+
+    text = _trim(block.content, 500)
+    if not text:
+        return None, 'Line text is required'
+
+    item = a.AreaBlockItem(
+        user_id=user.id,
+        area_id=destination.area_id,
+        block_id=destination.id,
+        item_type='item',
+        text=text,
+        status='open',
+        checked=False,
+        order_index=(insert_index or 0) + 1,
+    )
+    ordered = list(items)
+    ordered.insert(insert_index, item)
+    for index, entry in enumerate(ordered, start=1):
+        entry.order_index = index
+
+    destination.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    a.db.session.add(item)
+    a.db.session.delete(block)
+    a.db.session.commit()
+    return {
+        'status': 'moved',
+        'target': 'area_list',
+        'block': destination.to_dict(include_items=True),
+        'item': item.to_dict(),
+        'url': f'/areas/{destination.area_id}/blocks/{destination.id}',
+    }, None
+
+
+def _move_area_line_to_area_task_list(a, user, block, data):
+    if block.block_type != 'line':
+        return None, 'Only lines can move into an Area task list'
+    try:
+        destination_id = int(data.get('destination_block_id') or data.get('task_block_id'))
+    except (TypeError, ValueError):
+        return None, 'Choose an Area task list'
+    destination = _area_block_query_for_user(a, user).filter_by(id=destination_id, block_type='task_list').first()
+    if not destination:
+        return None, 'Destination is not a valid Area task list'
+
+    text = _trim(block.content, 500)
+    if not text:
+        return None, 'Line text is required'
+
+    item = a.AreaBlockItem(
+        user_id=user.id,
+        area_id=destination.area_id,
+        block_id=destination.id,
+        item_type='item',
+        text=text,
+        status='open',
+        checked=False,
+        order_index=_next_order(a, a.AreaBlockItem, user_id=user.id, block_id=destination.id),
+    )
+    destination.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    a.db.session.add(item)
+    a.db.session.delete(block)
+    a.db.session.commit()
+    return {
+        'status': 'moved',
+        'target': 'area_task_list',
+        'block': destination.to_dict(include_items=True),
+        'item': item.to_dict(),
+        'url': f'/areas/{destination.area_id}/blocks/{destination.id}',
+    }, None
+
+
+def _move_area_line_to_light_task_list(a, user, block, data):
+    if block.block_type != 'line':
+        return None, 'Only lines can move into a light task list'
+    try:
+        destination_id = int(data.get('destination_list_id') or data.get('light_list_id'))
+    except (TypeError, ValueError):
+        return None, 'Choose a light task list'
+    todo_list = a.TodoList.query.filter_by(id=destination_id, user_id=user.id, type='light').first()
+    if not todo_list:
+        return None, 'Destination is not a valid light task list'
+
+    content = _trim(block.content, 500)
+    if not content:
+        return None, 'Line text is required'
+
+    item = a.TodoItem(
+        list_id=todo_list.id,
+        content=content,
+        status='not_started',
+        order_index=_next_order(a, a.TodoItem, list_id=todo_list.id),
+    )
+    a.db.session.add(item)
+    a.db.session.delete(block)
+    a.db.session.commit()
+    a.start_embedding_job(user.id, a.ENTITY_TODO_ITEM, item.id)
+    return {
+        'status': 'moved',
+        'target': 'light_task_list',
+        'list': todo_list.to_dict(),
+        'item': item.to_dict(),
+        'url': f'/list/{todo_list.id}',
+    }, None
+
+
 def move_area_block(block_id):
     a = _app_module()
     user = a.get_current_user()
@@ -1131,6 +1606,24 @@ def move_area_block(block_id):
             }
         ), 201
 
+    if target in {'area_list', 'list_item'}:
+        payload, error = _move_area_line_to_area_list(a, user, block, data)
+        if error:
+            return a.jsonify({'error': error}), 400
+        return a.jsonify(payload), 201
+
+    if target in {'area_task_list', 'area_light_task_list'}:
+        payload, error = _move_area_line_to_area_task_list(a, user, block, data)
+        if error:
+            return a.jsonify({'error': error}), 400
+        return a.jsonify(payload), 201
+
+    if target in {'light_task_list', 'light_tasks'}:
+        payload, error = _move_area_line_to_light_task_list(a, user, block, data)
+        if error:
+            return a.jsonify({'error': error}), 400
+        return a.jsonify(payload), 201
+
     if target in {'tasks', 'task'}:
         if block.block_type != 'task_list':
             return a.jsonify({'error': 'Only task lists can move to Tasks'}), 400
@@ -1146,7 +1639,7 @@ def move_area_block(block_id):
             }
         ), 201
 
-    return a.jsonify({'error': 'target must be area, notes, or tasks'}), 400
+    return a.jsonify({'error': 'target must be area, notes, tasks, area_list, area_task_list, or light_task_list'}), 400
 
 
 def area_block_items(block_id):

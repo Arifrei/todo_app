@@ -1,4 +1,5 @@
 import importlib
+from datetime import date
 
 
 def _load_test_app(tmp_path, monkeypatch, name='areas.db'):
@@ -174,22 +175,36 @@ def test_area_workspace_sections_blocks_and_rows(tmp_path, monkeypatch):
     area_id = response.get_json()['id']
 
     workspace = client.get(f'/api/areas/{area_id}/workspace').get_json()
-    assert workspace['area']['section_count'] == 3
-    assert [section['title'] for section in workspace['sections']] == ['Focus', 'Notes', 'Lists']
-    focus_id = workspace['sections'][0]['id']
+    assert workspace['area']['section_count'] == 4
+    sections_by_type = {section['block_type']: section for section in workspace['sections']}
+    assert set(sections_by_type) == {'line', 'note', 'list', 'task_list'}
+    assert all(section['title'] == 'Untitled list' for section in sections_by_type.values())
+    line_section_id = sections_by_type['line']['id']
+    task_section_id = sections_by_type['task_list']['id']
+
+    response = client.get(f'/api/areas/{area_id}/sections?block_type=note')
+    assert response.status_code == 200
+    assert [section['block_type'] for section in response.get_json()] == ['note']
 
     response = client.post(
         f'/api/areas/{area_id}/sections',
-        json={'title': 'Pipeline', 'description': 'Ideas moving toward action'},
+        json={'block_type': 'note', 'title': 'Pipeline', 'description': 'Ideas moving toward action'},
     )
     assert response.status_code == 201
-    custom_section_id = response.get_json()['id']
+    note_section_id = response.get_json()['id']
+
+    response = client.post(
+        f'/api/areas/{area_id}/sections',
+        json={'block_type': 'list', 'title': 'Sources', 'description': 'Reference lists'},
+    )
+    assert response.status_code == 201
+    list_section_id = response.get_json()['id']
 
     response = client.post(
         f'/api/areas/{area_id}/blocks',
         json={
             'block_type': 'line',
-            'section_id': focus_id,
+            'section_id': line_section_id,
             'content': 'Explore Google Workspace flows',
         },
     )
@@ -199,10 +214,44 @@ def test_area_workspace_sections_blocks_and_rows(tmp_path, monkeypatch):
     assert line_block['content'] == 'Explore Google Workspace flows'
 
     response = client.post(
+        f'/api/areas/{area_id}/sections',
+        json={'block_type': 'line', 'title': 'Later lines'},
+    )
+    assert response.status_code == 201
+    later_line_section_id = response.get_json()['id']
+
+    response = client.put(
+        f'/api/area-blocks/{line_block["id"]}',
+        json={'section_id': later_line_section_id},
+    )
+    assert response.status_code == 200
+    assert response.get_json()['section_id'] == later_line_section_id
+
+    response = client.put(
+        f'/api/area-blocks/{line_block["id"]}',
+        json={'section_id': None},
+    )
+    assert response.status_code == 200
+    fallback_line_section_id = response.get_json()['section_id']
+    assert fallback_line_section_id is not None
+    assert fallback_line_section_id in {line_section_id, later_line_section_id}
+
+    response = client.post(
         f'/api/areas/{area_id}/blocks',
         json={
             'block_type': 'note',
-            'section_id': custom_section_id,
+            'section_id': line_section_id,
+            'title': 'Wrong section',
+        },
+    )
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'Section does not match this item type'
+
+    response = client.post(
+        f'/api/areas/{area_id}/blocks',
+        json={
+            'block_type': 'note',
+            'section_id': note_section_id,
             'title': 'Client research pattern',
             'content': 'Capture sources, open questions, and next experiments.',
         },
@@ -228,7 +277,7 @@ def test_area_workspace_sections_blocks_and_rows(tmp_path, monkeypatch):
 
     response = client.post(
         f'/api/areas/{area_id}/blocks',
-        json={'block_type': 'list', 'section_id': custom_section_id, 'title': 'Sources'},
+        json={'block_type': 'list', 'section_id': list_section_id, 'title': 'Sources'},
     )
     assert response.status_code == 201
     list_block = response.get_json()
@@ -273,7 +322,7 @@ def test_area_workspace_sections_blocks_and_rows(tmp_path, monkeypatch):
 
     response = client.post(
         f'/api/areas/{area_id}/blocks',
-        json={'block_type': 'task_list', 'section_id': focus_id, 'title': 'Next actions'},
+        json={'block_type': 'task_list', 'section_id': task_section_id, 'title': 'Next actions'},
     )
     assert response.status_code == 201
     task_block = response.get_json()
@@ -352,9 +401,14 @@ def test_area_blocks_reorder_within_one_type(tmp_path, monkeypatch):
 
     response = client.post('/api/areas', json={'name': 'Operations'})
     area_id = response.get_json()['id']
-    sections = client.get(f'/api/areas/{area_id}/sections').get_json()
+    sections = client.get(f'/api/areas/{area_id}/sections?block_type=line').get_json()
     focus_id = sections[0]['id']
-    notes_id = sections[1]['id']
+    response = client.post(
+        f'/api/areas/{area_id}/sections',
+        json={'block_type': 'line', 'title': 'Later'},
+    )
+    assert response.status_code == 201
+    later_id = response.get_json()['id']
 
     first = client.post(
         f'/api/areas/{area_id}/blocks',
@@ -366,7 +420,7 @@ def test_area_blocks_reorder_within_one_type(tmp_path, monkeypatch):
     ).get_json()
     other_section = client.post(
         f'/api/areas/{area_id}/blocks',
-        json={'block_type': 'line', 'section_id': notes_id, 'content': 'Other section'},
+        json={'block_type': 'line', 'section_id': later_id, 'content': 'Other section'},
     ).get_json()
 
     response = client.post(
@@ -618,6 +672,30 @@ def test_area_blocks_move_to_other_area_notes_and_tasks(tmp_path, monkeypatch):
             block_type='line',
             content='Move this line',
         )
+        line_to_section_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_type='line',
+            content='Route to section',
+        )
+        line_to_subsection_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_type='line',
+            content='Route to subsection',
+        )
+        line_to_area_task_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_type='line',
+            content='Make an area task',
+        )
+        line_to_light_task_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_type='line',
+            content='Make a light task',
+        )
         list_block = app_module.AreaBlock(
             user_id=user.id,
             area_id=first_area.id,
@@ -632,46 +710,72 @@ def test_area_blocks_move_to_other_area_notes_and_tasks(tmp_path, monkeypatch):
             title='Area tasks',
             checkbox_mode=True,
         )
-        app_module.db.session.add_all([line_block, list_block, task_block])
-        app_module.db.session.flush()
-        app_module.db.session.add_all(
-            [
-                app_module.AreaBlockItem(
-                    user_id=user.id,
-                    area_id=first_area.id,
-                    block_id=list_block.id,
-                    item_type='section',
-                    text='Sources',
-                    order_index=1,
-                ),
-                app_module.AreaBlockItem(
-                    user_id=user.id,
-                    area_id=first_area.id,
-                    block_id=list_block.id,
-                    item_type='item',
-                    text='Read scan',
-                    note='Inline note',
-                    checked=True,
-                    order_index=2,
-                ),
-                app_module.AreaBlockItem(
-                    user_id=user.id,
-                    area_id=first_area.id,
-                    block_id=task_block.id,
-                    item_type='item',
-                    text='Draft recap',
-                    status='done',
-                    order_index=1,
-                ),
-            ]
+        light_list = app_module.TodoList(
+            user_id=user.id,
+            title='Quick tasks',
+            type='light',
         )
+        app_module.db.session.add_all([
+            line_block,
+            line_to_section_block,
+            line_to_subsection_block,
+            line_to_area_task_block,
+            line_to_light_task_block,
+            list_block,
+            task_block,
+            light_list,
+        ])
+        app_module.db.session.flush()
+        section_item = app_module.AreaBlockItem(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_id=list_block.id,
+            item_type='section',
+            text='Sources',
+            order_index=1,
+        )
+        subsection_item = app_module.AreaBlockItem(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_id=list_block.id,
+            item_type='subsection',
+            text='APIs',
+            order_index=2,
+        )
+        read_item = app_module.AreaBlockItem(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_id=list_block.id,
+            item_type='item',
+            text='Read scan',
+            note='Inline note',
+            checked=True,
+            order_index=3,
+        )
+        task_item = app_module.AreaBlockItem(
+            user_id=user.id,
+            area_id=first_area.id,
+            block_id=task_block.id,
+            item_type='item',
+            text='Draft recap',
+            status='done',
+            order_index=1,
+        )
+        app_module.db.session.add_all([section_item, subsection_item, read_item, task_item])
         app_module.db.session.commit()
         user_id = user.id
         second_area_id = second_area.id
         folder_id = folder.id
         line_block_id = line_block.id
+        line_to_section_block_id = line_to_section_block.id
+        line_to_subsection_block_id = line_to_subsection_block.id
+        line_to_area_task_block_id = line_to_area_task_block.id
+        line_to_light_task_block_id = line_to_light_task_block.id
         list_block_id = list_block.id
         task_block_id = task_block.id
+        light_list_id = light_list.id
+        section_item_id = section_item.id
+        subsection_item_id = subsection_item.id
 
     client = app_module.app.test_client()
     _login(client, user_id)
@@ -683,6 +787,56 @@ def test_area_blocks_move_to_other_area_notes_and_tasks(tmp_path, monkeypatch):
     assert response.status_code == 200
     moved_line = response.get_json()['block']
     assert moved_line['area_id'] == second_area_id
+
+    response = client.post(
+        f'/api/area-blocks/{line_to_section_block_id}/move',
+        json={
+            'target': 'area_list',
+            'destination_block_id': list_block_id,
+            'section_item_id': section_item_id,
+        },
+    )
+    assert response.status_code == 201
+    moved_section_item = response.get_json()['item']
+    assert moved_section_item['text'] == 'Route to section'
+
+    response = client.post(
+        f'/api/area-blocks/{line_to_subsection_block_id}/move',
+        json={
+            'target': 'area_list',
+            'destination_block_id': list_block_id,
+            'section_item_id': section_item_id,
+            'subsection_item_id': subsection_item_id,
+        },
+    )
+    assert response.status_code == 201
+    moved_subsection_item = response.get_json()['item']
+    assert moved_subsection_item['text'] == 'Route to subsection'
+    routed_items = response.get_json()['block']['items']
+    assert [item['text'] for item in routed_items] == [
+        'Sources',
+        'Route to section',
+        'APIs',
+        'Read scan',
+        'Route to subsection',
+    ]
+
+    response = client.post(
+        f'/api/area-blocks/{line_to_area_task_block_id}/move',
+        json={'target': 'area_task_list', 'destination_block_id': task_block_id},
+    )
+    assert response.status_code == 201
+    moved_area_task = response.get_json()['item']
+    assert moved_area_task['text'] == 'Make an area task'
+    assert response.get_json()['block']['block_type'] == 'task_list'
+
+    response = client.post(
+        f'/api/area-blocks/{line_to_light_task_block_id}/move',
+        json={'target': 'light_task_list', 'destination_list_id': light_list_id},
+    )
+    assert response.status_code == 201
+    moved_light_task = response.get_json()['item']
+    assert moved_light_task['content'] == 'Make a light task'
 
     response = client.post(
         f'/api/area-blocks/{list_block_id}/move',
@@ -700,18 +854,168 @@ def test_area_blocks_move_to_other_area_notes_and_tasks(tmp_path, monkeypatch):
     assert moved_list['title'] == 'Area tasks'
 
     with app_module.app.app_context():
+        assert app_module.AreaBlock.query.filter_by(id=line_to_section_block_id).first() is None
+        assert app_module.AreaBlock.query.filter_by(id=line_to_subsection_block_id).first() is None
+        assert app_module.AreaBlock.query.filter_by(id=line_to_area_task_block_id).first() is None
+        assert app_module.AreaBlock.query.filter_by(id=line_to_light_task_block_id).first() is None
         assert app_module.AreaBlock.query.filter_by(id=list_block_id).first() is None
         assert app_module.AreaBlock.query.filter_by(id=task_block_id).first() is None
         note = app_module.db.session.get(app_module.Note, moved_note['id'])
         assert note is not None
         assert note.folder_id == folder_id
-        assert [item.text for item in note.list_items] == ['[[section]] Sources', 'Read scan']
-        assert note.list_items[1].checked is True
+        assert [item.text for item in note.list_items] == [
+            '[[section]] Sources',
+            'Route to section',
+            '[[subsection]] APIs',
+            'Read scan',
+            'Route to subsection',
+        ]
+        assert note.list_items[3].checked is True
+        quick_list = app_module.db.session.get(app_module.TodoList, light_list_id)
+        assert quick_list is not None
+        assert quick_list.type == 'light'
+        assert [item.content for item in quick_list.items] == ['Make a light task']
         todo_list = app_module.db.session.get(app_module.TodoList, moved_list['id'])
         assert todo_list is not None
         assert todo_list.type == 'light'
-        assert [item.content for item in todo_list.items] == ['Draft recap']
+        assert [item.content for item in todo_list.items] == ['Draft recap', 'Make an area task']
         assert todo_list.items[0].status == 'done'
+
+
+def test_notes_and_note_lists_move_into_area_blocks(tmp_path, monkeypatch):
+    app_module = _load_test_app(tmp_path, monkeypatch, 'notes-to-area.db')
+
+    with app_module.app.app_context():
+        app_module.db.create_all()
+        user = _create_user(app_module, 'notes-to-area-owner')
+        area = app_module.Area(user_id=user.id, name='Home')
+        note = app_module.Note(
+            user_id=user.id,
+            title='Paint notes',
+            content='<p>Use eggshell finish.</p>',
+            note_type='note',
+        )
+        note_list = app_module.Note(
+            user_id=user.id,
+            title='Supply list',
+            note_type='list',
+            checkbox_mode=True,
+            list_mode='revolving',
+        )
+        app_module.db.session.add_all([area, note, note_list])
+        app_module.db.session.flush()
+        app_module.db.session.add_all([
+            app_module.NoteListItem(note_id=note_list.id, text='[[section]] Store', order_index=1),
+            app_module.NoteListItem(
+                note_id=note_list.id,
+                text='Brushes',
+                note='Buy angled brush',
+                inner_note='<p>Two inch.</p>',
+                scheduled_date=date(2026, 7, 1),
+                checked=True,
+                order_index=2,
+            ),
+        ])
+        app_module.db.session.commit()
+        user_id = user.id
+        area_id = area.id
+        note_id = note.id
+        note_list_id = note_list.id
+
+    client = app_module.app.test_client()
+    _login(client, user_id)
+
+    response = client.post(
+        '/api/notes/move',
+        json={'ids': [note_id, note_list_id], 'target': 'area', 'area_id': area_id},
+    )
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload['moved'] == 2
+
+    with app_module.app.app_context():
+        assert app_module.db.session.get(app_module.Note, note_id) is None
+        assert app_module.db.session.get(app_module.Note, note_list_id) is None
+        blocks = app_module.AreaBlock.query.filter_by(area_id=area_id).order_by(
+            app_module.AreaBlock.order_index.asc()
+        ).all()
+        assert [block.block_type for block in blocks] == ['note', 'list']
+        assert blocks[0].title == 'Paint notes'
+        assert blocks[0].content == '<p>Use eggshell finish.</p>'
+        assert blocks[1].title == 'Supply list'
+        assert blocks[1].checkbox_mode is True
+        assert blocks[1].list_mode == 'revolving'
+        assert [(item.item_type, item.text, item.checked) for item in blocks[1].items] == [
+            ('section', 'Store', False),
+            ('item', 'Brushes', True),
+        ]
+        assert blocks[1].items[1].note == 'Buy angled brush'
+        assert blocks[1].items[1].inner_note == '<p>Two inch.</p>'
+        assert blocks[1].items[1].scheduled_date == date(2026, 7, 1)
+
+
+def test_task_list_moves_into_area_task_block(tmp_path, monkeypatch):
+    app_module = _load_test_app(tmp_path, monkeypatch, 'task-list-to-area.db')
+
+    with app_module.app.app_context():
+        app_module.db.create_all()
+        user = _create_user(app_module, 'tasks-to-area-owner')
+        area = app_module.Area(user_id=user.id, name='Operations')
+        task_list = app_module.TodoList(user_id=user.id, title='Launch tasks', type='list')
+        app_module.db.session.add_all([area, task_list])
+        app_module.db.session.flush()
+        phase = app_module.TodoItem(
+            list_id=task_list.id,
+            content='Prep',
+            is_phase=True,
+            status='not_started',
+            order_index=1,
+        )
+        done_task = app_module.TodoItem(
+            list_id=task_list.id,
+            content='Draft brief',
+            description='One page',
+            notes='Include risks',
+            status='done',
+            phase=phase,
+            due_date=date(2026, 7, 2),
+            order_index=2,
+        )
+        open_task = app_module.TodoItem(
+            list_id=task_list.id,
+            content='Review budget',
+            status='not_started',
+            order_index=3,
+        )
+        app_module.db.session.add_all([phase, done_task, open_task])
+        app_module.db.session.commit()
+        user_id = user.id
+        area_id = area.id
+        list_id = task_list.id
+
+    client = app_module.app.test_client()
+    _login(client, user_id)
+
+    response = client.post(
+        f'/api/lists/{list_id}/move',
+        json={'target': 'area', 'area_id': area_id},
+    )
+    assert response.status_code == 201
+    block = response.get_json()['block']
+    assert block['block_type'] == 'task_list'
+    assert block['title'] == 'Launch tasks'
+
+    with app_module.app.app_context():
+        assert app_module.db.session.get(app_module.TodoList, list_id) is None
+        area_block = app_module.AreaBlock.query.filter_by(area_id=area_id, block_type='task_list').first()
+        assert area_block is not None
+        assert [item.text for item in area_block.items] == ['Draft brief', 'Review budget']
+        assert area_block.items[0].details == 'Phase: Prep\n\nOne page'
+        assert area_block.items[0].note == 'Include risks'
+        assert area_block.items[0].status == 'done'
+        assert area_block.items[0].checked is True
+        assert area_block.items[0].scheduled_date == date(2026, 7, 2)
+        assert area_block.items[1].status == 'open'
 
 
 def test_area_routes_enforce_user_ownership(tmp_path, monkeypatch):
@@ -733,6 +1037,7 @@ def test_area_routes_enforce_user_ownership(tmp_path, monkeypatch):
         second_section = app_module.AreaSection(
             user_id=second_user.id,
             area_id=second_area.id,
+            block_type='task_list',
             title='Private section',
         )
         app_module.db.session.add_all([second_item, second_section])

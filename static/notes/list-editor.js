@@ -2428,27 +2428,43 @@ function isMousePointerEvent(event) {
     return event.pointerType === 'mouse';
 }
 
+function getListEditorMenuBottomClearance(padding = 8) {
+    const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    const nav = document.getElementById('mobile-bottom-nav');
+    if (!nav || !viewportHeight || window.innerWidth > 1024) return padding;
+
+    const styles = window.getComputedStyle(nav);
+    if (styles.display === 'none' || styles.visibility === 'hidden') return padding;
+
+    const rect = nav.getBoundingClientRect();
+    const visibleNavHeight = Math.max(0, viewportHeight - Math.max(0, rect.top));
+    const navPeek = parseFloat(styles.getPropertyValue('--mobile-nav-peek')) || 31;
+    const navClearance = visibleNavHeight > 0 ? visibleNavHeight : navPeek;
+    return Math.max(padding, Math.ceil(navClearance + padding));
+}
+
 function positionListItemMenu(menu, anchor) {
     const viewportWidth = Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || 0);
     const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    const padding = 8;
+    const bottomLimit = Math.max(padding, viewportHeight - getListEditorMenuBottomClearance(padding));
     if (viewportWidth > 0) {
         menu.style.maxWidth = `${Math.max(180, viewportWidth - 16)}px`;
     }
     if (viewportHeight > 0) {
-        menu.style.maxHeight = `${Math.max(140, viewportHeight - 16)}px`;
+        menu.style.maxHeight = `${Math.max(80, bottomLimit - padding)}px`;
     }
     menu.style.overflowY = 'auto';
 
     const rect = anchor.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    const padding = 8;
     const usableWidth = Math.max(0, viewportWidth - (padding * 2));
-    const usableHeight = Math.max(0, viewportHeight - (padding * 2));
+    const usableHeight = Math.max(0, bottomLimit - padding);
     const menuWidth = Math.min(menuRect.width, usableWidth || menuRect.width);
     const menuHeight = Math.min(menuRect.height, usableHeight || menuRect.height);
 
     let topPos = rect.bottom + padding;
-    if (topPos + menuHeight > viewportHeight - padding) {
+    if (topPos + menuHeight > bottomLimit) {
         topPos = rect.top - menuHeight - padding;
     }
     if (topPos < padding) topPos = padding;
@@ -2924,24 +2940,25 @@ function openListBulkMoveMenu(anchor) {
 function positionBulkMenu(menu, button) {
     const viewportWidth = Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || 0);
     const viewportHeight = Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+    const padding = 8;
+    const bottomLimit = Math.max(padding, viewportHeight - getListEditorMenuBottomClearance(padding));
     if (viewportWidth > 0) {
         menu.style.maxWidth = `${Math.max(180, viewportWidth - 16)}px`;
     }
     if (viewportHeight > 0) {
-        menu.style.maxHeight = `${Math.max(140, viewportHeight - 16)}px`;
+        menu.style.maxHeight = `${Math.max(80, bottomLimit - padding)}px`;
     }
     menu.style.overflowY = 'auto';
 
     const rect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    const padding = 8;
     const usableWidth = Math.max(0, viewportWidth - (padding * 2));
-    const usableHeight = Math.max(0, viewportHeight - (padding * 2));
+    const usableHeight = Math.max(0, bottomLimit - padding);
     const menuWidth = Math.min(menuRect.width, usableWidth || menuRect.width);
     const menuHeight = Math.min(menuRect.height, usableHeight || menuRect.height);
 
     let topPos = rect.bottom + padding;
-    if (topPos + menuHeight > viewportHeight - padding) {
+    if (topPos + menuHeight > bottomLimit) {
         topPos = rect.top - menuHeight - padding;
     }
     if (topPos < padding) topPos = padding;
@@ -2979,8 +2996,9 @@ function nudgeFixedMenuIntoViewport(menu, padding = 8) {
     if (rect.left < padding) {
         leftPos += (padding - rect.left);
     }
-    if (rect.bottom > viewportHeight - padding) {
-        topPos -= (rect.bottom - (viewportHeight - padding));
+    const bottomLimit = Math.max(padding, viewportHeight - getListEditorMenuBottomClearance(padding));
+    if (rect.bottom > bottomLimit) {
+        topPos -= (rect.bottom - bottomLimit);
     }
     if (rect.top < padding) {
         topPos += (padding - rect.top);

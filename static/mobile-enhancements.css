@@ -536,6 +536,12 @@ input:-webkit-autofill:focus {
 
 /* Compact Header Mobile Optimizations */
 @media (max-width: 768px) {
+    :root {
+        --mobile-bottom-nav-handle-clearance: calc(31px + env(safe-area-inset-bottom, 0px));
+        --mobile-bulk-bottom-clearance: calc(var(--mobile-bottom-nav-handle-clearance) + 0.5rem);
+        --mobile-bulk-layer: 645;
+    }
+
     .list-header-compact {
         padding: 0.6rem 0.75rem;
         min-height: 52px;
@@ -582,9 +588,10 @@ input:-webkit-autofill:focus {
         left: 0.25rem !important;
         right: auto !important;
         top: auto !important;
-        bottom: 0.5rem !important;
+        bottom: var(--mobile-bulk-bottom-clearance) !important;
         width: max-content !important;
         max-width: calc(100vw - 0.5rem) !important;
+        z-index: var(--mobile-bulk-layer) !important;
         flex-direction: row !important;
         align-items: center !important;
         flex-wrap: nowrap !important;
@@ -748,7 +755,7 @@ input:-webkit-autofill:focus {
 
     .bulk-menu-dropdown {
         position: fixed;
-        bottom: 2.5rem;
+        bottom: calc(var(--mobile-bulk-bottom-clearance) + 2rem);
         left: 0.25rem;
         right: auto;
         min-width: 160px;
@@ -769,7 +776,7 @@ input:-webkit-autofill:focus {
 
     /* List page: slightly larger than global compact mode, but still on-screen */
     .list-view #bulk-actions {
-        inset: auto max(0.5rem, env(safe-area-inset-right, 0px)) calc(0.5rem + env(safe-area-inset-bottom, 0px)) max(0.5rem, env(safe-area-inset-left, 0px)) !important;
+        inset: auto max(0.5rem, env(safe-area-inset-right, 0px)) var(--mobile-bulk-bottom-clearance) max(0.5rem, env(safe-area-inset-left, 0px)) !important;
         width: auto !important;
         max-width: none !important;
         padding: 0.38rem 0.5rem !important;

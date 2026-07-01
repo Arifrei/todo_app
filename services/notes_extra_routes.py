@@ -168,21 +168,64 @@ def restore_note_folder(folder_id):
 
 
 def move_notes():
-    """Move one or more notes into a folder (or to root)."""
+    """Move one or more notes into a folder, to root, or into an Area."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     data = request.json or {}
     ids = data.get('ids')
-    folder_id = data.get('folder_id')
     if not isinstance(ids, list) or not ids:
         return jsonify({'error': 'ids array required'}), 400
+
+    target = str(data.get('target') or '').strip().lower()
+    notes = Note.query.filter(Note.user_id == user.id, Note.id.in_(ids)).all()
+    note_map = {n.id: n for n in notes}
+
+    if target in {'area', 'areas'}:
+        from services.areas_routes import move_note_to_area_block
+
+        pin = str(data.get('pin', '')).strip()
+        moving_notes = []
+        for raw_id in ids:
+            try:
+                nid = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            note = note_map.get(nid)
+            if not note:
+                continue
+            if note.is_pin_protected and (not pin or not user.check_notes_pin(pin)):
+                return jsonify({'error': 'Note is protected. Please enter notes PIN.'}), 403
+            moving_notes.append(note)
+
+        blocks = []
+        for note in moving_notes:
+            block, error = move_note_to_area_block(
+                _app_module,
+                user,
+                note,
+                data.get('area_id') or data.get('destination_id'),
+                data.get('section_id'),
+            )
+            if error:
+                db.session.rollback()
+                return jsonify({'error': error}), 400
+            blocks.append(block)
+
+        db.session.commit()
+        return jsonify({
+            'moved': len(blocks),
+            'target': 'area',
+            'area_id': blocks[0].area_id if blocks else None,
+            'blocks': [block.to_dict(include_items=True) for block in blocks],
+            'url': f'/areas/{blocks[0].area_id}' if blocks else None,
+        }), 201
+
+    folder_id = data.get('folder_id')
     folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
     if folder_id_int is not None:
         NoteFolder.query.filter_by(id=folder_id_int, user_id=user.id).first_or_404()
 
-    notes = Note.query.filter(Note.user_id == user.id, Note.id.in_(ids)).all()
-    note_map = {n.id: n for n in notes}
     updated = 0
     for raw_id in ids:
         try:

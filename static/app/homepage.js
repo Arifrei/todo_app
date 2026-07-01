@@ -1513,6 +1513,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target === overlapWarningModalEl && typeof closeOverlapWarningModal === 'function') closeOverlapWarningModal();
         const editListModal = document.getElementById('edit-list-modal');
         if (event.target === editListModal && typeof closeEditListModal === 'function') closeEditListModal();
+        const listAreaMoveModal = document.getElementById('list-area-move-modal');
+        if (event.target === listAreaMoveModal && typeof closeListMoveToAreaModal === 'function') closeListMoveToAreaModal();
         const listSectionModal = document.getElementById('list-section-modal');
         if (event.target === listSectionModal && typeof closeListSectionModal === 'function') closeListSectionModal();
 

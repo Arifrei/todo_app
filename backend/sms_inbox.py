@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 # Parsing
 # ---------------------------------------------------------------------------
 
-_KEYWORD_RE = re.compile(r'^\s*(?:to\s+)?(task|list|calendar)\b\s*(.*)', re.IGNORECASE | re.DOTALL)
+_KEYWORD_RE = re.compile(r'^\s*(?:to\s+)?(task|list|calendar|area)\b\s*(.*)', re.IGNORECASE | re.DOTALL)
 _TO_RE = re.compile(r'\bto\s+(.+?)(?=\s+(?:in|on|at)\b|$)', re.IGNORECASE)
 _IN_RE = re.compile(r'\bin\s+(.+?)(?=\s+(?:on|at)\b|$)', re.IGNORECASE)
 _ON_RE = re.compile(r'\bon\s+(.+?)(?=\s+at\b|$)', re.IGNORECASE)
@@ -81,6 +81,25 @@ def _parse_calendar_routing(remainder, result):
         result['time_str'] = m.group(1).strip()
 
 
+def _parse_area_routing(remainder, result):
+    """Parse area routing: <area name>[, <note or task-list block>] [on <date>] [at <time>]."""
+    route_part = (remainder or '').strip()
+    m = _AT_RE.search(route_part)
+    if m:
+        result['time_str'] = m.group(1).strip()
+        route_part = route_part[:m.start()].strip()
+    m = _ON_RE.search(route_part)
+    if m:
+        result['date_str'] = m.group(1).strip()
+        route_part = route_part[:m.start()].strip()
+    route_part = re.sub(r'^\s*to\s+', '', route_part, flags=re.IGNORECASE).strip()
+    parts = [p.strip() for p in route_part.split(',', 1) if p.strip()]
+    if len(parts) >= 1:
+        result['area_name'] = parts[0]
+    if len(parts) >= 2:
+        result['area_block_name'] = parts[1]
+
+
 def _parse_legacy_routing(routing, result):
     """Parse old-style routing without keyword. Returns route_kind or None."""
     m = _TO_RE.search(routing)
@@ -114,6 +133,7 @@ def parse_sms_text(raw_text):
         'date_str': None, 'time_str': None,
         'note_list_name': None, 'section_name': None,
         'subsection_name': None,
+        'area_name': None, 'area_block_name': None,
     }
 
     if ';' not in raw_text:
@@ -145,6 +165,9 @@ def parse_sms_text(raw_text):
     elif keyword == 'calendar':
         result['route_kind'] = 'calendar'
         _parse_calendar_routing(remainder, result)
+    elif keyword == 'area':
+        result['route_kind'] = 'area'
+        _parse_area_routing(remainder, result)
 
     return result
 
@@ -253,6 +276,31 @@ def _fuzzy_match_note(notes, name):
     substr = [n for n in notes if name_lower in n.title.lower()]
     if substr:
         return min(substr, key=lambda n: len(n.title))
+    return None
+
+
+def _fuzzy_match_area(areas, name):
+    """Return the best-matching Area for *name*, or None."""
+    name_lower = name.lower()
+    exact = [area for area in areas if area.name.lower() == name_lower]
+    if exact:
+        return min(exact, key=lambda area: len(area.name))
+    substr = [area for area in areas if name_lower in area.name.lower()]
+    if substr:
+        return min(substr, key=lambda area: len(area.name))
+    return None
+
+
+def _fuzzy_match_area_block(blocks, name):
+    """Return the best-matching titled Area block for *name*, or None."""
+    name_lower = name.lower()
+    candidates = [(block, (block.title or '').lower()) for block in blocks if block.title]
+    exact = [block for block, title in candidates if title == name_lower]
+    if exact:
+        return min(exact, key=lambda block: len(block.title or ''))
+    substr = [(block, title) for block, title in candidates if name_lower in title]
+    if substr:
+        return min(substr, key=lambda pair: len(pair[1]))[0]
     return None
 
 
@@ -412,6 +460,59 @@ def _resolve_calendar(parsed, today):
     }, True
 
 
+def _resolve_area(a, user, parsed, today):
+    """Resolve an 'area' keyword route.
+
+    With only an area name, create a line in the area. With a second comma-separated
+    target, route only to Area notes or Area task lists.
+    """
+    area_name = parsed.get('area_name')
+    block_name = parsed.get('area_block_name')
+    if not area_name:
+        return None, False
+
+    areas = a.Area.query.filter(
+        a.Area.user_id == user.id,
+        a.Area.archived_at.is_(None),
+    ).all()
+    matched_area = _fuzzy_match_area(areas, area_name)
+    if not matched_area:
+        return None, False
+
+    if not block_name:
+        return {
+            'kind': 'area_line',
+            'area_id': matched_area.id,
+            'text': parsed['content'],
+        }, True
+
+    blocks = a.AreaBlock.query.filter(
+        a.AreaBlock.user_id == user.id,
+        a.AreaBlock.area_id == matched_area.id,
+        a.AreaBlock.block_type.in_(['note', 'task_list']),
+    ).all()
+    matched_block = _fuzzy_match_area_block(blocks, block_name)
+    if not matched_block:
+        return None, False
+
+    if matched_block.block_type == 'note':
+        return {
+            'kind': 'area_note',
+            'block_id': matched_block.id,
+            'text': parsed['content'],
+        }, True
+
+    resolved_date = _resolve_date(parsed.get('date_str'), today)
+    destination = {
+        'kind': 'area_task',
+        'block_id': matched_block.id,
+        'title': parsed['content'],
+    }
+    if resolved_date:
+        destination['due_date'] = resolved_date.isoformat()
+    return destination, True
+
+
 def resolve_destination(a, user, parsed, today):
     """Map parsed SMS fields to a raw_destination dict for map_inbox_item.
 
@@ -424,6 +525,8 @@ def resolve_destination(a, user, parsed, today):
         return _resolve_note_list(a, user, parsed)
     if route_kind == 'calendar':
         return _resolve_calendar(parsed, today)
+    if route_kind == 'area':
+        return _resolve_area(a, user, parsed, today)
     return None, False
 
 

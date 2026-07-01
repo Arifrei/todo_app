@@ -13,12 +13,15 @@
         workspaceFilter: 'all',
         modalAreaId: null,
         sectionModalId: null,
+        sectionModalType: 'line',
         blockModalId: null,
         blockModalType: 'line',
         detailBlockId: null,
         moveBlockId: null,
         moveAreas: [],
         moveFolders: [],
+        moveLightLists: [],
+        moveAreaBlocksByArea: {},
         blockDrag: {
             sourceId: null,
             sourceType: null,
@@ -45,6 +48,13 @@
         list: { label: 'List', icon: 'fa-solid fa-list-ul', tone: 'list' },
         task_list: { label: 'Task list', icon: 'fa-solid fa-list-check', tone: 'task' },
     };
+
+    function paneGroupLabel(blockType) {
+        if (blockType === 'task_list') return 'task list';
+        if (blockType === 'list') return 'list group';
+        const meta = typeMeta[blockType] || typeMeta.line;
+        return `${meta.label.toLowerCase()} list`;
+    }
 
     const $ = (selector, root = document) => root.querySelector(selector);
     const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -147,6 +157,15 @@
             if (menu === exceptMenu) return;
             menu.classList.remove('open');
             const trigger = menu.querySelector('.area-card-menu-trigger');
+            if (trigger) trigger.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+    function closeBlockActionMenus(exceptMenu = null) {
+        $$('.area-block-action-menu.open').forEach((menu) => {
+            if (menu === exceptMenu) return;
+            menu.classList.remove('open');
+            const trigger = menu.querySelector('.area-block-action-trigger');
             if (trigger) trigger.setAttribute('aria-expanded', 'false');
         });
     }
@@ -337,13 +356,30 @@
         $('#area-stat-done').textContent = state.area.done_count || 0;
     }
 
-    function blocksForSection(sectionId) {
+    function sectionBlockType(section) {
+        const blockType = (section?.block_type || section?.type || 'line').toString();
+        return typeMeta[blockType] ? blockType : 'line';
+    }
+
+    function sectionsForType(blockType) {
+        return state.sections
+            .filter((section) => sectionBlockType(section) === blockType)
+            .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || a.id - b.id);
+    }
+
+    function defaultSectionIdForType(blockType) {
+        const sections = sectionsForType(blockType);
+        return sections.length ? sections[0].id : null;
+    }
+
+    function blocksForSection(sectionId, blockType = null) {
         return state.blocks
             .filter((block) => {
                 const blockSectionId = block.section_id == null ? null : Number(block.section_id);
                 return blockSectionId === sectionId;
             })
             .filter((block) => {
+                if (blockType) return block.block_type === blockType;
                 if (state.workspaceFilter === 'all') return true;
                 return block.block_type === state.workspaceFilter;
             })
@@ -360,11 +396,42 @@
         return sectionId == null || sectionId === '' ? null : Number(sectionId);
     }
 
-    function sectionName(sectionId) {
-        const normalized = normalizedSectionId(sectionId);
-        if (normalized === null) return 'Unsectioned';
-        const section = state.sections.find((entry) => Number(entry.id) === normalized);
-        return section ? section.title || 'Section' : 'Section';
+    function paneSectionKey(section) {
+        return `section:${section.id}`;
+    }
+
+    function collapsedPaneSectionsKey(blockType) {
+        return `todo_app_area_${state.areaId || 'new'}_${blockType}_collapsed_sections`;
+    }
+
+    function readCollapsedPaneSections(blockType) {
+        try {
+            const raw = window.localStorage?.getItem(collapsedPaneSectionsKey(blockType));
+            const values = raw ? JSON.parse(raw) : [];
+            return new Set(Array.isArray(values) ? values : []);
+        } catch {
+            return new Set();
+        }
+    }
+
+    function writeCollapsedPaneSections(blockType, keys) {
+        try {
+            window.localStorage?.setItem(collapsedPaneSectionsKey(blockType), JSON.stringify([...keys]));
+        } catch {
+            // Local storage is optional; collapse state can be session-only if it is unavailable.
+        }
+    }
+
+    function isPaneSectionCollapsed(blockType, sectionKey) {
+        return readCollapsedPaneSections(blockType).has(sectionKey);
+    }
+
+    function togglePaneSection(blockType, sectionKey) {
+        const collapsed = readCollapsedPaneSections(blockType);
+        if (collapsed.has(sectionKey)) collapsed.delete(sectionKey);
+        else collapsed.add(sectionKey);
+        writeCollapsedPaneSections(blockType, collapsed);
+        renderWorkspace();
     }
 
     function findBlock(blockId) {
@@ -535,7 +602,7 @@
         const blockType = state.blockDrag.sourceType;
         const originalIds = [...(state.blockDrag.originalIds || [])];
         const orderedIds = blockType ? domBlockIdsForPane(blockType) : [];
-        const changed = !!blockType && orderedIds.length > 0 && !idsEqual(orderedIds, originalIds);
+        const changed = !!blockType && orderedIds.length === originalIds.length && !idsEqual(orderedIds, originalIds);
         resetBlockDragState();
         if (changed) await persistBlockOrder(blockType, orderedIds);
     }
@@ -617,7 +684,7 @@
         const blockType = state.blockTouchDrag.sourceType;
         const originalIds = [...(state.blockTouchDrag.originalIds || [])];
         const orderedIds = blockType ? domBlockIdsForPane(blockType) : [];
-        const changed = !!blockType && orderedIds.length > 0 && !idsEqual(orderedIds, originalIds);
+        const changed = !!blockType && orderedIds.length === originalIds.length && !idsEqual(orderedIds, originalIds);
         resetBlockTouchState();
         if (changed) await persistBlockOrder(blockType, orderedIds);
     }
@@ -846,9 +913,6 @@
         const button = el('a', 'area-object-link');
         button.href = `/areas/${state.areaId}/blocks/${block.id}`;
 
-        const sectionBadge = el('span', 'area-block-section-badge', sectionName(block.section_id));
-        button.appendChild(sectionBadge);
-
         const title = el('h3', 'area-block-title', blockTitle(block));
         button.appendChild(title);
 
@@ -945,16 +1009,55 @@
         dragHandle.addEventListener('touchcancel', handleBlockTouchEnd);
         actions.appendChild(dragHandle);
 
-        const moveBtn = el('button', 'area-icon-btn area-move-btn');
-        moveBtn.type = 'button';
-        moveBtn.title = 'Move item';
-        moveBtn.appendChild(icon('fa-solid fa-arrow-right'));
-        moveBtn.addEventListener('click', (event) => {
+        const menu = el('div', 'area-card-menu area-block-action-menu');
+        const menuBtn = el('button', 'area-icon-btn area-block-action-trigger');
+        menuBtn.type = 'button';
+        menuBtn.title = 'More actions';
+        menuBtn.setAttribute('aria-label', 'More actions');
+        menuBtn.setAttribute('aria-haspopup', 'menu');
+        menuBtn.setAttribute('aria-expanded', 'false');
+        menuBtn.appendChild(icon('fa-solid fa-ellipsis-vertical'));
+        menuBtn.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
+            const shouldOpen = !menu.classList.contains('open');
+            closeBlockActionMenus(menu);
+            menu.classList.toggle('open', shouldOpen);
+            menuBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+        });
+
+        const dropdown = el('div', 'area-card-dropdown area-block-action-dropdown');
+        dropdown.setAttribute('role', 'menu');
+
+        const editItem = el('button', 'area-card-menu-item');
+        editItem.type = 'button';
+        editItem.setAttribute('role', 'menuitem');
+        editItem.appendChild(icon('fa-solid fa-pen'));
+        editItem.appendChild(el('span', '', 'Edit'));
+        editItem.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeBlockActionMenus();
+            openBlockModal(block.block_type, block);
+        });
+        dropdown.appendChild(editItem);
+
+        const moveItem = el('button', 'area-card-menu-item area-move-btn');
+        moveItem.type = 'button';
+        moveItem.setAttribute('role', 'menuitem');
+        moveItem.appendChild(icon('fa-solid fa-arrow-right'));
+        moveItem.appendChild(el('span', '', 'Move'));
+        moveItem.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeBlockActionMenus();
             openMoveModal(block);
         });
-        actions.appendChild(moveBtn);
+        dropdown.appendChild(moveItem);
+
+        menu.appendChild(menuBtn);
+        menu.appendChild(dropdown);
+        actions.appendChild(menu);
 
         const deleteBtn = el('button', 'area-icon-btn danger');
         deleteBtn.type = 'button';
@@ -970,12 +1073,7 @@
         card.appendChild(header);
 
         if (block.block_type === 'line') {
-            const sectionBadge = el('span', 'area-block-section-badge', sectionName(block.section_id));
-            card.appendChild(sectionBadge);
-            const lineButton = el('button', 'area-line-content area-line-open', block.content || '');
-            lineButton.type = 'button';
-            lineButton.addEventListener('click', () => openBlockModal(block.block_type, block));
-            card.appendChild(lineButton);
+            card.appendChild(el('p', 'area-line-content', block.content || ''));
         } else if (block.block_type === 'note') {
             card.appendChild(buildAreaTile(block));
         } else {
@@ -985,28 +1083,70 @@
         return card;
     }
 
-    function buildSectionLane(section) {
-        const sectionId = section ? section.id : null;
-        const lane = el('section', 'area-section-lane');
-        if (sectionId) lane.id = `area-section-${sectionId}`;
+    function buildPaneSectionHeader(blockType, section, blocks) {
+        const meta = typeMeta[blockType] || typeMeta.line;
+        const sectionKey = paneSectionKey(section);
+        const collapsed = isPaneSectionCollapsed(blockType, sectionKey);
+        const titleText = section.title || 'Untitled list';
+        const header = el('div', `area-pane-section-header${collapsed ? ' collapsed' : ''}`);
+        header.dataset.sectionKey = sectionKey;
+        header.id = `area-section-${section.id}`;
 
-        const blocks = blocksForSection(sectionId);
-        const header = el('div', 'area-section-header');
-        const copy = el('div');
-        copy.appendChild(el('h2', '', section ? section.title : 'Unsectioned'));
+        const main = el('button', 'area-pane-section-main');
+        main.type = 'button';
+        main.title = collapsed ? 'Expand list' : 'Collapse list';
+        main.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        main.appendChild(icon(collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'));
+
+        const copy = el('div', 'area-pane-section-copy');
+        copy.appendChild(el('h3', '', titleText));
         if (section && section.description) copy.appendChild(el('p', '', section.description));
-        header.appendChild(copy);
+        main.appendChild(copy);
+        main.appendChild(el('span', 'area-pane-section-count', String(blocks.length)));
+        main.addEventListener('click', () => togglePaneSection(blockType, sectionKey));
+        header.appendChild(main);
 
-        lane.appendChild(header);
+        const actions = el('div', 'area-pane-section-actions');
+        const addBtn = el('button', 'area-pane-section-action');
+        addBtn.type = 'button';
+        addBtn.title = `Add ${meta.label.toLowerCase()} to ${titleText}`;
+        addBtn.setAttribute('aria-label', `Add ${meta.label.toLowerCase()} to ${titleText}`);
+        addBtn.appendChild(icon('fa-solid fa-plus'));
+        addBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openBlockModal(blockType, null, section.id);
+        });
+        actions.appendChild(addBtn);
 
-        const body = el('div', 'area-section-body');
+        const editBtn = el('button', 'area-pane-section-action');
+        editBtn.type = 'button';
+        editBtn.title = 'Rename or edit list';
+        editBtn.setAttribute('aria-label', 'Rename or edit list');
+        editBtn.appendChild(icon('fa-solid fa-pen'));
+        editBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openSectionModal(section, blockType);
+        });
+        actions.appendChild(editBtn);
+
+        header.appendChild(actions);
+        return header;
+    }
+
+    function appendPaneSectionGroup(pane, blockType, section, blocks) {
+        const sectionKey = paneSectionKey(section);
+        pane.appendChild(buildPaneSectionHeader(blockType, section, blocks));
+        if (isPaneSectionCollapsed(blockType, sectionKey)) return;
+
         if (!blocks.length) {
-            body.appendChild(el('p', 'area-section-empty', state.workspaceFilter === 'all' ? 'Ready for a line, note, list, or task list.' : 'No matching blocks in this section.'));
-        } else {
-            blocks.forEach((block) => body.appendChild(buildBlockCard(block)));
+            const empty = el('p', 'area-pane-section-empty', `No ${typeMeta[blockType].label.toLowerCase()}s in this list yet.`);
+            pane.appendChild(empty);
+            return;
         }
-        lane.appendChild(body);
-        return lane;
+
+        blocks.forEach((block) => pane.appendChild(buildBlockCard(block)));
     }
 
     function renderTypePane(blockType, paneId, countId) {
@@ -1014,6 +1154,7 @@
         const count = document.getElementById(countId);
         if (!pane) return;
         const blocks = blocksForType(blockType);
+        const sections = sectionsForType(blockType);
         if (pane.dataset.areaDragInit !== 'true') {
             pane.dataset.areaDragInit = 'true';
             pane.addEventListener('dragover', (event) => handleBlockPaneDragOver(event, pane.dataset.blockType));
@@ -1023,13 +1164,22 @@
         pane.innerHTML = '';
         if (count) count.textContent = String(blocks.length);
 
-        if (!blocks.length) {
+        if (!blocks.length && !sections.length) {
             const empty = el('p', 'area-pane-empty', `No ${typeMeta[blockType].label.toLowerCase()}s yet.`);
             pane.appendChild(empty);
             return;
         }
 
-        blocks.forEach((block) => pane.appendChild(buildBlockCard(block)));
+        const sectionIds = new Set(sections.map((section) => Number(section.id)));
+        const unsectionedBlocks = blocks.filter((block) => {
+            const sectionId = normalizedSectionId(block.section_id);
+            return sectionId === null || !sectionIds.has(sectionId);
+        });
+        sections.forEach((section, index) => {
+            const sectionBlocks = blocksForSection(Number(section.id), blockType);
+            if (index === 0) sectionBlocks.push(...unsectionedBlocks);
+            appendPaneSectionGroup(pane, blockType, section, sectionBlocks);
+        });
     }
 
     function renderWorkspace() {
@@ -1055,9 +1205,10 @@
         }
     }
 
-    function openSectionModal(section = null) {
+    function openSectionModal(section = null, blockType = null) {
         state.sectionModalId = section ? section.id : null;
-        $('#area-section-modal-title').textContent = section ? 'Edit section' : 'Add section';
+        state.sectionModalType = section ? sectionBlockType(section) : (blockType || state.sectionModalType || 'line');
+        $('#area-section-modal-title').textContent = section ? 'Edit list' : `Add ${paneGroupLabel(state.sectionModalType)}`;
         $('#area-section-title-input').value = section ? section.title || '' : '';
         $('#area-section-description-input').value = section ? section.description || '' : '';
         openModal('area-section-modal');
@@ -1065,6 +1216,7 @@
 
     async function saveSectionFromModal() {
         const payload = {
+            block_type: state.sectionModalType || 'line',
             title: $('#area-section-title-input').value.trim(),
             description: $('#area-section-description-input').value.trim() || null,
         };
@@ -1090,23 +1242,34 @@
         }
     }
 
-    function fillSectionSelect(selectedSectionId) {
+    function fillSectionSelect(selectedSectionId, blockType = state.blockModalType) {
         const select = $('#area-block-section-select');
         if (!select) return;
+        const group = $('#area-block-section-group');
+        const sections = sectionsForType(blockType);
+        const hasSections = sections.length > 0;
+        if (group) group.hidden = !hasSections;
         select.innerHTML = '';
 
-        const unsectioned = document.createElement('option');
-        unsectioned.value = '';
-        unsectioned.textContent = 'Unsectioned';
-        select.appendChild(unsectioned);
+        if (!hasSections) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Create a list first';
+            option.disabled = true;
+            select.appendChild(option);
+            select.disabled = true;
+            return;
+        }
 
-        state.sections.forEach((section) => {
+        select.disabled = false;
+
+        sections.forEach((section) => {
             const option = document.createElement('option');
             option.value = String(section.id);
             option.textContent = section.title;
             select.appendChild(option);
         });
-        select.value = selectedSectionId ? String(selectedSectionId) : '';
+        select.value = selectedSectionId ? String(selectedSectionId) : String(sections[0].id);
     }
 
     function renderBlockTypePicker(type, editable = true) {
@@ -1140,6 +1303,8 @@
         if (!menu || !button) return;
         menu.classList.toggle('open', isOpen);
         button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        button.setAttribute('aria-label', isOpen ? 'Close add menu' : 'Add area item');
+        button.title = isOpen ? 'Close add menu' : 'Add area item';
     }
 
     function setAreaActionsMenuOpen(isOpen) {
@@ -1171,15 +1336,22 @@
     function handleAreaAddType(type) {
         setAreaAddMenuOpen(false);
         if (!type) return;
+        if (type === 'section') {
+            openSectionModal(null, 'line');
+            return;
+        }
         openBlockModal(type);
     }
 
-    function openBlockModal(type, block = null, preferredSectionId = null) {
+    function openBlockModal(type, block = null, preferredSectionId = undefined) {
         state.blockModalId = block ? block.id : null;
         state.blockModalType = block ? block.block_type : type;
         const meta = typeMeta[state.blockModalType] || typeMeta.line;
         $('#area-block-modal-title').textContent = block ? `Edit ${meta.label.toLowerCase()}` : `Add ${meta.label.toLowerCase()}`;
-        fillSectionSelect(block ? block.section_id : preferredSectionId);
+        const selectedSectionId = block
+            ? block.section_id
+            : (preferredSectionId !== undefined ? preferredSectionId : defaultSectionIdForType(state.blockModalType));
+        fillSectionSelect(selectedSectionId, state.blockModalType);
         renderBlockTypePicker(state.blockModalType, !block);
         configureBlockModalFields(state.blockModalType);
         $('#area-block-title-input').value = block ? block.title || '' : '';
@@ -1193,7 +1365,7 @@
         const sectionValue = sectionSelect ? sectionSelect.value : '';
         const payload = {
             block_type: type,
-            section_id: sectionValue ? Number(sectionValue) : null,
+            section_id: sectionValue ? Number(sectionValue) : defaultSectionIdForType(type),
         };
 
         if (type === 'line') {
@@ -1295,6 +1467,15 @@
     }
 
     function moveTargetsForBlock(block) {
+        if (block.block_type === 'line') {
+            return [
+                { id: 'area_list', label: 'Area list item' },
+                { id: 'area_task_list', label: 'Area task list' },
+                { id: 'area', label: 'Another area' },
+                { id: 'notes', label: 'Notes module' },
+                { id: 'light_task_list', label: 'Tasks module light list' },
+            ];
+        }
         const targets = [{ id: 'area', label: 'Another area' }];
         if (['line', 'note', 'list'].includes(block.block_type)) {
             targets.push({ id: 'notes', label: 'Notes module' });
@@ -1305,42 +1486,203 @@
         return targets;
     }
 
-    function updateMoveFields() {
+    function buildMoveSectionOptions(block) {
+        const currentSectionId = normalizedSectionId(block?.section_id);
+        const options = [];
+        sectionsForType(block?.block_type || 'line').forEach((section) => {
+            const sectionId = Number(section.id);
+            options.push({
+                id: sectionId,
+                label: sectionId === currentSectionId
+                    ? `${section.title || 'Untitled list'} (current)`
+                    : section.title || 'Untitled list',
+            });
+        });
+        return options;
+    }
+
+    function sortedBlockItems(block) {
+        return [...(block?.items || [])].sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || a.id - b.id);
+    }
+
+    function buildAreaListRouteOptions(block) {
+        const options = [{ id: 'top', label: 'Top level' }];
+        let currentSection = null;
+        sortedBlockItems(block).forEach((item) => {
+            const type = item.item_type || 'item';
+            if (type === 'section') {
+                currentSection = item;
+                options.push({ id: `section:${item.id}`, label: item.text || 'Untitled section' });
+            } else if (type === 'subsection' && currentSection) {
+                options.push({
+                    id: `subsection:${item.id}:${currentSection.id}`,
+                    label: `${currentSection.text || 'Untitled section'} > ${item.text || 'Untitled subsection'}`,
+                });
+            }
+        });
+        return options;
+    }
+
+    function buildAreaMoveOptions() {
+        const currentLabel = state.area?.name ? `${state.area.name} (current)` : 'Current area';
+        const options = [{ id: state.areaId, label: currentLabel }];
+        state.moveAreas
+            .filter((area) => Number(area.id) !== Number(state.areaId))
+            .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+            .forEach((area) => options.push({ id: area.id, label: area.name || 'Untitled area' }));
+        return options;
+    }
+
+    function cachedMoveBlocksForArea(areaId) {
+        const normalizedId = Number(areaId || state.areaId);
+        if (Number(normalizedId) === Number(state.areaId)) return state.blocks;
+        return state.moveAreaBlocksByArea[String(normalizedId)] || [];
+    }
+
+    async function loadMoveBlocksForArea(areaId) {
+        const normalizedId = Number(areaId || state.areaId);
+        if (Number(normalizedId) === Number(state.areaId)) return state.blocks;
+        const key = String(normalizedId);
+        if (state.moveAreaBlocksByArea[key]) return state.moveAreaBlocksByArea[key];
+        const blocks = await api(`/api/areas/${normalizedId}/blocks`);
+        state.moveAreaBlocksByArea[key] = blocks || [];
+        return state.moveAreaBlocksByArea[key];
+    }
+
+    function buildAreaListMoveOptions(blocks, sourceBlock) {
+        return blocks
+            .filter((entry) => entry.block_type === 'list' && Number(entry.id) !== Number(sourceBlock.id))
+            .sort((a, b) => blockTitle(a).localeCompare(blockTitle(b)))
+            .map((entry) => ({ id: entry.id, label: blockTitle(entry) }));
+    }
+
+    function buildAreaTaskMoveOptions(blocks, sourceBlock) {
+        return blocks
+            .filter((entry) => entry.block_type === 'task_list' && Number(entry.id) !== Number(sourceBlock.id))
+            .sort((a, b) => blockTitle(a).localeCompare(blockTitle(b)))
+            .map((entry) => ({ id: entry.id, label: blockTitle(entry) }));
+    }
+
+    function updateMoveListRouteOptions() {
+        const selectedAreaId = Number($('#area-move-destination-area')?.value || state.areaId);
+        const targetListId = Number($('#area-move-list')?.value || 0);
+        const targetList = cachedMoveBlocksForArea(selectedAreaId).find((block) => Number(block.id) === targetListId);
+        setSelectOptions($('#area-move-list-route'), targetList ? buildAreaListRouteOptions(targetList) : []);
+    }
+
+    async function refreshMoveAreaDestinations() {
+        const block = findBlock(state.moveBlockId);
         const target = $('#area-move-target')?.value || 'area';
-        setHidden($('#area-move-area-group'), target !== 'area');
-        setHidden($('#area-move-folder-group'), target !== 'notes');
+        if (!block || !['area_list', 'area_task_list'].includes(target)) return;
+        const areaId = Number($('#area-move-destination-area')?.value || state.areaId);
+        try {
+            const blocks = await loadMoveBlocksForArea(areaId);
+            if (target === 'area_list') {
+                setSelectOptions($('#area-move-list'), buildAreaListMoveOptions(blocks, block));
+                updateMoveListRouteOptions();
+            } else {
+                setSelectOptions($('#area-move-task-list'), buildAreaTaskMoveOptions(blocks, block));
+            }
+        } catch (error) {
+            notify(error.message || 'Could not load area destinations', 'error');
+        }
+    }
+
+    function updateMoveFields() {
+        const scope = $('#area-move-scope')?.value || 'same_section';
+        const target = $('#area-move-target')?.value || 'area';
+        const movingExternally = scope === 'another_section';
+        setHidden($('#area-move-section-group'), scope !== 'same_section');
+        setHidden($('#area-move-target-group'), !movingExternally);
+        setHidden($('#area-move-area-group'), !movingExternally || target !== 'area');
+        setHidden($('#area-move-folder-group'), !movingExternally || target !== 'notes');
+        setHidden($('#area-move-destination-area-group'), !movingExternally || !['area_list', 'area_task_list'].includes(target));
+        setHidden($('#area-move-list-group'), !movingExternally || target !== 'area_list');
+        setHidden($('#area-move-list-route-group'), !movingExternally || target !== 'area_list');
+        setHidden($('#area-move-task-list-group'), !movingExternally || target !== 'area_task_list');
+        setHidden($('#area-move-light-list-group'), !movingExternally || target !== 'light_task_list');
+        if (movingExternally && (target === 'area_list' || target === 'area_task_list')) refreshMoveAreaDestinations();
     }
 
     async function openMoveModal(block) {
         state.moveBlockId = block.id;
+        state.moveAreaBlocksByArea = { [String(state.areaId)]: state.blocks };
         $('#area-move-item-label').textContent = blockTitle(block);
+        if ($('#area-move-scope')) $('#area-move-scope').value = 'same_section';
+        setSelectOptions($('#area-move-section'), buildMoveSectionOptions(block));
         setSelectOptions($('#area-move-target'), moveTargetsForBlock(block));
 
         try {
-            const [areas, folders] = await Promise.all([
+            const [areas, folders, lightLists] = await Promise.all([
                 api('/api/areas?archived=0'),
                 api('/api/note-folders'),
+                api('/api/lists?type=light'),
             ]);
             state.moveAreas = areas || [];
             state.moveFolders = folders || [];
+            state.moveLightLists = lightLists || [];
         } catch (error) {
             state.moveAreas = [];
             state.moveFolders = [];
+            state.moveLightLists = [];
             notify(error.message || 'Could not load move destinations', 'error');
         }
 
         const areaOptions = state.moveAreas
             .filter((area) => Number(area.id) !== Number(state.areaId))
             .map((area) => ({ id: area.id, label: area.name || 'Untitled area' }));
+        const lightListOptions = state.moveLightLists.map((list) => ({
+            id: list.id,
+            label: list.title || 'Untitled list',
+        }));
         setSelectOptions($('#area-move-area'), areaOptions);
+        setSelectOptions($('#area-move-destination-area'), buildAreaMoveOptions());
+        if ($('#area-move-destination-area')) $('#area-move-destination-area').value = String(state.areaId);
         setSelectOptions($('#area-move-folder'), buildFolderOptions(state.moveFolders));
+        setSelectOptions($('#area-move-light-list'), lightListOptions);
         updateMoveFields();
         openModal('area-move-modal');
+    }
+
+    function applyAreaListRoutePayload(payload) {
+        const routeValue = $('#area-move-list-route')?.value || 'top';
+        if (routeValue.startsWith('section:')) {
+            payload.section_item_id = Number(routeValue.split(':')[1]);
+        } else if (routeValue.startsWith('subsection:')) {
+            const parts = routeValue.split(':');
+            payload.subsection_item_id = Number(parts[1]);
+            payload.section_item_id = Number(parts[2]);
+        }
     }
 
     async function saveMoveFromModal() {
         const block = findBlock(state.moveBlockId);
         if (!block) return;
+        const scope = $('#area-move-scope')?.value || 'same_section';
+
+        if (scope === 'same_section') {
+            const sectionValue = $('#area-move-section')?.value || '';
+            const sectionId = Number(sectionValue);
+            if (!sectionValue || !Number.isFinite(sectionId)) {
+                notify('Choose a list first', 'warning');
+                return;
+            }
+            if (sectionId === normalizedSectionId(block.section_id)) {
+                closeModal('area-move-modal');
+                state.moveBlockId = null;
+                notify('Item is already in that list', 'info');
+                return;
+            }
+            confirmAction('Move this item to the selected list?', async () => {
+                const updated = await updateBlock(block.id, { section_id: sectionId });
+                if (!updated) return;
+                closeModal('area-move-modal');
+                state.moveBlockId = null;
+                notify('Item moved', 'success');
+            });
+            return;
+        }
+
         const target = $('#area-move-target')?.value || 'area';
         const payload = { target };
 
@@ -1353,11 +1695,39 @@
             payload.area_id = Number(areaValue);
         } else if (target === 'notes') {
             payload.folder_id = $('#area-move-folder')?.value || null;
+        } else if (target === 'area_list') {
+            const listValue = $('#area-move-list')?.value || '';
+            if (!listValue) {
+                notify('Choose an Area list first', 'warning');
+                return;
+            }
+            payload.destination_block_id = Number(listValue);
+            applyAreaListRoutePayload(payload);
+        } else if (target === 'area_task_list') {
+            const listValue = $('#area-move-task-list')?.value || '';
+            if (!listValue) {
+                notify('Choose an Area task list first', 'warning');
+                return;
+            }
+            payload.destination_block_id = Number(listValue);
+        } else if (target === 'light_task_list') {
+            const listValue = $('#area-move-light-list')?.value || '';
+            if (!listValue) {
+                notify('Choose a light task list first', 'warning');
+                return;
+            }
+            payload.destination_list_id = Number(listValue);
         }
 
-        const message = target === 'area'
-            ? 'Move this item to another area?'
-            : `Move this item to the ${target === 'tasks' ? 'Tasks' : 'Notes'} module? It will leave this area.`;
+        const moveMessages = {
+            area: 'Move this item to another area?',
+            area_list: 'Move this line into the selected Area list?',
+            area_task_list: 'Move this line into the selected Area task list?',
+            light_task_list: 'Move this line into the selected Tasks module light list?',
+            notes: 'Move this item to the Notes module? It will leave this area.',
+            tasks: 'Move this item to the Tasks module? It will leave this area.',
+        };
+        const message = moveMessages[target] || 'Move this item?';
         confirmAction(message, async () => {
             try {
                 const result = await api(`/api/area-blocks/${block.id}/move`, {
@@ -1367,6 +1737,10 @@
                 closeModal('area-move-modal');
                 state.moveBlockId = null;
                 state.blocks = state.blocks.filter((entry) => entry.id !== block.id);
+                if (result && result.block && Number(result.block.area_id) === Number(state.areaId)) {
+                    const index = state.blocks.findIndex((entry) => entry.id === result.block.id);
+                    if (index !== -1) state.blocks[index] = result.block;
+                }
                 renderWorkspace();
                 if (result && result.url) {
                     notify('Item moved', 'success');
@@ -1424,7 +1798,10 @@
         $('#area-block-modal-cancel')?.addEventListener('click', () => closeModal('area-block-modal'));
         $('#area-move-save')?.addEventListener('click', saveMoveFromModal);
         $('#area-move-cancel')?.addEventListener('click', () => closeModal('area-move-modal'));
+        $('#area-move-scope')?.addEventListener('change', updateMoveFields);
         $('#area-move-target')?.addEventListener('change', updateMoveFields);
+        $('#area-move-destination-area')?.addEventListener('change', refreshMoveAreaDestinations);
+        $('#area-move-list')?.addEventListener('change', updateMoveListRouteOptions);
         $('#area-block-detail-close')?.addEventListener('click', () => {
             state.detailBlockId = null;
             closeModal('area-block-detail-modal');
@@ -1443,14 +1820,19 @@
         $$('[data-area-add-type]').forEach((button) => {
             button.addEventListener('click', () => handleAreaAddType(button.dataset.areaAddType));
         });
+        $$('[data-area-add-section-type]').forEach((button) => {
+            button.addEventListener('click', () => openSectionModal(null, button.dataset.areaAddSectionType || 'line'));
+        });
         document.addEventListener('click', (event) => {
             if (!event.target.closest('#area-add-menu')) setAreaAddMenuOpen(false);
             if (!event.target.closest('#area-actions-menu')) setAreaActionsMenuOpen(false);
+            if (!event.target.closest('.area-block-action-menu')) closeBlockActionMenus();
         });
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 setAreaAddMenuOpen(false);
                 setAreaActionsMenuOpen(false);
+                closeBlockActionMenus();
             }
         });
         $$('[data-block-modal-type]').forEach((button) => {
@@ -1461,6 +1843,7 @@
                 $('#area-block-modal-title').textContent = `Add ${meta.label.toLowerCase()}`;
                 renderBlockTypePicker(state.blockModalType, true);
                 configureBlockModalFields(state.blockModalType);
+                fillSectionSelect(defaultSectionIdForType(state.blockModalType), state.blockModalType);
             });
         });
         $$('[data-workspace-filter]').forEach((button) => {

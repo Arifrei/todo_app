@@ -115,6 +115,11 @@
             <button class="header-menu-item" data-onclick="openEditListModal(); toggleHeaderMenu(event);">
                 <i class="fa-solid fa-pen"></i> Rename List
             </button>
+            {% if not area_task_context and todo_list.type in ['list', 'light'] %}
+            <button class="header-menu-item" data-onclick="openListMoveToAreaModal(); toggleHeaderMenu(event);">
+                <i class="fa-solid fa-layer-group"></i> Move to Area
+            </button>
+            {% endif %}
             <button class="header-menu-item danger" data-onclick="{% if area_task_context %}deleteAreaTaskList({{ todo_list.id }});{% else %}deleteList({{ todo_list.id }});{% endif %}">
                 <i class="fa-solid fa-trash"></i> Delete List
             </button>
@@ -598,6 +603,21 @@ Task 3 ::: notes"></textarea>
         <div class="modal-actions">
             <button class="btn" data-onclick="closeEditListModal()">Cancel</button>
             <button class="btn btn-primary" data-onclick="saveListTitle()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Move List to Area Modal -->
+<div class="modal" id="list-area-move-modal" role="dialog" aria-modal="true" aria-labelledby="list-area-move-title">
+    <div class="modal-content" tabindex="-1">
+        <h2 id="list-area-move-title">Move to Area</h2>
+        <div class="form-group">
+            <label for="list-area-move-target">Area</label>
+            <select id="list-area-move-target" class="form-control"></select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" data-onclick="closeListMoveToAreaModal()">Cancel</button>
+            <button class="btn btn-primary" data-onclick="moveCurrentListToArea()">Move</button>
         </div>
     </div>
 </div>

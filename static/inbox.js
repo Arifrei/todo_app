@@ -203,6 +203,23 @@ function updateInboxNoteListSubsections(selectedSubsectionId) {
     if (subsectionSelect) subsectionSelect.disabled = !section || !section.subsections.length;
 }
 
+function updateInboxAreaListSections(selectedSectionId, selectedSubsectionId) {
+    const blockId = Number(document.getElementById('inbox-area-list-target')?.value || 0);
+    const areaList = (inboxState.destinations?.area_lists || []).find(entry => entry.id === blockId);
+    inboxSetSelectOptions('inbox-area-list-section', areaList?.sections || [], 'Top level', selectedSectionId);
+    updateInboxAreaListSubsections(selectedSubsectionId);
+}
+
+function updateInboxAreaListSubsections(selectedSubsectionId) {
+    const blockId = Number(document.getElementById('inbox-area-list-target')?.value || 0);
+    const sectionId = Number(document.getElementById('inbox-area-list-section')?.value || 0);
+    const areaList = (inboxState.destinations?.area_lists || []).find(entry => entry.id === blockId);
+    const section = areaList?.sections?.find(entry => entry.id === sectionId);
+    inboxSetSelectOptions('inbox-area-list-subsection', section?.subsections || [], 'No subsection', selectedSubsectionId);
+    const subsectionSelect = document.getElementById('inbox-area-list-subsection');
+    if (subsectionSelect) subsectionSelect.disabled = !section || !section.subsections.length;
+}
+
 function showInboxMapKind(kind) {
     document.querySelectorAll('.inbox-map-fields').forEach(group => {
         const isActive = group.dataset.kind === kind;
@@ -230,6 +247,15 @@ function showInboxMapKind(kind) {
         if (subsectionSelect) {
             subsectionSelect.disabled = !section || !section.subsections.length;
         }
+    } else if (kind === 'area_list') {
+        const blockId = Number(document.getElementById('inbox-area-list-target')?.value || 0);
+        const sectionId = Number(document.getElementById('inbox-area-list-section')?.value || 0);
+        const areaList = (inboxState.destinations?.area_lists || []).find(entry => entry.id === blockId);
+        const section = areaList?.sections?.find(entry => entry.id === sectionId);
+        const subsectionSelect = document.getElementById('inbox-area-list-subsection');
+        if (subsectionSelect) {
+            subsectionSelect.disabled = !section || !section.subsections.length;
+        }
     }
 }
 
@@ -252,6 +278,11 @@ async function openInboxMapper(itemId) {
     inboxSetSelectOptions('inbox-note-target', inboxState.destinations.notes || [], 'Choose a note');
     inboxSetSelectOptions('inbox-note-list-target', inboxState.destinations.note_lists || [], 'Choose a Notes list');
     updateInboxNoteListSections();
+    inboxSetSelectOptions('inbox-area-line-target', inboxState.destinations.areas || [], 'Choose an area');
+    inboxSetSelectOptions('inbox-area-note-target', inboxState.destinations.area_notes || [], 'Choose an Area note');
+    inboxSetSelectOptions('inbox-area-list-target', inboxState.destinations.area_lists || [], 'Choose an Area list');
+    updateInboxAreaListSections();
+    inboxSetSelectOptions('inbox-area-task-target', inboxState.destinations.area_task_lists || [], 'Choose an Area task list');
 
     inboxFillValue('inbox-task-description', '');
     inboxFillValue('inbox-task-notes', '');
@@ -269,6 +300,11 @@ async function openInboxMapper(itemId) {
     inboxFillValue('inbox-note-list-date', '');
     inboxFillValue('inbox-note-list-start', '');
     inboxFillValue('inbox-note-list-end', '');
+    inboxFillValue('inbox-area-task-description', '');
+    inboxFillValue('inbox-area-task-notes', '');
+    inboxFillValue('inbox-area-task-date', '');
+    inboxFillValue('inbox-area-list-note', '');
+    inboxFillValue('inbox-area-list-date', '');
 
     inboxFillValue('inbox-task-reminder', '');
     inboxFillValue('inbox-calendar-reminder', '');
@@ -324,17 +360,52 @@ function collectInboxDestination() {
             text: title
         };
     }
+    if (kind === 'note_list') {
+        return {
+            kind,
+            note_id: inboxNullableNumber(document.getElementById('inbox-note-list-target').value),
+            section_id: inboxNullableNumber(document.getElementById('inbox-note-list-section').value),
+            subsection_id: inboxNullableNumber(document.getElementById('inbox-note-list-subsection').value),
+            text: title,
+            note: document.getElementById('inbox-note-list-note').value,
+            scheduled_date: document.getElementById('inbox-note-list-date').value,
+            start_time: document.getElementById('inbox-note-list-start').value,
+            end_time: document.getElementById('inbox-note-list-end').value,
+            reminder_minutes_before: document.getElementById('inbox-note-list-reminder').value
+        };
+    }
+    if (kind === 'area_line') {
+        return {
+            kind,
+            area_id: inboxNullableNumber(document.getElementById('inbox-area-line-target').value),
+            text: title
+        };
+    }
+    if (kind === 'area_note') {
+        return {
+            kind,
+            block_id: inboxNullableNumber(document.getElementById('inbox-area-note-target').value),
+            text: title
+        };
+    }
+    if (kind === 'area_list') {
+        return {
+            kind,
+            block_id: inboxNullableNumber(document.getElementById('inbox-area-list-target').value),
+            section_id: inboxNullableNumber(document.getElementById('inbox-area-list-section').value),
+            subsection_id: inboxNullableNumber(document.getElementById('inbox-area-list-subsection').value),
+            text: title,
+            note: document.getElementById('inbox-area-list-note').value,
+            scheduled_date: document.getElementById('inbox-area-list-date').value
+        };
+    }
     return {
         kind,
-        note_id: inboxNullableNumber(document.getElementById('inbox-note-list-target').value),
-        section_id: inboxNullableNumber(document.getElementById('inbox-note-list-section').value),
-        subsection_id: inboxNullableNumber(document.getElementById('inbox-note-list-subsection').value),
-        text: title,
-        note: document.getElementById('inbox-note-list-note').value,
-        scheduled_date: document.getElementById('inbox-note-list-date').value,
-        start_time: document.getElementById('inbox-note-list-start').value,
-        end_time: document.getElementById('inbox-note-list-end').value,
-        reminder_minutes_before: document.getElementById('inbox-note-list-reminder').value
+        block_id: inboxNullableNumber(document.getElementById('inbox-area-task-target').value),
+        title,
+        description: document.getElementById('inbox-area-task-description').value,
+        notes: document.getElementById('inbox-area-task-notes').value,
+        due_date: document.getElementById('inbox-area-task-date').value
     };
 }
 
@@ -388,6 +459,8 @@ function initInboxPage() {
     document.getElementById('inbox-task-list')?.addEventListener('change', () => updateInboxTaskPhases());
     document.getElementById('inbox-note-list-target')?.addEventListener('change', () => updateInboxNoteListSections());
     document.getElementById('inbox-note-list-section')?.addEventListener('change', () => updateInboxNoteListSubsections());
+    document.getElementById('inbox-area-list-target')?.addEventListener('change', () => updateInboxAreaListSections());
+    document.getElementById('inbox-area-list-section')?.addEventListener('change', () => updateInboxAreaListSubsections());
     document.getElementById('inbox-map-form')?.addEventListener('submit', event => {
         event.preventDefault();
         submitInboxMapping();

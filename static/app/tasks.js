@@ -165,6 +165,30 @@ function setAriaExpandedForControls(controlledId, expanded) {
     });
 }
 
+function getBulkMenuViewportHeight() {
+    return Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+}
+
+function getBulkMenuBottomClearance(padding = 8) {
+    const viewportHeight = getBulkMenuViewportHeight();
+    const nav = document.getElementById('mobile-bottom-nav');
+    if (!nav || !viewportHeight || window.innerWidth > 1024) return padding;
+
+    const styles = window.getComputedStyle(nav);
+    if (styles.display === 'none' || styles.visibility === 'hidden') return padding;
+
+    const rect = nav.getBoundingClientRect();
+    const visibleNavHeight = Math.max(0, viewportHeight - Math.max(0, rect.top));
+    const navPeek = parseFloat(styles.getPropertyValue('--mobile-nav-peek')) || 31;
+    const navClearance = visibleNavHeight > 0 ? visibleNavHeight : navPeek;
+    return Math.max(padding, Math.ceil(navClearance + padding));
+}
+
+function getBulkMenuBottomLimit(padding = 8) {
+    const viewportHeight = getBulkMenuViewportHeight() || window.innerHeight;
+    return Math.max(padding, viewportHeight - getBulkMenuBottomClearance(padding));
+}
+
 function toggleBulkMenu(event, forceClose = false) {
     if (event) event.stopPropagation();
     const menu = document.getElementById('bulk-menu-dropdown');
@@ -213,10 +237,12 @@ function toggleBulkMenu(event, forceClose = false) {
         menu.style.right = '';
         menu.style.top = '';
         const padding = 8;
+        const viewportHeight = getBulkMenuViewportHeight() || window.innerHeight;
+        const bottomClearance = getBulkMenuBottomClearance(padding);
         const menuWidth = menu.offsetWidth || 220;
         let left = rect.right - menuWidth;
         left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
-        const bottom = Math.max(padding, window.innerHeight - rect.top + 8);
+        const bottom = Math.max(bottomClearance, viewportHeight - rect.top + padding);
         menu.style.left = `${left}px`;
         menu.style.bottom = `${bottom}px`;
     };
@@ -229,14 +255,16 @@ function toggleBulkMenu(event, forceClose = false) {
             menu.style.right = '';
             menu.style.bottom = '';
             const padding = 8;
+            const bottomLimit = getBulkMenuBottomLimit(padding);
             const menuWidth = menu.offsetWidth || 220;
+            const menuHeight = menu.offsetHeight || 0;
             let left = rect.right - menuWidth;
             left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
             let top = rect.bottom + 8;
-            if (top + menu.offsetHeight > window.innerHeight - padding) {
-                top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+            if (top + menuHeight > bottomLimit) {
+                top = Math.max(padding, rect.top - menuHeight - 8);
             }
-            const maxTop = window.innerHeight - menu.offsetHeight - padding;
+            const maxTop = bottomLimit - menuHeight;
             top = Math.max(padding, Math.min(top, maxTop));
             menu.style.left = `${left}px`;
             menu.style.top = `${top}px`;
@@ -316,15 +344,18 @@ window.addEventListener('scroll', () => {
         menu.style.position = 'fixed';
         menu.style.right = '';
         menu.style.top = '';
-        const bottom = Math.max(padding, window.innerHeight - rect.top + 8);
+        const viewportHeight = getBulkMenuViewportHeight() || window.innerHeight;
+        const bottom = Math.max(getBulkMenuBottomClearance(padding), viewportHeight - rect.top + padding);
         menu.style.bottom = `${bottom}px`;
         return;
     }
     let top = rect.bottom + 8;
-    if (top + menu.offsetHeight > window.innerHeight - padding) {
-        top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+    const bottomLimit = getBulkMenuBottomLimit(padding);
+    const menuHeight = menu.offsetHeight || 0;
+    if (top + menuHeight > bottomLimit) {
+        top = Math.max(padding, rect.top - menuHeight - 8);
     }
-    const maxTop = window.innerHeight - menu.offsetHeight - padding;
+    const maxTop = bottomLimit - menuHeight;
     top = Math.max(padding, Math.min(top, maxTop));
     menu.style.top = `${top}px`;
 }, { passive: true });
@@ -340,6 +371,7 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        menu.style.bottom = '';
         setAriaExpandedForControls('calendar-bulk-more-dropdown', false);
         return;
     }
@@ -349,6 +381,7 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
       if (!shouldShow) {
           restoreCalendarNoteChoiceDropdown(menu);
           setAriaExpandedForControls('calendar-bulk-more-dropdown', false);
+          menu.style.bottom = '';
           return;
       }
     setAriaExpandedForControls('calendar-bulk-more-dropdown', true);
@@ -357,14 +390,19 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
         const rect = event.currentTarget.getBoundingClientRect();
         menu.style.position = 'fixed';
         menu.style.right = '';
+        menu.style.bottom = '';
         const padding = 8;
+        const bottomLimit = getBulkMenuBottomLimit(padding);
         const menuWidth = menu.offsetWidth || 200;
+        const menuHeight = menu.offsetHeight || 0;
         let left = rect.right - menuWidth;
         left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
         let top = rect.bottom + 8;
-        if (top + menu.offsetHeight > window.innerHeight - padding) {
-            top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+        if (top + menuHeight > bottomLimit) {
+            top = Math.max(padding, rect.top - menuHeight - 8);
         }
+        const maxTop = bottomLimit - menuHeight;
+        top = Math.max(padding, Math.min(top, maxTop));
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         menu.dataset.anchorId = event.currentTarget.id || '';
@@ -373,6 +411,7 @@ function toggleCalendarBulkMenu(event, forceClose = false) {
         menu.style.top = '';
         menu.style.left = '';
         menu.style.right = '';
+        menu.style.bottom = '';
         menu.dataset.anchorId = '';
     }
 }
@@ -398,9 +437,13 @@ window.addEventListener('scroll', () => {
     let left = rect.right - menuWidth;
     left = Math.max(padding, Math.min(left, window.innerWidth - menuWidth - padding));
     let top = rect.bottom + 8;
-    if (top + menu.offsetHeight > window.innerHeight - padding) {
-        top = Math.max(padding, rect.top - menu.offsetHeight - 8);
+    const bottomLimit = getBulkMenuBottomLimit(padding);
+    const menuHeight = menu.offsetHeight || 0;
+    if (top + menuHeight > bottomLimit) {
+        top = Math.max(padding, rect.top - menuHeight - 8);
     }
+    const maxTop = bottomLimit - menuHeight;
+    top = Math.max(padding, Math.min(top, maxTop));
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
 }, { passive: true });

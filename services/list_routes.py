@@ -144,3 +144,43 @@ def handle_list(list_id):
         return jsonify(todo_list.to_dict())
 
     return jsonify(todo_list.to_dict())
+
+
+def move_list(list_id):
+    import app as a
+
+    TodoList = a.TodoList
+    db = a.db
+    get_current_user = a.get_current_user
+    jsonify = a.jsonify
+    request = a.request
+
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    todo_list = TodoList.query.filter_by(id=list_id, user_id=user.id).first_or_404()
+    data = request.get_json(silent=True) or {}
+    target = str(data.get('target') or '').strip().lower()
+    if target not in {'area', 'areas'}:
+        return jsonify({'error': 'target must be area'}), 400
+
+    from services.areas_routes import move_todo_list_to_area_block
+
+    block, error = move_todo_list_to_area_block(
+        a,
+        user,
+        todo_list,
+        data.get('area_id') or data.get('destination_id'),
+        data.get('section_id'),
+    )
+    if error:
+        db.session.rollback()
+        return jsonify({'error': error}), 400
+    db.session.commit()
+    return jsonify({
+        'status': 'moved',
+        'target': 'area',
+        'area_id': block.area_id,
+        'block': block.to_dict(include_items=True),
+        'url': f'/areas/{block.area_id}/blocks/{block.id}',
+    }), 201

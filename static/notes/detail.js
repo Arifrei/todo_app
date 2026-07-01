@@ -484,6 +484,7 @@ function closeNoteMoveModal() {
     noteMoveState.destinationFolderId = null;
     noteMoveState.navStack = [];
     noteMoveState.itemType = 'note';
+    noteMoveState.areas = [];
     updateNoteMoveBackButton();
 }
 
@@ -532,6 +533,17 @@ function renderNoteMoveRoot() {
         renderNoteMoveFolderList(null, 'Folders');
     });
     panel.appendChild(browseBtn);
+
+    if (!isFolderMove) {
+        const areaBtn = document.createElement('button');
+        areaBtn.className = 'btn';
+        areaBtn.innerHTML = '<i class="fa-solid fa-layer-group" style="margin-right: 0.5rem;"></i>Browse areas';
+        areaBtn.addEventListener('click', () => {
+            pushNoteMoveView(renderNoteMoveAreaList);
+            renderNoteMoveAreaList();
+        });
+        panel.appendChild(areaBtn);
+    }
 }
 
 function renderNoteMoveFolderList(parentId, titleText) {
@@ -611,6 +623,72 @@ async function performNoteMove(folderId) {
     } catch (err) {
         console.error('Error moving notes:', err);
         showToast('Could not move', 'error');
+    }
+}
+
+async function loadNoteMoveAreas() {
+    if (Array.isArray(noteMoveState.areas) && noteMoveState.areas.length) {
+        return noteMoveState.areas;
+    }
+    const res = await fetch('/api/areas?archived=0');
+    if (!res.ok) throw new Error('Could not load areas');
+    const areas = await res.json();
+    noteMoveState.areas = Array.isArray(areas) ? areas : [];
+    return noteMoveState.areas;
+}
+
+async function renderNoteMoveAreaList() {
+    const panel = document.getElementById('note-move-step-container');
+    if (!panel) return;
+    panel.innerHTML = '<div class="move-heading"><i class="fa-solid fa-layer-group" style="margin-right: 0.5rem;"></i>Choose an area</div>';
+    try {
+        const areas = await loadNoteMoveAreas();
+        if (!areas.length) {
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.innerHTML = '<p style="color: var(--text-muted); margin: 0;">No areas available.</p>';
+            panel.appendChild(empty);
+            return;
+        }
+
+        areas
+            .slice()
+            .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+            .forEach((area) => {
+                const btn = document.createElement('button');
+                btn.className = 'btn';
+                btn.innerHTML = `<i class="fa-solid fa-layer-group" style="margin-right: 0.5rem;"></i>${escapeHtml(area.name || 'Untitled area')}`;
+                btn.addEventListener('click', () => performNoteMoveToArea(area.id));
+                panel.appendChild(btn);
+            });
+    } catch (err) {
+        console.error('Error loading areas:', err);
+        panel.innerHTML += '<div style="color: var(--danger-color); margin-top: 0.5rem;"><i class="fa-solid fa-exclamation-triangle"></i> Unable to load areas.</div>';
+    }
+}
+
+async function performNoteMoveToArea(areaId) {
+    try {
+        const res = await fetch('/api/notes/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ids: noteMoveState.ids,
+                target: 'area',
+                area_id: areaId
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Move failed');
+        }
+        closeNoteMoveModal();
+        resetNoteSelection();
+        showToast('Moved to area', 'success', 2000);
+        await loadNotesUnified();
+    } catch (err) {
+        console.error('Error moving notes to area:', err);
+        showToast(err.message || 'Could not move to area', 'error');
     }
 }
 

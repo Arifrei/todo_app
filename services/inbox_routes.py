@@ -286,6 +286,60 @@ def note_list_insert_index(items, section_id=None, subsection_id=None):
     return first_section if first_section is not None else len(ordered)
 
 
+def _area_list_marker_kind(item):
+    item_type = getattr(item, 'item_type', None) or 'item'
+    return item_type if item_type in {'section', 'subsection'} else None
+
+
+def area_list_insert_index(items, section_id=None, subsection_id=None):
+    """Return the zero-based insertion index for an Area list destination."""
+    ordered = sorted(items, key=lambda item: ((item.order_index or 0), (item.id or 0)))
+    if subsection_id is not None:
+        marker_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if item.id == subsection_id and _area_list_marker_kind(item) == 'subsection'
+            ),
+            None,
+        )
+        if marker_index is None:
+            raise InboxValidationError('The selected subsection no longer exists.')
+        for index in range(marker_index + 1, len(ordered)):
+            if _area_list_marker_kind(ordered[index]) in {'section', 'subsection'}:
+                return index
+        return len(ordered)
+
+    if section_id is not None:
+        marker_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if item.id == section_id and _area_list_marker_kind(item) == 'section'
+            ),
+            None,
+        )
+        if marker_index is None:
+            raise InboxValidationError('The selected section no longer exists.')
+        for index in range(marker_index + 1, len(ordered)):
+            if _area_list_marker_kind(ordered[index]) == 'section':
+                return index
+        return len(ordered)
+
+    first_section = next(
+        (index for index, item in enumerate(ordered) if _area_list_marker_kind(item) == 'section'),
+        None,
+    )
+    return first_section if first_section is not None else len(ordered)
+
+
+def _next_order(a, model, **filters):
+    query = a.db.session.query(a.db.func.coalesce(a.db.func.max(model.order_index), 0))
+    for field, value in filters.items():
+        query = query.filter(getattr(model, field) == value)
+    return (query.scalar() or 0) + 1
+
+
 def _protected_folder_ids(NoteFolder, user_id):
     folders = NoteFolder.query.filter_by(user_id=user_id).all()
     protected = {folder.id for folder in folders if folder.is_pin_protected}
@@ -472,10 +526,188 @@ def build_destination_catalog(a, user, include_context=False):
             )
         note_destinations.append(entry)
 
+    area_destinations = []
+    area_note_destinations = []
+    area_list_destinations = []
+    area_task_destinations = []
+    areas = a.Area.query.filter(
+        a.Area.user_id == user.id,
+        a.Area.archived_at.is_(None),
+    ).order_by(
+        a.Area.order_index.asc(),
+        a.Area.updated_at.desc(),
+        a.Area.id.asc(),
+    ).all()
+    for area in areas:
+        blocks = sorted(
+            area.blocks or [],
+            key=lambda block: ((block.order_index or 0), (block.id or 0)),
+        )
+        line_samples = [
+            _context_text(block.content, 300)
+            for block in blocks
+            if block.block_type == 'line' and _context_text(block.content, 300)
+        ]
+        area_notes = []
+        area_lists = []
+        area_task_lists = []
+
+        area_entry = {
+            'id': area.id,
+            'title': area.name,
+            'name': area.name,
+            'description': area.description,
+        }
+        if include_context:
+            area_entry['samples'] = line_samples[:12]
+            area_entry['line_count'] = len(line_samples)
+        area_destinations.append(area_entry)
+
+        for block in blocks:
+            block_title = block.title or (
+                'Untitled note'
+                if block.block_type == 'note'
+                else 'Task list'
+                if block.block_type == 'task_list'
+                else 'List'
+            )
+            if block.block_type == 'note':
+                entry = {
+                    'id': block.id,
+                    'title': f'{area.name} / {block_title}',
+                    'area_id': area.id,
+                    'area_name': area.name,
+                    'block_title': block_title,
+                }
+                if include_context:
+                    entry['snippet'] = _context_text(
+                        _html_to_plain_text(block.content or ''),
+                        900,
+                    )
+                area_note_destinations.append(entry)
+                area_notes.append({'id': block.id, 'title': block_title})
+            elif block.block_type == 'list':
+                ordered_items = sorted(
+                    block.items or [],
+                    key=lambda item: ((item.order_index or 0), (item.id or 0)),
+                )
+                sections = []
+                current_section = None
+                current_subsection = None
+                samples = []
+                context_items = []
+                for item in ordered_items:
+                    kind = _area_list_marker_kind(item)
+                    if kind == 'section':
+                        current_section = {
+                            'id': item.id,
+                            'title': item.text or 'Untitled section',
+                            'subsections': [],
+                        }
+                        sections.append(current_section)
+                        current_subsection = None
+                    elif kind == 'subsection' and current_section is not None:
+                        current_subsection = {
+                            'id': item.id,
+                            'title': item.text or 'Untitled subsection',
+                        }
+                        current_section['subsections'].append(current_subsection)
+                    elif not kind and include_context:
+                        if len(samples) < 12:
+                            samples.append(item.text)
+                        if len(context_items) < 30:
+                            context_items.append({
+                                'id': item.id,
+                                'text': item.text,
+                                'note': _context_text(item.note, 280),
+                                'checked': bool(item.checked),
+                                'scheduled_date': (
+                                    item.scheduled_date.isoformat()
+                                    if item.scheduled_date
+                                    else None
+                                ),
+                                'section_id': (
+                                    current_section['id'] if current_section else None
+                                ),
+                                'section': (
+                                    current_section['title'] if current_section else None
+                                ),
+                                'subsection_id': (
+                                    current_subsection['id']
+                                    if current_subsection
+                                    else None
+                                ),
+                                'subsection': (
+                                    current_subsection['title']
+                                    if current_subsection
+                                    else None
+                                ),
+                            })
+                entry = {
+                    'id': block.id,
+                    'title': f'{area.name} / {block_title}',
+                    'area_id': area.id,
+                    'area_name': area.name,
+                    'block_title': block_title,
+                    'sections': sections,
+                }
+                if include_context:
+                    entry['samples'] = samples
+                    entry['items'] = context_items
+                    entry['item_count'] = len([
+                        item for item in ordered_items if not _area_list_marker_kind(item)
+                    ])
+                area_list_destinations.append(entry)
+                area_lists.append({'id': block.id, 'title': block_title})
+            elif block.block_type == 'task_list':
+                ordered_items = sorted(
+                    block.items or [],
+                    key=lambda item: ((item.order_index or 0), (item.id or 0)),
+                )
+                task_items = [
+                    item for item in ordered_items if (item.item_type or 'item') == 'item'
+                ]
+                entry = {
+                    'id': block.id,
+                    'title': f'{area.name} / {block_title}',
+                    'area_id': area.id,
+                    'area_name': area.name,
+                    'block_title': block_title,
+                }
+                if include_context:
+                    entry['samples'] = [item.text for item in task_items[:12]]
+                    entry['items'] = [
+                        {
+                            'id': item.id,
+                            'title': item.text,
+                            'status': item.status,
+                            'description': _context_text(item.details, 350),
+                            'notes': _context_text(item.note, 350),
+                            'due_date': (
+                                item.scheduled_date.isoformat()
+                                if item.scheduled_date
+                                else None
+                            ),
+                        }
+                        for item in task_items[:24]
+                    ]
+                    entry['item_count'] = len(task_items)
+                area_task_destinations.append(entry)
+                area_task_lists.append({'id': block.id, 'title': block_title})
+
+        if include_context:
+            area_entry['notes'] = area_notes[:20]
+            area_entry['lists'] = area_lists[:20]
+            area_entry['task_lists'] = area_task_lists[:20]
+
     return {
         'task_lists': task_destinations,
         'notes': note_destinations,
         'note_lists': note_list_destinations,
+        'areas': area_destinations,
+        'area_notes': area_note_destinations,
+        'area_lists': area_list_destinations,
+        'area_task_lists': area_task_destinations,
     }
 
 
@@ -499,7 +731,7 @@ def build_routing_context(a, user, content, catalog):
     today_value = a._now_local().date()
     task_lists = _rank_context_entries(
         content,
-        catalog['task_lists'],
+        catalog.get('task_lists', []),
         lambda entry: [
             item.get('title') or ''
             for item in entry.get('items', [])
@@ -507,14 +739,40 @@ def build_routing_context(a, user, content, catalog):
     )
     notes = _rank_context_entries(
         content,
-        catalog['notes'],
+        catalog.get('notes', []),
         lambda entry: [entry.get('snippet') or ''],
     )
     note_lists = _rank_context_entries(
         content,
-        catalog['note_lists'],
+        catalog.get('note_lists', []),
         lambda entry: [
             item.get('text') or ''
+            for item in entry.get('items', [])
+        ],
+    )
+    areas = _rank_context_entries(
+        content,
+        catalog.get('areas', []),
+        lambda entry: (entry.get('samples') or []) + [entry.get('description') or ''],
+    )
+    area_notes = _rank_context_entries(
+        content,
+        catalog.get('area_notes', []),
+        lambda entry: [entry.get('snippet') or ''],
+    )
+    area_lists = _rank_context_entries(
+        content,
+        catalog.get('area_lists', []),
+        lambda entry: [
+            item.get('text') or ''
+            for item in entry.get('items', [])
+        ],
+    )
+    area_task_lists = _rank_context_entries(
+        content,
+        catalog.get('area_task_lists', []),
+        lambda entry: [
+            item.get('title') or ''
             for item in entry.get('items', [])
         ],
     )
@@ -532,7 +790,7 @@ def build_routing_context(a, user, content, catalog):
                     for item in entry.get('items', [])[:6]
                 ],
             }
-            for entry in catalog['task_lists']
+            for entry in catalog.get('task_lists', [])
         ],
         'notes': [
             {
@@ -541,7 +799,7 @@ def build_routing_context(a, user, content, catalog):
                 'folder': entry.get('folder'),
                 'content_preview': _context_text(entry.get('snippet'), 280),
             }
-            for entry in catalog['notes']
+            for entry in catalog.get('notes', [])
         ],
         'note_lists': [
             {
@@ -555,7 +813,58 @@ def build_routing_context(a, user, content, catalog):
                     for item in entry.get('items', [])[:8]
                 ],
             }
-            for entry in catalog['note_lists']
+            for entry in catalog.get('note_lists', [])
+        ],
+        'areas': [
+            {
+                'id': entry['id'],
+                'title': entry['title'],
+                'description': _context_text(entry.get('description'), 280),
+                'sample_lines': entry.get('samples', [])[:6],
+                'notes': entry.get('notes', []),
+                'lists': entry.get('lists', []),
+                'task_lists': entry.get('task_lists', []),
+            }
+            for entry in catalog.get('areas', [])
+        ],
+        'area_notes': [
+            {
+                'id': entry['id'],
+                'title': entry['block_title'],
+                'area_id': entry['area_id'],
+                'area_name': entry['area_name'],
+                'content_preview': _context_text(entry.get('snippet'), 280),
+            }
+            for entry in catalog.get('area_notes', [])
+        ],
+        'area_lists': [
+            {
+                'id': entry['id'],
+                'title': entry['block_title'],
+                'area_id': entry['area_id'],
+                'area_name': entry['area_name'],
+                'sections': entry.get('sections', []),
+                'item_count': entry.get('item_count', 0),
+                'sample_items': [
+                    item.get('text')
+                    for item in entry.get('items', [])[:8]
+                ],
+            }
+            for entry in catalog.get('area_lists', [])
+        ],
+        'area_task_lists': [
+            {
+                'id': entry['id'],
+                'title': entry['block_title'],
+                'area_id': entry['area_id'],
+                'area_name': entry['area_name'],
+                'item_count': entry.get('item_count', 0),
+                'sample_items': [
+                    item.get('title')
+                    for item in entry.get('items', [])[:6]
+                ],
+            }
+            for entry in catalog.get('area_task_lists', [])
         ],
     }
 
@@ -631,6 +940,10 @@ def build_routing_context(a, user, content, catalog):
         'task_context': task_lists[:30],
         'note_context': notes[:35],
         'note_list_context': note_lists[:35],
+        'area_context': areas[:25],
+        'area_note_context': area_notes[:25],
+        'area_list_context': area_lists[:25],
+        'area_task_list_context': area_task_lists[:25],
         'calendar_patterns': calendar_patterns,
         'prior_inbox_mappings': mapping_history,
     }
@@ -653,7 +966,7 @@ def build_heuristic_suggestion(content, catalog, today=None):
     lower = content.lower()
     best_task = None
     best_task_score = -1
-    for todo_list in catalog['task_lists']:
+    for todo_list in catalog.get('task_lists', []):
         list_score = _candidate_score(content, todo_list['title'], todo_list.get('samples'))
         phase = None
         phase_score = -1
@@ -669,7 +982,7 @@ def build_heuristic_suggestion(content, catalog, today=None):
 
     best_note = None
     best_note_score = -1
-    for note in catalog['notes']:
+    for note in catalog.get('notes', []):
         score = _candidate_score(content, note['title'], [note.get('snippet', '')])
         if score > best_note_score:
             best_note = note
@@ -679,7 +992,7 @@ def build_heuristic_suggestion(content, catalog, today=None):
     best_note_list_section = None
     best_note_list_subsection = None
     best_note_list_score = -1
-    for note_list in catalog['note_lists']:
+    for note_list in catalog.get('note_lists', []):
         base_score = _candidate_score(content, note_list['title'], note_list.get('samples'))
         section_choice = None
         subsection_choice = None
@@ -703,8 +1016,77 @@ def build_heuristic_suggestion(content, catalog, today=None):
             best_note_list_subsection = subsection_choice if section_score >= 5 else None
             best_note_list_score = total
 
+    best_area = None
+    best_area_score = -1
+    for area in catalog.get('areas', []):
+        score = _candidate_score(
+            content,
+            area.get('title') or area.get('name') or '',
+            area.get('samples'),
+        )
+        if score > best_area_score:
+            best_area = area
+            best_area_score = score
+
+    best_area_note = None
+    best_area_note_score = -1
+    for area_note in catalog.get('area_notes', []):
+        score = _candidate_score(
+            content,
+            area_note.get('title') or '',
+            [area_note.get('snippet', '')],
+        )
+        if score > best_area_note_score:
+            best_area_note = area_note
+            best_area_note_score = score
+
+    best_area_list = None
+    best_area_list_section = None
+    best_area_list_subsection = None
+    best_area_list_score = -1
+    for area_list in catalog.get('area_lists', []):
+        base_score = _candidate_score(
+            content,
+            area_list.get('title') or '',
+            area_list.get('samples'),
+        )
+        section_choice = None
+        subsection_choice = None
+        section_score = 0
+        for section in area_list.get('sections', []):
+            current_score = _candidate_score(content, section['title'])
+            current_subsection = None
+            for subsection in section.get('subsections', []):
+                subsection_score = _candidate_score(content, subsection['title'])
+                if subsection_score > current_score:
+                    current_score = subsection_score
+                    current_subsection = subsection
+            if current_score > section_score:
+                section_score = current_score
+                section_choice = section
+                subsection_choice = current_subsection
+        total = base_score + section_score
+        if total > best_area_list_score:
+            best_area_list = area_list
+            best_area_list_section = section_choice if section_score >= 5 else None
+            best_area_list_subsection = subsection_choice if section_score >= 5 else None
+            best_area_list_score = total
+
+    best_area_task = None
+    best_area_task_score = -1
+    for task_list in catalog.get('area_task_lists', []):
+        score = _candidate_score(
+            content,
+            task_list.get('title') or '',
+            task_list.get('samples'),
+        )
+        if score > best_area_task_score:
+            best_area_task = task_list
+            best_area_task_score = score
+
     note_intent = bool(re.search(r'\b(note|notes|write down|journal|reference|idea)\b', lower))
     list_intent = bool(re.search(r'\b(list|shopping|grocer|buy|pack|checklist)\b', lower))
+    area_intent = bool(re.search(r'\b(area|areas)\b', lower))
     calendar_intent = bool(
         schedule['date']
         and re.search(r'\b(meeting|appointment|event|reservation|flight|call|visit)\b', lower)
@@ -733,6 +1115,33 @@ def build_heuristic_suggestion(content, catalog, today=None):
         and best_task_score >= 5
         and re.search(r'\b(?:task|project|phase)\b', lower)
     )
+    explicit_area_line_destination = bool(
+        explicit_container_instruction
+        and best_area
+        and best_area_score >= 5
+        and area_intent
+    )
+    explicit_area_note_destination = bool(
+        explicit_container_instruction
+        and best_area_note
+        and best_area_note_score >= 5
+        and (area_intent or note_intent)
+    )
+    explicit_area_list_destination = bool(
+        explicit_container_instruction
+        and best_area_list
+        and best_area_list_score >= 5
+        and (area_intent or list_intent)
+    )
+    explicit_area_task_destination = bool(
+        explicit_container_instruction
+        and best_area_task
+        and best_area_task_score >= 5
+        and (
+            area_intent
+            or re.search(r'\b(?:task|todo|action|next action)\b', lower)
+        )
+    )
     contextual_task_intent = bool(
         best_task
         and best_task_score >= 5
@@ -742,6 +1151,79 @@ def build_heuristic_suggestion(content, catalog, today=None):
             lower,
         )
     )
+
+    if (
+        best_area_list
+        and explicit_area_list_destination
+        and best_area_list_score >= max(best_task_score, best_note_score, best_note_list_score, 5)
+    ):
+        destination = {
+            'kind': 'area_list',
+            'block_id': best_area_list['id'],
+            'section_id': best_area_list_section['id'] if best_area_list_section else None,
+            'subsection_id': (
+                best_area_list_subsection['id'] if best_area_list_subsection else None
+            ),
+            'text': clean_title,
+            'note': None,
+            'scheduled_date': schedule['date'],
+        }
+        return (
+            destination,
+            f"Best matching area list: {best_area_list['title']}.",
+            min(0.9, 0.52 + best_area_list_score / 50),
+        )
+
+    if (
+        best_area_task
+        and explicit_area_task_destination
+        and best_area_task_score >= max(best_task_score, best_note_score, best_note_list_score, 5)
+    ):
+        destination = {
+            'kind': 'area_task',
+            'block_id': best_area_task['id'],
+            'title': clean_title,
+            'description': None,
+            'notes': None,
+            'due_date': schedule['date'],
+        }
+        return (
+            destination,
+            f"Best matching area task list: {best_area_task['title']}.",
+            min(0.9, 0.52 + best_area_task_score / 50),
+        )
+
+    if (
+        best_area_note
+        and explicit_area_note_destination
+        and best_area_note_score >= max(best_task_score, best_note_score, best_note_list_score, 5)
+    ):
+        destination = {
+            'kind': 'area_note',
+            'block_id': best_area_note['id'],
+            'text': (content or '').strip(),
+        }
+        return (
+            destination,
+            f"Best matching area note: {best_area_note['title']}.",
+            min(0.9, 0.52 + best_area_note_score / 50),
+        )
+
+    if (
+        best_area
+        and explicit_area_line_destination
+        and best_area_score >= max(best_task_score, best_note_score, best_note_list_score, 5)
+    ):
+        destination = {
+            'kind': 'area_line',
+            'area_id': best_area['id'],
+            'text': (content or '').strip(),
+        }
+        return (
+            destination,
+            f"Best matching area: {best_area['title']}.",
+            min(0.88, 0.5 + best_area_score / 50),
+        )
 
     if best_note_list and (
         explicit_note_list_destination
@@ -857,6 +1339,11 @@ Important distinctions:
   an existing note.
 - Use note_list for one atomic member of an existing checklist, shopping list, packing
   list, or other maintained structured list. Select the best section/subsection.
+- Use area_line for a quick standalone line in an Area.
+- Use area_note for text that extends an Area note.
+- Use area_list for one atomic member of an Area list. Select the best section/subsection.
+- Use area_task for one actionable row in an Area task list. Do not route to Area list
+  blocks; only choose IDs from area_task_lists for area_task.
 - Treat prior Inbox mappings as user-specific preference examples, not absolute rules.
 - Compare the capture with sibling items and the purpose implied by each container.
 - If evidence conflicts, prefer the destination that preserves the capture's intent and
@@ -866,7 +1353,7 @@ Choose only IDs present in destination_index. Never invent an ID.
 Return one JSON object with keys: intent, destination, reason, confidence.
 intent is a short description of what the user is trying to record.
 confidence must be a number from 0 to 1.
-destination.kind must be task, calendar, note, or note_list.
+destination.kind must be task, calendar, note, note_list, area_line, area_note, area_list, or area_task.
 
 task destination:
 {{"kind":"task","list_id":1,"phase_id":null,"title":"","description":null,
@@ -886,6 +1373,20 @@ note_list destination:
 "text":"","note":null,"scheduled_date":"YYYY-MM-DD or null",
 "start_time":"HH:MM or null","end_time":"HH:MM or null",
 "reminder_minutes_before":null}}
+
+area_line destination:
+{{"kind":"area_line","area_id":1,"text":""}}
+
+area_note destination:
+{{"kind":"area_note","block_id":1,"text":""}}
+
+area_list destination:
+{{"kind":"area_list","block_id":1,"section_id":null,"subsection_id":null,
+"text":"","note":null,"scheduled_date":"YYYY-MM-DD or null"}}
+
+area_task destination:
+{{"kind":"area_task","block_id":1,"title":"","description":null,
+"notes":null,"due_date":"YYYY-MM-DD or null"}}
 
 Use the parsed schedule when it reflects the capture, but do not manufacture scheduling.
 Remove date, time, and reminder phrases from Calendar titles. Keep Calendar description
@@ -923,6 +1424,37 @@ def _owned_note(a, user, note_id, expected_type):
     if not note or note.note_type != expected_type:
         raise InboxValidationError('The selected note is unavailable.')
     return note
+
+
+def _owned_area(a, user, area_id):
+    try:
+        area_id = int(area_id)
+    except (TypeError, ValueError):
+        raise InboxValidationError('Choose a valid area.')
+    area = a.Area.query.filter(
+        a.Area.id == area_id,
+        a.Area.user_id == user.id,
+        a.Area.archived_at.is_(None),
+    ).first()
+    if not area:
+        raise InboxValidationError('The selected area is unavailable.')
+    return area
+
+
+def _owned_area_block(a, user, block_id, block_types):
+    try:
+        block_id = int(block_id)
+    except (TypeError, ValueError):
+        raise InboxValidationError('Choose a valid area item.')
+    block = a.AreaBlock.query.join(a.Area).filter(
+        a.AreaBlock.id == block_id,
+        a.AreaBlock.user_id == user.id,
+        a.Area.archived_at.is_(None),
+        a.AreaBlock.block_type.in_(list(block_types)),
+    ).first()
+    if not block:
+        raise InboxValidationError('The selected area item is unavailable.')
+    return block
 
 
 def normalize_destination(a, user, raw_destination, capture_content):
@@ -1069,6 +1601,106 @@ def normalize_destination(a, user, raw_destination, capture_content):
             'reminder_minutes_before': reminder,
         }
 
+    if kind == 'area_line':
+        area = _owned_area(a, user, raw_destination.get('area_id'))
+        text = (
+            raw_destination.get('text')
+            or raw_destination.get('title')
+            or capture_content
+        ).strip()
+        if not text:
+            raise InboxValidationError('Area line text is required.')
+        return {
+            'kind': 'area_line',
+            'area_id': area.id,
+            'text': text[:MAX_CAPTURE_LENGTH],
+        }
+
+    if kind == 'area_note':
+        block = _owned_area_block(a, user, raw_destination.get('block_id'), {'note'})
+        text = (
+            raw_destination.get('text')
+            or raw_destination.get('title')
+            or capture_content
+        ).strip()
+        if not text:
+            raise InboxValidationError('Area note text is required.')
+        return {
+            'kind': 'area_note',
+            'area_id': block.area_id,
+            'block_id': block.id,
+            'text': text[:MAX_CAPTURE_LENGTH],
+        }
+
+    if kind == 'area_list':
+        block = _owned_area_block(a, user, raw_destination.get('block_id'), {'list'})
+        section_id = raw_destination.get('section_id')
+        subsection_id = raw_destination.get('subsection_id')
+        section_id = int(section_id) if str(section_id or '').isdigit() else None
+        subsection_id = int(subsection_id) if str(subsection_id or '').isdigit() else None
+        marker_map = {item.id: item for item in block.items}
+        if section_id:
+            section = marker_map.get(section_id)
+            if not section or _area_list_marker_kind(section) != 'section':
+                raise InboxValidationError('The selected section is unavailable.')
+        if subsection_id:
+            subsection = marker_map.get(subsection_id)
+            if not subsection or _area_list_marker_kind(subsection) != 'subsection':
+                raise InboxValidationError('The selected subsection is unavailable.')
+            ordered = sorted(block.items, key=lambda item: ((item.order_index or 0), item.id))
+            current_section_id = None
+            subsection_parent_id = None
+            for item in ordered:
+                kind_value = _area_list_marker_kind(item)
+                if kind_value == 'section':
+                    current_section_id = item.id
+                elif item.id == subsection_id:
+                    subsection_parent_id = current_section_id
+                    break
+            if section_id and subsection_parent_id != section_id:
+                raise InboxValidationError('The subsection is not inside the selected section.')
+            section_id = subsection_parent_id
+        scheduled_date = _parse_iso_date(raw_destination.get('scheduled_date'))
+        text = (
+            raw_destination.get('text')
+            or raw_destination.get('title')
+            or _clean_capture_title(capture_content)
+        ).strip()
+        if not text:
+            raise InboxValidationError('Area list item text is required.')
+        return {
+            'kind': 'area_list',
+            'area_id': block.area_id,
+            'block_id': block.id,
+            'section_id': section_id,
+            'subsection_id': subsection_id,
+            'text': text[:500],
+            'note': (raw_destination.get('note') or '').strip() or None,
+            'scheduled_date': scheduled_date.isoformat() if scheduled_date else None,
+        }
+
+    if kind == 'area_task':
+        block = _owned_area_block(a, user, raw_destination.get('block_id'), {'task_list'})
+        due_date = _parse_iso_date(
+            raw_destination.get('due_date') or raw_destination.get('scheduled_date')
+        )
+        title = (
+            raw_destination.get('title')
+            or raw_destination.get('text')
+            or _clean_capture_title(capture_content)
+        ).strip()
+        if not title:
+            raise InboxValidationError('Area task title is required.')
+        return {
+            'kind': 'area_task',
+            'area_id': block.area_id,
+            'block_id': block.id,
+            'title': title[:500],
+            'description': (raw_destination.get('description') or '').strip() or None,
+            'notes': (raw_destination.get('notes') or '').strip() or None,
+            'due_date': due_date.isoformat() if due_date else None,
+        }
+
     raise InboxValidationError('Choose a supported destination type.')
 
 
@@ -1087,6 +1719,34 @@ def describe_destination(a, user, destination):
         if destination.get('start_time'):
             schedule += f" at {destination['start_time']}"
         return f'Calendar on {schedule}'
+    if kind == 'area_line':
+        area = a.db.session.get(a.Area, destination.get('area_id'))
+        return f'Line in area: {area.name if area else "Area"}'
+    if kind == 'area_note':
+        block = a.db.session.get(a.AreaBlock, destination.get('block_id'))
+        area_name = block.area.name if block and block.area else 'Area'
+        block_title = block.title if block and block.title else 'Area note'
+        return f'Append to area note: {area_name} / {block_title}'
+    if kind == 'area_list':
+        block = a.db.session.get(a.AreaBlock, destination.get('block_id'))
+        area_name = block.area.name if block and block.area else 'Area'
+        block_title = block.title if block and block.title else 'List'
+        label = f'{area_name} / {block_title}'
+        marker_ids = [destination.get('section_id'), destination.get('subsection_id')]
+        marker_titles = []
+        for marker_id in marker_ids:
+            if marker_id:
+                marker = a.db.session.get(a.AreaBlockItem, marker_id)
+                if marker:
+                    marker_titles.append(marker.text)
+        if marker_titles:
+            label += ' / ' + ' / '.join(marker_titles)
+        return f'List item in area list: {label}'
+    if kind == 'area_task':
+        block = a.db.session.get(a.AreaBlock, destination.get('block_id'))
+        area_name = block.area.name if block and block.area else 'Area'
+        block_title = block.title if block and block.title else 'Task list'
+        return f'Task in area task list: {area_name} / {block_title}'
     note = a.db.session.get(a.Note, destination.get('note_id'))
     if kind == 'note':
         return f'Append to note: {note.title if note else "Note"}'
@@ -1414,6 +2074,120 @@ def map_inbox_item(a, user, inbox_item, raw_destination):
             'id': item.id,
             'label': describe_destination(a, user, destination),
             'url': f'/notes/{note.id}',
+        }
+
+    elif kind == 'area_line':
+        area = a.db.session.get(a.Area, destination['area_id'])
+        now = a._now_local()
+        block = a.AreaBlock(
+            user_id=user.id,
+            area_id=area.id,
+            block_type='line',
+            content=destination['text'],
+            checkbox_mode=False,
+            list_mode='standard',
+            order_index=_next_order(
+                a,
+                a.AreaBlock,
+                user_id=user.id,
+                area_id=area.id,
+            ),
+        )
+        area.updated_at = now
+        a.db.session.add(block)
+        a.db.session.flush()
+        result = {
+            'kind': kind,
+            'id': block.id,
+            'label': describe_destination(a, user, destination),
+            'url': f'/areas/{area.id}',
+        }
+
+    elif kind == 'area_note':
+        block = a.db.session.get(a.AreaBlock, destination['block_id'])
+        now = a._now_local()
+        block.content = _append_note_html(block.content, destination['text'])
+        block.updated_at = now
+        if block.area:
+            block.area.updated_at = now
+        result = {
+            'kind': kind,
+            'id': block.id,
+            'label': describe_destination(a, user, destination),
+            'url': f'/areas/{block.area_id}/blocks/{block.id}',
+        }
+
+    elif kind == 'area_list':
+        block = a.db.session.get(a.AreaBlock, destination['block_id'])
+        existing_items = a.AreaBlockItem.query.filter_by(block_id=block.id).order_by(
+            a.AreaBlockItem.order_index.asc(),
+            a.AreaBlockItem.id.asc(),
+        ).all()
+        insert_index = area_list_insert_index(
+            existing_items,
+            section_id=destination.get('section_id'),
+            subsection_id=destination.get('subsection_id'),
+        )
+        for index, existing_item in enumerate(existing_items):
+            existing_item.order_index = index + 1 if index < insert_index else index + 2
+        now = a._now_local()
+        scheduled_date = _parse_iso_date(destination.get('scheduled_date'))
+        item = a.AreaBlockItem(
+            user_id=user.id,
+            area_id=block.area_id,
+            block_id=block.id,
+            item_type='item',
+            text=destination['text'],
+            note=destination.get('note'),
+            status='open',
+            checked=False,
+            scheduled_date=scheduled_date,
+            order_index=insert_index + 1,
+        )
+        block.updated_at = now
+        if block.area:
+            block.area.updated_at = now
+        a.db.session.add(item)
+        a.db.session.flush()
+        result = {
+            'kind': kind,
+            'id': item.id,
+            'label': describe_destination(a, user, destination),
+            'url': f'/areas/{block.area_id}/blocks/{block.id}',
+        }
+
+    elif kind == 'area_task':
+        block = a.db.session.get(a.AreaBlock, destination['block_id'])
+        now = a._now_local()
+        scheduled_date = _parse_iso_date(destination.get('due_date'))
+        item = a.AreaBlockItem(
+            user_id=user.id,
+            area_id=block.area_id,
+            block_id=block.id,
+            item_type='item',
+            text=destination['title'],
+            details=destination.get('description'),
+            note=destination.get('notes'),
+            status='open',
+            checked=False,
+            scheduled_date=scheduled_date,
+            order_index=_next_order(
+                a,
+                a.AreaBlockItem,
+                user_id=user.id,
+                block_id=block.id,
+            ),
+        )
+        block.updated_at = now
+        if block.area:
+            block.area.updated_at = now
+        a.db.session.add(item)
+        a.db.session.flush()
+        result = {
+            'kind': kind,
+            'id': item.id,
+            'label': describe_destination(a, user, destination),
+            'url': f'/areas/{block.area_id}/blocks/{block.id}',
         }
 
     inbox_item.status = 'mapped'

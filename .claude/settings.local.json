@@ -21,7 +21,9 @@
       "Bash(gradlew:*)",
       "Bash(./gradlew:*)",
       "Bash(cmd:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "Bash(cd:*)"
     ],
     "deny": [],
     "ask": []

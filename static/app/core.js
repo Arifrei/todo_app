@@ -56,7 +56,7 @@ function showReadOnlyToast() {
     readOnlyToastAt = now;
     showToast('Archived notes are read-only.', 'info', 2000);
 }
-let noteMoveState = { ids: [], destinationFolderId: null, navStack: [], itemType: 'note' };
+let noteMoveState = { ids: [], destinationFolderId: null, navStack: [], itemType: 'note', areas: [] };
 let activeListItemMenu = null;
 let activeListItemActionPill = null;
 let listSelectionState = { active: false, ids: new Set() };
@@ -435,6 +435,75 @@ async function saveListTitle() {
     } catch (e) {
         console.error('Error updating list title:', e);
     }
+}
+
+async function openListMoveToAreaModal() {
+    const modal = document.getElementById('list-area-move-modal');
+    const select = document.getElementById('list-area-move-target');
+    if (!modal || !select || typeof CURRENT_LIST_ID === 'undefined') return;
+    select.innerHTML = '<option value="">Loading areas...</option>';
+    modal.classList.add('active');
+
+    try {
+        const res = await fetch('/api/areas?archived=0');
+        if (!res.ok) throw new Error('Could not load areas');
+        const areas = await res.json();
+        select.innerHTML = '';
+        if (!Array.isArray(areas) || areas.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No areas available';
+            select.appendChild(option);
+            return;
+        }
+        areas
+            .slice()
+            .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+            .forEach((area) => {
+                const option = document.createElement('option');
+                option.value = area.id;
+                option.textContent = area.name || 'Untitled area';
+                select.appendChild(option);
+            });
+    } catch (e) {
+        console.error('Error loading areas:', e);
+        select.innerHTML = '<option value="">Could not load areas</option>';
+        if (typeof showToast === 'function') showToast('Could not load areas.', 'error');
+    }
+}
+
+function closeListMoveToAreaModal() {
+    const modal = document.getElementById('list-area-move-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function moveCurrentListToArea() {
+    const select = document.getElementById('list-area-move-target');
+    const areaId = select ? select.value : '';
+    if (!areaId || typeof CURRENT_LIST_ID === 'undefined') {
+        showToast('Choose an area first.', 'warning');
+        return;
+    }
+
+    openConfirmModal('Move this task list to the selected Area?', async () => {
+        try {
+            const res = await fetch(`/api/lists/${CURRENT_LIST_ID}/move`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target: 'area', area_id: areaId })
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                showToast(result.error || 'Could not move list to area.', 'error');
+                return;
+            }
+            closeListMoveToAreaModal();
+            window.location.href = result.url || `/areas/${areaId}`;
+        } catch (e) {
+            console.error('Error moving list to area:', e);
+            showToast('Could not move list to area.', 'error');
+        }
+    });
 }
 
 async function createItem(listId, listType) {

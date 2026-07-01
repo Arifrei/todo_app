@@ -1146,6 +1146,11 @@ def handle_list(list_id):
     from services.list_routes import handle_list as _impl
     return _impl(list_id)
 
+@app.route('/api/lists/<int:list_id>/move', methods=['POST'])
+def move_list(list_id):
+    from services.list_routes import move_list as _impl
+    return _impl(list_id)
+
 
 @app.route('/api/lists/<int:list_id>/items', methods=['GET'])
 def list_items_in_list(list_id):
@@ -1245,7 +1250,7 @@ def bulk_bookmarks():
 if __name__ == '__main__':
     host = os.environ.get('HOST', '127.0.0.1')
     try:
-        port = int(os.environ.get('PORT', '5001'))
+        port = int(os.environ.get('PORT', '5000'))
     except (TypeError, ValueError):
         port = 5001
     debug = os.environ.get('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes', 'on')

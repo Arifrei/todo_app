@@ -14,6 +14,7 @@ from services.inbox_routes import (
     build_routing_context,
     extract_capture_schedule,
     generate_suggestion,
+    map_inbox_item,
     note_list_insert_index,
 )
 
@@ -391,6 +392,141 @@ def test_routing_context_includes_existing_items_and_mapping_history(
     assert context['note_list_context'][0]['items'][0]['text'] == 'Milk'
     assert context['calendar_patterns'][0]['title'] == 'Weekly launch sync'
     assert context['prior_inbox_mappings'][0]['destination_kind'] == 'note_list'
+
+
+def test_inbox_destinations_and_mapping_support_area_targets(tmp_path, monkeypatch):
+    database_path = tmp_path / 'inbox-area-targets.db'
+    monkeypatch.setenv('DATABASE_URL', f'sqlite:///{database_path.as_posix()}')
+
+    import importlib
+    import app as app_module
+
+    app_module = importlib.reload(app_module)
+    app_module.app.config.update(TESTING=True)
+    with app_module.app.app_context():
+        app_module.db.create_all()
+        user = app_module.User(username='area-inbox-owner', email=None)
+        user.set_password('dummy')
+        app_module.db.session.add(user)
+        app_module.db.session.flush()
+
+        area = app_module.Area(user_id=user.id, name='Home')
+        app_module.db.session.add(area)
+        app_module.db.session.flush()
+        note_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=area.id,
+            block_type='note',
+            title='Maintenance notes',
+            content='<p>Existing</p>',
+            order_index=1,
+        )
+        task_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=area.id,
+            block_type='task_list',
+            title='Next actions',
+            checkbox_mode=True,
+            order_index=2,
+        )
+        list_block = app_module.AreaBlock(
+            user_id=user.id,
+            area_id=area.id,
+            block_type='list',
+            title='Supplies',
+            order_index=3,
+        )
+        app_module.db.session.add_all([note_block, task_block, list_block])
+        app_module.db.session.flush()
+        section_item = app_module.AreaBlockItem(
+            user_id=user.id,
+            area_id=area.id,
+            block_id=list_block.id,
+            item_type='section',
+            text='Supplies',
+            order_index=1,
+        )
+        subsection_item = app_module.AreaBlockItem(
+            user_id=user.id,
+            area_id=area.id,
+            block_id=list_block.id,
+            item_type='subsection',
+            text='Filters',
+            order_index=2,
+        )
+        app_module.db.session.add_all([section_item, subsection_item])
+        app_module.db.session.flush()
+
+        catalog = build_destination_catalog(app_module, user, include_context=True)
+        assert catalog['areas'][0]['title'] == 'Home'
+        assert [entry['id'] for entry in catalog['area_notes']] == [note_block.id]
+        assert [entry['id'] for entry in catalog['area_lists']] == [list_block.id]
+        assert [entry['id'] for entry in catalog['area_task_lists']] == [task_block.id]
+        assert list_block.id not in [entry['id'] for entry in catalog['area_task_lists']]
+
+        line_capture = app_module.InboxItem(user_id=user.id, content='Check furnace filter')
+        note_capture = app_module.InboxItem(user_id=user.id, content='Filter size is 20x25')
+        list_capture = app_module.InboxItem(user_id=user.id, content='20x25x1 filters')
+        task_capture = app_module.InboxItem(user_id=user.id, content='Buy replacement filters')
+        app_module.db.session.add_all([line_capture, note_capture, list_capture, task_capture])
+        app_module.db.session.flush()
+
+        line_result = map_inbox_item(
+            app_module,
+            user,
+            line_capture,
+            {'kind': 'area_line', 'area_id': area.id},
+        )
+        note_result = map_inbox_item(
+            app_module,
+            user,
+            note_capture,
+            {'kind': 'area_note', 'block_id': note_block.id},
+        )
+        task_result = map_inbox_item(
+            app_module,
+            user,
+            task_capture,
+            {
+                'kind': 'area_task',
+                'block_id': task_block.id,
+                'due_date': '2026-06-20',
+            },
+        )
+        list_result = map_inbox_item(
+            app_module,
+            user,
+            list_capture,
+            {
+                'kind': 'area_list',
+                'block_id': list_block.id,
+                'section_id': section_item.id,
+                'subsection_id': subsection_item.id,
+                'note': 'Buy a multipack',
+                'scheduled_date': '2026-06-21',
+            },
+        )
+
+        assert line_result['label'] == 'Line in area: Home'
+        line_block = app_module.db.session.get(app_module.AreaBlock, line_result['id'])
+        assert line_block.block_type == 'line'
+        assert line_block.content == 'Check furnace filter'
+
+        app_module.db.session.refresh(note_block)
+        assert '<p>Existing</p>' in note_block.content
+        assert '<p>Filter size is 20x25</p>' in note_block.content
+        assert note_result['url'] == f'/areas/{area.id}/blocks/{note_block.id}'
+
+        list_item = app_module.db.session.get(app_module.AreaBlockItem, list_result['id'])
+        assert list_item.block_id == list_block.id
+        assert list_item.text == '20x25x1 filters'
+        assert list_item.note == 'Buy a multipack'
+        assert list_item.scheduled_date == date(2026, 6, 21)
+
+        task_item = app_module.db.session.get(app_module.AreaBlockItem, task_result['id'])
+        assert task_item.block_id == task_block.id
+        assert task_item.text == 'Buy replacement filters'
+        assert task_item.scheduled_date == date(2026, 6, 20)
 
 
 def test_inbox_delete_route_only_deletes_current_users_item(tmp_path, monkeypatch):
