@@ -23,7 +23,8 @@
       "Bash(cmd:*)",
       "Bash(grep:*)",
       "Bash(python3:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

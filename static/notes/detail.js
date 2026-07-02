@@ -8,6 +8,713 @@ function scrollToNoteEditor() {
     editorCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// ── Slash Command System ─────────────────────────────────────────────
+
+const SLASH_COMMANDS = [
+    { id: 'heading1', label: 'Heading 1', icon: 'fa-solid fa-heading', shortcut: '/h1' },
+    { id: 'heading2', label: 'Heading 2', icon: 'fa-solid fa-heading', shortcut: '/h2' },
+    { id: 'heading3', label: 'Heading 3', icon: 'fa-solid fa-heading', shortcut: '/h3' },
+    { id: 'task', label: 'Task / Checkbox', icon: 'fa-regular fa-square-check', shortcut: '/task' },
+    { id: 'section', label: 'Task Section', icon: 'fa-solid fa-list-check', shortcut: '/section' },
+    { id: 'list', label: 'Bullet list', icon: 'fa-solid fa-list-ul', shortcut: '/list' },
+    { id: 'numbered', label: 'Numbered list', icon: 'fa-solid fa-list-ol', shortcut: '/numbered' },
+    { id: 'divider', label: 'Divider', icon: 'fa-solid fa-minus', shortcut: '/divider' },
+    { id: 'quote', label: 'Quote', icon: 'fa-solid fa-quote-left', shortcut: '/quote' },
+    { id: 'callout', label: 'Callout', icon: 'fa-solid fa-circle-info', shortcut: '/callout' },
+    { id: 'toggle', label: 'Toggle', icon: 'fa-solid fa-caret-down', shortcut: '/toggle' },
+    { id: 'code', label: 'Code block', icon: 'fa-solid fa-code', shortcut: '/code' },
+    { id: 'image', label: 'Image', icon: 'fa-solid fa-image', shortcut: '/image' },
+    { id: 'table', label: 'Table', icon: 'fa-solid fa-table', shortcut: '/table' },
+    { id: 'columns', label: 'Two columns', icon: 'fa-solid fa-columns', shortcut: '/columns' },
+    { id: 'date', label: 'Date', icon: 'fa-solid fa-calendar', shortcut: '/date' },
+    { id: 'time', label: 'Date & Time', icon: 'fa-solid fa-clock', shortcut: '/time' },
+    { id: 'highlight', label: 'Highlight', icon: 'fa-solid fa-highlighter', shortcut: '/highlight' },
+    { id: 'link', label: 'Link to note', icon: 'fa-solid fa-link', shortcut: '/link' },
+];
+
+let _slashMenuState = { active: false, query: '', selectedIndex: 0, textNode: null, slashOffset: -1 };
+
+function tryOpenSlashMenu(editor) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+    const node = sel.anchorNode;
+    if (!node || node.nodeType !== Node.TEXT_NODE) return;
+    if (!editor.contains(node)) return;
+
+    const text = node.nodeValue || '';
+    const offset = sel.anchorOffset;
+
+    // Find the slash that starts the command
+    // Look backward from cursor for a `/` at start of line or after whitespace
+    let slashPos = -1;
+    for (let i = offset - 1; i >= 0; i--) {
+        if (text[i] === '/') {
+            // Slash must be at pos 0 or preceded by whitespace/newline
+            if (i === 0 || /[\s\n]/.test(text[i - 1])) {
+                slashPos = i;
+            }
+            break;
+        }
+        // If we encounter whitespace before finding /, no slash command
+        if (/[\s\n]/.test(text[i])) break;
+    }
+
+    if (slashPos === -1) {
+        hideSlashMenu();
+        return;
+    }
+
+    const query = text.slice(slashPos + 1, offset).toLowerCase();
+    _slashMenuState.query = query;
+    _slashMenuState.textNode = node;
+    _slashMenuState.slashOffset = slashPos;
+
+    const filtered = SLASH_COMMANDS.filter(cmd =>
+        cmd.label.toLowerCase().includes(query) ||
+        cmd.id.toLowerCase().includes(query) ||
+        cmd.shortcut.toLowerCase().includes('/' + query)
+    );
+
+    if (filtered.length === 0) {
+        hideSlashMenu();
+        return;
+    }
+
+    _slashMenuState.selectedIndex = Math.min(_slashMenuState.selectedIndex, filtered.length - 1);
+    showSlashMenu(filtered);
+}
+
+function showSlashMenu(commands) {
+    const menu = document.getElementById('note-slash-menu');
+    const list = document.getElementById('note-slash-menu-list');
+    if (!menu || !list) return;
+
+    // Position near cursor
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        const editorRect = document.getElementById('note-editor').getBoundingClientRect();
+
+        let top = rect.bottom + 4;
+        let left = rect.left;
+
+        // Ensure it doesn't go off-screen
+        const menuHeight = Math.min(commands.length * 40, 320);
+        if (top + menuHeight > window.innerHeight) {
+            top = rect.top - menuHeight - 4;
+        }
+        if (left + 220 > window.innerWidth) {
+            left = window.innerWidth - 230;
+        }
+        left = Math.max(8, left);
+
+        menu.style.top = `${top}px`;
+        menu.style.left = `${left}px`;
+    }
+
+    list.innerHTML = '';
+    commands.forEach((cmd, i) => {
+        const item = document.createElement('div');
+        item.className = 'note-slash-item' + (i === _slashMenuState.selectedIndex ? ' active' : '');
+        item.dataset.cmdId = cmd.id;
+        item.innerHTML = `<i class="${cmd.icon}"></i><span class="slash-label">${cmd.label}</span><span class="slash-shortcut">${cmd.shortcut}</span>`;
+        item.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            executeSlashCommand(cmd.id);
+        });
+        list.appendChild(item);
+    });
+
+    menu.style.display = 'block';
+    _slashMenuState.active = true;
+}
+
+function hideSlashMenu() {
+    const menu = document.getElementById('note-slash-menu');
+    if (menu) menu.style.display = 'none';
+    _slashMenuState.active = false;
+    _slashMenuState.selectedIndex = 0;
+}
+
+function handleSlashMenuKeydown(e) {
+    if (!_slashMenuState.active) return false;
+
+    const menu = document.getElementById('note-slash-menu-list');
+    if (!menu) return false;
+    const items = menu.querySelectorAll('.note-slash-item');
+    if (!items.length) return false;
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _slashMenuState.selectedIndex = (_slashMenuState.selectedIndex + 1) % items.length;
+        items.forEach((el, i) => el.classList.toggle('active', i === _slashMenuState.selectedIndex));
+        items[_slashMenuState.selectedIndex].scrollIntoView({ block: 'nearest' });
+        return true;
+    }
+    if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _slashMenuState.selectedIndex = (_slashMenuState.selectedIndex - 1 + items.length) % items.length;
+        items.forEach((el, i) => el.classList.toggle('active', i === _slashMenuState.selectedIndex));
+        items[_slashMenuState.selectedIndex].scrollIntoView({ block: 'nearest' });
+        return true;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const activeItem = items[_slashMenuState.selectedIndex];
+        if (activeItem) executeSlashCommand(activeItem.dataset.cmdId);
+        return true;
+    }
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        removeSlashText();
+        hideSlashMenu();
+        return true;
+    }
+    return false;
+}
+
+function removeSlashText() {
+    const { textNode, slashOffset } = _slashMenuState;
+    if (!textNode || slashOffset < 0) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const curOffset = sel.anchorOffset;
+    const text = textNode.nodeValue || '';
+    textNode.nodeValue = text.slice(0, slashOffset) + text.slice(curOffset);
+    // Restore cursor
+    const newOffset = Math.min(slashOffset, textNode.nodeValue.length);
+    const range = document.createRange();
+    range.setStart(textNode, newOffset);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+function executeSlashCommand(cmdId) {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    // Remove the slash text from the editor
+    removeSlashText();
+    hideSlashMenu();
+
+    editor.focus();
+
+    switch (cmdId) {
+        case 'heading1':
+            insertBlockElement('h1', 'Heading 1');
+            break;
+        case 'heading2':
+            insertBlockElement('h2', 'Heading 2');
+            break;
+        case 'heading3':
+            insertBlockElement('h3', 'Heading 3');
+            break;
+        case 'task':
+            notesState.checkboxMode = true;
+            updateNoteToolbarStates();
+            insertCheckbox();
+            break;
+        case 'section':
+            insertTaskSection();
+            break;
+        case 'list':
+            document.execCommand('insertUnorderedList', false, null);
+            break;
+        case 'numbered':
+            document.execCommand('insertOrderedList', false, null);
+            break;
+        case 'divider':
+            insertBlockElement('hr');
+            break;
+        case 'quote':
+            applyNoteCommand('quote');
+            break;
+        case 'callout':
+            insertCalloutBlock();
+            break;
+        case 'toggle':
+            insertToggleBlock();
+            break;
+        case 'code':
+            applyNoteCommand('code');
+            break;
+        case 'image':
+            applyNoteCommand('image');
+            break;
+        case 'table':
+            insertNoteTable();
+            break;
+        case 'columns':
+            insertColumnsBlock();
+            break;
+        case 'date':
+            insertDateStamp(false);
+            break;
+        case 'time':
+            insertDateStamp(true);
+            break;
+        case 'highlight':
+            insertHighlightMark();
+            break;
+        case 'link':
+            if (typeof openNoteLinkModal === 'function') openNoteLinkModal();
+            break;
+    }
+    setNoteDirty(true);
+}
+
+function insertBlockElement(tag, placeholder) {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    if (tag === 'hr') {
+        const hr = document.createElement('hr');
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(hr);
+        const br = document.createElement('br');
+        hr.parentNode.insertBefore(br, hr.nextSibling);
+        const newRange = document.createRange();
+        newRange.setStartAfter(br);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        return;
+    }
+
+    const el = document.createElement(tag);
+    el.textContent = '';
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(el);
+    // Place cursor inside the new element
+    const newRange = document.createRange();
+    newRange.setStart(el, 0);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+}
+
+function insertNoteTable() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const tbody = document.createElement('tbody');
+    const headerRow = document.createElement('tr');
+    const bodyRow = document.createElement('tr');
+
+    for (let i = 0; i < 3; i++) {
+        const th = document.createElement('th');
+        th.textContent = `Column ${i + 1}`;
+        headerRow.appendChild(th);
+        const td = document.createElement('td');
+        td.innerHTML = '&nbsp;';
+        bodyRow.appendChild(td);
+    }
+
+    thead.appendChild(headerRow);
+    tbody.appendChild(bodyRow);
+    table.appendChild(thead);
+    table.appendChild(tbody);
+
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(table);
+
+    // Add a line break after for cursor placement
+    const br = document.createElement('br');
+    table.parentNode.insertBefore(br, table.nextSibling);
+
+    // Focus first body cell
+    const firstCell = tbody.querySelector('td');
+    if (firstCell) {
+        const newRange = document.createRange();
+        newRange.setStart(firstCell, 0);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    }
+}
+
+// ── New Slash Command Blocks ────────────────────────────────────────
+
+function insertCalloutBlock() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    const callout = document.createElement('div');
+    callout.className = 'note-callout callout-info';
+    callout.innerHTML = '<i class="fa-solid fa-circle-info"></i><span contenteditable="true"></span>';
+    _insertBlockAtCursor(editor, callout);
+    const span = callout.querySelector('span');
+    if (span) _focusCursorInside(span);
+}
+
+function insertToggleBlock() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    const details = document.createElement('details');
+    details.className = 'note-toggle';
+    details.setAttribute('open', '');
+    const summary = document.createElement('summary');
+    summary.contentEditable = 'true';
+    summary.textContent = 'Toggle heading';
+    const content = document.createElement('div');
+    content.className = 'note-toggle-content';
+    content.contentEditable = 'true';
+    details.appendChild(summary);
+    details.appendChild(content);
+    _insertBlockAtCursor(editor, details);
+    _focusCursorInside(summary);
+}
+
+function insertColumnsBlock() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'note-columns';
+    const col1 = document.createElement('div');
+    col1.className = 'note-column';
+    col1.contentEditable = 'true';
+    const col2 = document.createElement('div');
+    col2.className = 'note-column';
+    col2.contentEditable = 'true';
+    wrapper.appendChild(col1);
+    wrapper.appendChild(col2);
+    _insertBlockAtCursor(editor, wrapper);
+    _focusCursorInside(col1);
+}
+
+function insertDateStamp(includeTime) {
+    const now = new Date();
+    const opts = { year: 'numeric', month: 'long', day: 'numeric' };
+    let text = now.toLocaleDateString(undefined, opts);
+    if (includeTime) {
+        text += ' at ' + now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    }
+    document.execCommand('insertText', false, text);
+}
+
+function insertHighlightMark() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const mark = document.createElement('mark');
+    if (range.collapsed) {
+        mark.appendChild(document.createTextNode('\u200B'));
+        range.insertNode(mark);
+        const r = document.createRange();
+        r.setStart(mark.firstChild, 1);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+    } else {
+        const contents = range.extractContents();
+        mark.appendChild(contents);
+        range.insertNode(mark);
+    }
+}
+
+function insertTaskSection() {
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    const section = document.createElement('div');
+    section.className = 'note-task-section';
+    section.contentEditable = 'false';
+
+    const header = document.createElement('div');
+    header.className = 'note-task-section-header';
+    header.contentEditable = 'true';
+    header.setAttribute('data-placeholder', 'Section title');
+
+    const items = document.createElement('div');
+    items.className = 'note-task-section-items';
+
+    const firstItem = _createTaskItem();
+    items.appendChild(firstItem);
+
+    section.appendChild(header);
+    section.appendChild(items);
+
+    _insertBlockAtCursor(editor, section);
+    _focusCursorInside(firstItem.querySelector('.note-task-item-text'));
+}
+
+function _createTaskItem() {
+    const item = document.createElement('div');
+    item.className = 'note-task-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'note-task-item-cb';
+    const text = document.createElement('span');
+    text.className = 'note-task-item-text';
+    text.contentEditable = 'true';
+    item.appendChild(cb);
+    item.appendChild(text);
+    return item;
+}
+
+function _insertBlockAtCursor(editor, element) {
+    // Clear any active inline formatting so the block doesn't inherit it
+    try { document.execCommand('removeFormat', false, null); } catch (_) {}
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {
+        const range = sel.getRangeAt(0);
+
+        // Break out of any formatting ancestors (bold, italic, etc.)
+        // Move the range to after the formatting element if inside one
+        let node = range.startContainer;
+        const formatTags = new Set(['STRONG', 'B', 'EM', 'I', 'U', 'DEL', 'S', 'STRIKE', 'MARK']);
+        while (node && node !== editor) {
+            if (node.nodeType === 1 && formatTags.has(node.tagName)) {
+                // Move cursor to after this formatting element
+                range.setStartAfter(node);
+                range.collapse(true);
+                break;
+            }
+            node = node.parentElement;
+        }
+
+        range.deleteContents();
+        range.insertNode(element);
+        // Add a line break after for cursor placement below
+        const br = document.createElement('br');
+        if (element.nextSibling) {
+            element.parentNode.insertBefore(br, element.nextSibling);
+        } else {
+            element.parentNode.appendChild(br);
+        }
+    } else {
+        editor.appendChild(element);
+        editor.appendChild(document.createElement('br'));
+    }
+}
+
+function _focusCursorInside(el) {
+    if (!el) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+// ── Table Editing ───────────────────────────────────────────────────
+
+let _activeTableCell = null;
+
+function showTableToolbar(cell) {
+    const toolbar = document.getElementById('note-table-toolbar');
+    if (!toolbar || !cell) return;
+    _activeTableCell = cell;
+    const table = cell.closest('table');
+    if (!table) return;
+
+    const tableRect = table.getBoundingClientRect();
+    toolbar.style.display = 'flex';
+
+    // Position above table, clamped to viewport
+    let top = tableRect.top - toolbar.offsetHeight - 4;
+    if (top < 4) top = tableRect.bottom + 4; // Below table if no room above
+    let left = Math.max(4, tableRect.left);
+    const maxLeft = window.innerWidth - toolbar.offsetWidth - 4;
+    if (left > maxLeft) left = Math.max(4, maxLeft);
+
+    toolbar.style.top = `${top}px`;
+    toolbar.style.left = `${left}px`;
+}
+
+function hideTableToolbar() {
+    const toolbar = document.getElementById('note-table-toolbar');
+    if (toolbar) toolbar.style.display = 'none';
+    _activeTableCell = null;
+}
+
+function _getCellPosition(cell) {
+    const row = cell.parentElement;
+    const table = cell.closest('table');
+    if (!row || !table) return null;
+    const allRows = Array.from(table.querySelectorAll('tr'));
+    const rowIndex = allRows.indexOf(row);
+    const colIndex = Array.from(row.children).indexOf(cell);
+    return { table, row, rowIndex, colIndex, allRows };
+}
+
+function addTableRow(position) {
+    if (!_activeTableCell) return;
+    const info = _getCellPosition(_activeTableCell);
+    if (!info) return;
+    const { table, row, rowIndex, allRows } = info;
+    const colCount = row.children.length;
+    const newRow = document.createElement('tr');
+    const isHeader = row.parentElement.tagName === 'THEAD';
+    for (let i = 0; i < colCount; i++) {
+        const cell = document.createElement(isHeader ? 'th' : 'td');
+        cell.innerHTML = '&nbsp;';
+        newRow.appendChild(cell);
+    }
+    // If adding below a thead row, add to tbody instead
+    if (position === 'below') {
+        if (isHeader) {
+            let tbody = table.querySelector('tbody');
+            if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
+            tbody.insertBefore(newRow, tbody.firstChild);
+        } else {
+            row.parentElement.insertBefore(newRow, row.nextSibling);
+        }
+    } else {
+        if (isHeader) {
+            row.parentElement.insertBefore(newRow, row);
+        } else {
+            row.parentElement.insertBefore(newRow, row);
+        }
+    }
+    // Focus first cell of new row
+    const firstCell = newRow.querySelector('td, th');
+    if (firstCell) _focusCell(firstCell);
+    setNoteDirty(true);
+}
+
+function addTableColumn(position) {
+    if (!_activeTableCell) return;
+    const info = _getCellPosition(_activeTableCell);
+    if (!info) return;
+    const { table, colIndex, allRows } = info;
+    const insertIdx = position === 'right' ? colIndex + 1 : colIndex;
+    allRows.forEach(r => {
+        const isHeader = r.parentElement.tagName === 'THEAD';
+        const cell = document.createElement(isHeader ? 'th' : 'td');
+        cell.innerHTML = isHeader ? 'Header' : '&nbsp;';
+        if (insertIdx >= r.children.length) {
+            r.appendChild(cell);
+        } else {
+            r.insertBefore(cell, r.children[insertIdx]);
+        }
+    });
+    setNoteDirty(true);
+}
+
+function deleteTableRow() {
+    if (!_activeTableCell) return;
+    const info = _getCellPosition(_activeTableCell);
+    if (!info) return;
+    const { table, row, allRows } = info;
+    if (allRows.length <= 1) return; // Keep at least 1 row
+    const nextRow = row.nextElementSibling || row.previousElementSibling;
+    row.remove();
+    if (nextRow) {
+        const cell = nextRow.querySelector('td, th');
+        if (cell) _focusCell(cell);
+    }
+    hideTableToolbar();
+    setNoteDirty(true);
+}
+
+function deleteTableColumn() {
+    if (!_activeTableCell) return;
+    const info = _getCellPosition(_activeTableCell);
+    if (!info) return;
+    const { table, colIndex, allRows } = info;
+    if (allRows[0] && allRows[0].children.length <= 1) return; // Keep at least 1 col
+    allRows.forEach(r => {
+        if (r.children[colIndex]) r.children[colIndex].remove();
+    });
+    hideTableToolbar();
+    setNoteDirty(true);
+}
+
+function _focusCell(cell) {
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+function navigateTableCell(forward) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const node = sel.anchorNode;
+    const cell = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+    const td = cell ? cell.closest('td, th') : null;
+    if (!td) return false;
+    const editor = document.getElementById('note-editor');
+    if (!editor || !editor.contains(td)) return false;
+
+    const row = td.parentElement;
+    const table = td.closest('table');
+    if (!row || !table) return false;
+
+    const cells = Array.from(row.children);
+    const cellIdx = cells.indexOf(td);
+    const allRows = Array.from(table.querySelectorAll('tr'));
+    const rowIdx = allRows.indexOf(row);
+
+    if (forward) {
+        if (cellIdx < cells.length - 1) {
+            _focusCell(cells[cellIdx + 1]);
+        } else if (rowIdx < allRows.length - 1) {
+            const nextRow = allRows[rowIdx + 1];
+            const firstCell = nextRow.querySelector('td, th');
+            if (firstCell) _focusCell(firstCell);
+        } else {
+            // Last cell of last row — add a new row
+            const colCount = cells.length;
+            const newRow = document.createElement('tr');
+            for (let i = 0; i < colCount; i++) {
+                const newTd = document.createElement('td');
+                newTd.innerHTML = '&nbsp;';
+                newRow.appendChild(newTd);
+            }
+            let tbody = table.querySelector('tbody');
+            if (!tbody) { tbody = document.createElement('tbody'); table.appendChild(tbody); }
+            tbody.appendChild(newRow);
+            _focusCell(newRow.querySelector('td'));
+            setNoteDirty(true);
+        }
+    } else {
+        if (cellIdx > 0) {
+            _focusCell(cells[cellIdx - 1]);
+        } else if (rowIdx > 0) {
+            const prevRow = allRows[rowIdx - 1];
+            const lastCell = prevRow.children[prevRow.children.length - 1];
+            if (lastCell) _focusCell(lastCell);
+        }
+    }
+    return true;
+}
+
+function initTableToolbarEvents() {
+    const toolbar = document.getElementById('note-table-toolbar');
+    if (!toolbar) return;
+    toolbar.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // Prevent focus loss
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        switch (action) {
+            case 'add-row-above': addTableRow('above'); break;
+            case 'add-row-below': addTableRow('below'); break;
+            case 'add-col-left': addTableColumn('left'); break;
+            case 'add-col-right': addTableColumn('right'); break;
+            case 'delete-row': deleteTableRow(); break;
+            case 'delete-col': deleteTableColumn(); break;
+        }
+    });
+}
+
+
 function getNoteEditorNoteId() {
     const page = document.getElementById('note-editor-page');
     if (!page) return null;
@@ -729,6 +1436,11 @@ function applyNoteCommand(command) {
     if (!editor) return;
     editor.focus();
 
+    if (command === 'image') {
+        const imageInput = document.getElementById('note-image-input');
+        if (imageInput) imageInput.click();
+        return;
+    }
     if (command === 'checkbox') {
         // Toggle checkbox mode
         notesState.checkboxMode = !notesState.checkboxMode;
@@ -798,21 +1510,29 @@ function toggleInlineFormat(primaryTag, allTags) {
     if (!sel || sel.rangeCount === 0) return;
 
     const range = sel.getRangeAt(0);
+    const tagUpper = allTags.map(t => t.toUpperCase());
 
     // Check if cursor/selection is inside any of the format tags
     let existingFormat = null;
-    for (const tag of allTags) {
+    for (const tag of tagUpper) {
         existingFormat = findAncestorInEditor(sel.focusNode, tag, editor);
         if (existingFormat) break;
     }
 
     if (existingFormat) {
-        // Remove formatting - unwrap the element
-        unwrapFormatElement(existingFormat);
+        // ── REMOVE formatting ──
+        if (range.collapsed) {
+            // Cursor is inside the format element with no selection.
+            // Split the element at the cursor so future typing is unformatted.
+            _splitFormatAtCursor(existingFormat, range, sel, editor);
+        } else {
+            // There IS a selection — remove format only from the selected part
+            _removeFormatFromSelection(existingFormat, range, sel, tagUpper, editor);
+        }
         return;
     }
 
-    // Apply new formatting
+    // ── APPLY new formatting ──
     if (range.collapsed) {
         // No selection - insert empty formatted element for typing
         const wrapper = document.createElement(primaryTag.toLowerCase());
@@ -848,39 +1568,96 @@ function toggleInlineFormat(primaryTag, allTags) {
     }
 }
 
-// Unwrap a formatting element, preserving contents and cursor position
-function unwrapFormatElement(element) {
-    const sel = window.getSelection();
-    const parent = element.parentNode;
+// Split a formatting element at the cursor so future typing is unformatted
+function _splitFormatAtCursor(formatEl, range, sel, editor) {
+    const parent = formatEl.parentNode;
     if (!parent) return;
 
-    // Move all children out of the element
-    const fragment = document.createDocumentFragment();
-    let lastChild = null;
-    while (element.firstChild) {
-        lastChild = element.firstChild;
-        fragment.appendChild(lastChild);
+    // Clone the element for the right half
+    const rightClone = formatEl.cloneNode(false);
+
+    // Create a range from cursor to end of formatEl
+    const afterRange = document.createRange();
+    afterRange.setStart(range.startContainer, range.startOffset);
+    afterRange.setEnd(formatEl, formatEl.childNodes.length);
+
+    // Extract everything after the cursor into the right clone
+    const afterContents = afterRange.extractContents();
+    if (afterContents.textContent || afterContents.childNodes.length) {
+        rightClone.appendChild(afterContents);
+        parent.insertBefore(rightClone, formatEl.nextSibling);
     }
 
-    // Replace element with its contents
-    parent.insertBefore(fragment, element);
-    parent.removeChild(element);
+    // Insert a zero-width space between left and right halves for cursor placement
+    const zwsp = document.createTextNode('\u200B');
+    parent.insertBefore(zwsp, rightClone || formatEl.nextSibling);
 
-    // Normalize to merge adjacent text nodes
-    parent.normalize();
+    // If left half is empty, remove it
+    if (!formatEl.textContent && !formatEl.childNodes.length) {
+        formatEl.remove();
+    }
 
-    // Restore cursor position
-    if (sel && lastChild) {
-        const newRange = document.createRange();
-        if (lastChild.nodeType === 3) {
-            newRange.setStart(lastChild, lastChild.length);
-        } else {
-            newRange.setStartAfter(lastChild);
+    // Position cursor at the zwsp
+    const newRange = document.createRange();
+    newRange.setStart(zwsp, 1);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+}
+
+// Remove format tags from a selection, preserving nested formatting of other types
+function _removeFormatFromSelection(formatEl, range, sel, tagUpper, editor) {
+    // Extract the selected content
+    let extracted;
+    try {
+        extracted = range.extractContents();
+    } catch (e) {
+        // Fallback: just unwrap the whole element
+        _unwrapElementPreservingChildren(formatEl);
+        return;
+    }
+
+    // Strip only the target format tags from the extracted fragment
+    _stripTagsFromFragment(extracted, tagUpper);
+
+    // Insert the cleaned content back
+    range.insertNode(extracted);
+
+    // The original formatEl may now be empty or split.
+    // Clean up: if the formatEl is now empty, remove it.
+    if (formatEl.parentNode && !formatEl.textContent && !formatEl.querySelector('*')) {
+        formatEl.remove();
+    }
+
+    // Normalize the editor to merge adjacent text nodes
+    editor.normalize();
+}
+
+// Strip specific tags from a document fragment, preserving their children
+function _stripTagsFromFragment(fragment, tagNames) {
+    const tagSet = new Set(tagNames.map(t => t.toUpperCase()));
+    // Walk bottom-up: find all matching elements and replace with their children
+    const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_ELEMENT);
+    const toUnwrap = [];
+    while (walker.nextNode()) {
+        if (tagSet.has(walker.currentNode.tagName)) {
+            toUnwrap.push(walker.currentNode);
         }
-        newRange.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(newRange);
     }
+    // Process in reverse so child unwraps don't interfere with parent unwraps
+    for (let i = toUnwrap.length - 1; i >= 0; i--) {
+        _unwrapElementPreservingChildren(toUnwrap[i]);
+    }
+}
+
+// Unwrap a single element, replacing it with its children in the DOM
+function _unwrapElementPreservingChildren(element) {
+    const parent = element.parentNode;
+    if (!parent) return;
+    while (element.firstChild) {
+        parent.insertBefore(element.firstChild, element);
+    }
+    parent.removeChild(element);
 }
 
 // Remove all formatting from selection
@@ -1127,16 +1904,12 @@ function bindNoteCheckboxes() {
         // Add the event listener
         checkbox.addEventListener('change', handleCheckboxChange);
 
-        // Apply initial state
+        // Apply initial state via CSS class (remove legacy inline styles)
         const label = checkbox.closest('.note-inline-checkbox');
         if (label) {
-            if (checkbox.checked) {
-                label.style.textDecoration = 'line-through';
-                label.style.opacity = '0.6';
-            } else {
-                label.style.textDecoration = 'none';
-                label.style.opacity = '1';
-            }
+            label.style.textDecoration = '';
+            label.style.opacity = '';
+            label.classList.toggle('checked', checkbox.checked);
         }
     });
 }
@@ -1151,13 +1924,7 @@ function handleCheckboxChange(e) {
     }
 
     if (label) {
-        if (checkbox.checked) {
-            label.style.textDecoration = 'line-through';
-            label.style.opacity = '0.6';
-        } else {
-            label.style.textDecoration = 'none';
-            label.style.opacity = '1';
-        }
+        label.classList.toggle('checked', checkbox.checked);
     }
 
     if (notesState.activeNoteIsArchived) {
@@ -1254,6 +2021,41 @@ function handleNoteEditorKeydown(e) {
         }
     }
 
+    // Tab / Shift+Tab in tables: navigate between cells
+    if (e.key === 'Tab') {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+            const node = sel.anchorNode;
+            const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+            const cell = el ? el.closest('td, th') : null;
+            if (cell && editor.contains(cell)) {
+                e.preventDefault();
+                navigateTableCell(!e.shiftKey);
+                return;
+            }
+        }
+    }
+
+    // Tab / Shift+Tab for list and checkbox indentation
+    if (e.key === 'Tab') {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+            const node = sel.anchorNode;
+            const li = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+            const listItem = li ? li.closest('li') : null;
+            if (listItem) {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    document.execCommand('outdent', false, null);
+                } else {
+                    document.execCommand('indent', false, null);
+                }
+                setNoteDirty(true);
+                return;
+            }
+        }
+    }
+
     if (e.key !== 'Enter') return;
 
     // Handle checkbox mode
@@ -1266,9 +2068,9 @@ function handleNoteEditorKeydown(e) {
         const container = range.startContainer;
         const parentEl = container.nodeType === 1 ? container : container.parentElement;
 
-        // Find the current line/label
+        // Find the current checkbox container (span.note-inline-checkbox)
         let label = parentEl;
-        while (label && label !== editor && label.tagName !== 'LABEL') {
+        while (label && label !== editor && !label.classList.contains('note-inline-checkbox')) {
             label = label.parentElement;
         }
 
@@ -2152,43 +2954,46 @@ async function openShareNoteModal() {
     const note = notesState.notes.find(n => n.id === noteId);
     if (!note) return;
 
-    const title = note.title || 'Untitled Note';
-    const shareText = typeof window.noteHtmlToShareText === 'function'
-        ? window.noteHtmlToShareText(note.content || '')
-        : (() => {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = note.content || '';
-            return tempDiv.textContent || tempDiv.innerText || '';
-        })();
-    const fileName = typeof window.buildShareTxtFileName === 'function'
-        ? window.buildShareTxtFileName(title, 'shared-note')
-        : 'shared-note.txt';
-    const fileText = `${title}\n\n${shareText}`.trim();
+    // Show the share modal with all export options
+    const modal = document.getElementById('share-note-modal');
+    if (!modal) {
+        // Fallback to universal share if modal not available
+        const title = note.title || 'Untitled Note';
+        const shareText = typeof window.noteHtmlToShareText === 'function'
+            ? window.noteHtmlToShareText(note.content || '')
+            : (() => {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = note.content || '';
+                return tempDiv.textContent || tempDiv.innerText || '';
+            })();
+        const fileName = typeof window.buildShareTxtFileName === 'function'
+            ? window.buildShareTxtFileName(title, 'shared-note')
+            : 'shared-note.txt';
+        const fileText = `${title}\n\n${shareText}`.trim();
 
-    // Use universal share function if available
-    if (typeof window.universalShare === 'function') {
-        const result = await window.universalShare({
-            title,
-            text: shareText,
-            fileName,
-            fileText,
-            allowClipboardFallback: false,
-            allowDownloadFallback: true,
-            preferWebFileShare: true,
-            requireFileShare: true
-        });
-        if (result.cancelled) return;
-        if (result.success) {
-            if (result.method === 'clipboard') {
-                showToast('Copied for sharing (browser limitation)', 'info', 2400);
-            } else if (result.method === 'download') {
-                showToast('Note file downloaded for sharing', 'success', 2400);
-            }
-            return;
+        if (typeof window.universalShare === 'function') {
+            await window.universalShare({
+                title, text: shareText, fileName, fileText,
+                allowClipboardFallback: false, allowDownloadFallback: true,
+                preferWebFileShare: true, requireFileShare: true
+            });
         }
+        return;
     }
 
-    showToast('Sharing is unavailable on this device/browser', 'error', 2600);
+    // Setup share modal controls
+    setupShareModalControls();
+
+    // Check for existing share link
+    const statusDiv = document.getElementById('share-note-status');
+    if (statusDiv) statusDiv.innerHTML = '';
+    if (note.share_token) {
+        showShareLink(note.share_token);
+    } else {
+        hideShareLink();
+    }
+
+    modal.classList.add('active');
 }
 
 function setupShareModalControls() {
@@ -2311,6 +3116,122 @@ function setupShareModalControls() {
             }
         };
     }
+
+    // Download as Markdown
+    const mdBtn = document.getElementById('share-note-md-btn');
+    if (mdBtn) {
+        mdBtn.onclick = () => {
+            const editorEl = document.getElementById('note-editor');
+            const titleEl = document.getElementById('note-title');
+            const title = (titleEl ? titleEl.value : '') || 'Untitled Note';
+            const content = editorEl ? editorEl.innerHTML : '';
+            const markdown = window.NoteMarkdown;
+            let mdContent = '';
+            if (markdown && typeof markdown.noteHtmlToMarkdown === 'function') {
+                mdContent = `# ${title}\n\n${markdown.noteHtmlToMarkdown(content)}`;
+            } else {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = content;
+                mdContent = `# ${title}\n\n${tempDiv.textContent || ''}`;
+            }
+
+            const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const safeName = title.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/g, '');
+            a.download = `${safeName || 'note'}.md`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('Markdown file downloaded', 'success', 2000);
+        };
+    }
+
+    // Export as PDF
+    const pdfBtn = document.getElementById('share-note-pdf-btn');
+    if (pdfBtn) {
+        pdfBtn.onclick = () => {
+            const editorEl = document.getElementById('note-editor');
+            const titleEl = document.getElementById('note-title');
+            const title = (titleEl ? titleEl.value : '') || 'Untitled Note';
+            const content = editorEl ? editorEl.innerHTML : '';
+            exportNoteToPdf({ title, content });
+        };
+    }
+}
+
+function exportNoteToPdf(note) {
+    if (!note) return;
+    const title = note.title || 'Untitled Note';
+    const content = note.content || '';
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+        showToast('Pop-up blocked. Please allow pop-ups for PDF export.', 'warning', 3000);
+        return;
+    }
+
+    const printHtml = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${title.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</title>
+<style>
+body {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1a1a1a;
+}
+h1 { font-size: 1.8rem; margin-bottom: 0.5rem; border-bottom: 1px solid #eee; padding-bottom: 0.5rem; }
+h2 { font-size: 1.5rem; margin-top: 1.5rem; }
+h3 { font-size: 1.25rem; margin-top: 1.25rem; }
+h4 { font-size: 1.1rem; margin-top: 1rem; }
+img { max-width: 100%; height: auto; page-break-inside: avoid; }
+table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; page-break-inside: avoid; }
+td, th { border: 1px solid #ccc; padding: 6px 10px; }
+th { background: #f5f5f5; font-weight: 600; }
+blockquote { border-left: 3px solid #ccc; margin: 0.75rem 0; padding: 0.5rem 1rem; color: #555; }
+pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; page-break-inside: avoid; }
+code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 0.9em; }
+hr { border: none; border-top: 1px solid #ddd; margin: 1.5rem 0; }
+mark { background: #fff3a8; padding: 1px 2px; border-radius: 2px; }
+.note-inline-checkbox { display: block; margin: 0.25rem 0; }
+.note-inline-checkbox.checked { text-decoration: line-through; opacity: 0.55; }
+.note-inline-checkbox input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none;
+    width: 14px; height: 14px; border: 1.5px solid #666;
+    border-radius: 2px; vertical-align: middle; margin-right: 0.4rem;
+    position: relative; display: inline-block;
+}
+.note-inline-checkbox input[type="checkbox"]:checked::after {
+    content: '\\2713'; position: absolute; top: -2px; left: 1px; font-size: 12px; color: #333;
+}
+.note-image-wrapper { display: block; margin: 0.5rem 0; }
+.note-embedded-image { max-width: 100%; height: auto; }
+@media print {
+    body { padding: 0; }
+}
+</style>
+</head>
+<body>
+<h1>${title.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
+${content}
+</body>
+</html>`;
+
+    printWindow.document.write(printHtml);
+    printWindow.document.close();
+    printWindow.onload = () => {
+        setTimeout(() => {
+            printWindow.print();
+        }, 300);
+    };
 }
 
 async function generateShareLink() {

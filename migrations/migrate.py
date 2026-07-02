@@ -335,6 +335,40 @@ def ensure_note_folder_table(cur):
     add_column(cur, "note_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
 
+def ensure_area_folder_table(cur):
+    """Create or align the Area folders table."""
+    if not table_exists(cur, "area_folder"):
+        cur.execute(
+            """
+            CREATE TABLE area_folder (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name VARCHAR(120) NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_folder_user_order "
+            "ON area_folder(user_id, order_index)"
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_area_folder_user_name ON area_folder(user_id, name)")
+        print("[add] area_folder table created")
+        return
+    add_column(cur, "area_folder", "user_id", "INTEGER")
+    add_column(cur, "area_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
+    add_column(cur, "area_folder", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    add_column(cur, "area_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_folder_user_order "
+        "ON area_folder(user_id, order_index)"
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_area_folder_user_name ON area_folder(user_id, name)")
+
+
 def ensure_area_table(cur):
     """Create or align the Areas table."""
     if not table_exists(cur, "area"):
@@ -343,6 +377,7 @@ def ensure_area_table(cur):
             CREATE TABLE area (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                folder_id INTEGER,
                 name VARCHAR(120) NOT NULL,
                 description TEXT,
                 color VARCHAR(20),
@@ -355,6 +390,10 @@ def ensure_area_table(cur):
             """
         )
         cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_user_folder_order "
+            "ON area(user_id, folder_id, order_index)"
+        )
+        cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_area_user_archived_order "
             "ON area(user_id, archived_at, order_index)"
         )
@@ -362,6 +401,7 @@ def ensure_area_table(cur):
         print("[add] area table created")
         return
     add_column(cur, "area", "user_id", "INTEGER")
+    add_column(cur, "area", "folder_id", "INTEGER")
     add_column(cur, "area", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "area", "description", "TEXT")
     add_column(cur, "area", "color", "VARCHAR(20)")
@@ -370,6 +410,10 @@ def ensure_area_table(cur):
     add_column(cur, "area", "archived_at", "TIMESTAMP")
     add_column(cur, "area", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "area", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_user_folder_order "
+        "ON area(user_id, folder_id, order_index)"
+    )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_area_user_archived_order "
         "ON area(user_id, archived_at, order_index)"
@@ -446,9 +490,11 @@ def ensure_area_section_table(cur):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 area_id INTEGER NOT NULL,
+                block_type VARCHAR(30) NOT NULL DEFAULT 'line',
                 title VARCHAR(120) NOT NULL,
                 description TEXT,
                 order_index INTEGER DEFAULT 0,
+                hidden_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -458,18 +504,28 @@ def ensure_area_section_table(cur):
             "CREATE INDEX IF NOT EXISTS idx_area_section_user_area_order "
             "ON area_section(user_id, area_id, order_index)"
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_area_section_user_area_type_order "
+            "ON area_section(user_id, area_id, block_type, order_index)"
+        )
         print("[add] area_section table created")
         return
     add_column(cur, "area_section", "user_id", "INTEGER")
     add_column(cur, "area_section", "area_id", "INTEGER")
+    add_column(cur, "area_section", "block_type", "VARCHAR(30) NOT NULL DEFAULT 'line'", default_sql="'line'")
     add_column(cur, "area_section", "title", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "area_section", "description", "TEXT")
     add_column(cur, "area_section", "order_index", "INTEGER DEFAULT 0")
+    add_column(cur, "area_section", "hidden_at", "TIMESTAMP")
     add_column(cur, "area_section", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "area_section", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_area_section_user_area_order "
         "ON area_section(user_id, area_id, order_index)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_area_section_user_area_type_order "
+        "ON area_section(user_id, area_id, block_type, order_index)"
     )
 
 
@@ -823,6 +879,7 @@ def ensure_recall_table(cur):
             CREATE TABLE recall_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                area_id INTEGER,
                 title VARCHAR(120) NOT NULL,
                 payload_type VARCHAR(10) NOT NULL,
                 payload TEXT NOT NULL,
@@ -834,11 +891,16 @@ def ensure_recall_table(cur):
             )
             """
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recall_user_area_updated "
+            "ON recall_items(user_id, area_id, updated_at)"
+        )
         print("[add] recall_items table created")
         if table_exists(cur, "recall_item"):
             print("[warn] legacy recall_item table exists; drop it with one_time_drop_recalls.py")
         return
 
+    add_column(cur, "recall_items", "area_id", "INTEGER")
     add_column(cur, "recall_items", "title", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "recall_items", "why", "VARCHAR(500)")
     add_column(cur, "recall_items", "summary", "TEXT")
@@ -847,6 +909,10 @@ def ensure_recall_table(cur):
     add_column(cur, "recall_items", "payload", "TEXT NOT NULL DEFAULT ''")
     add_column(cur, "recall_items", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "recall_items", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recall_user_area_updated "
+        "ON recall_items(user_id, area_id, updated_at)"
+    )
 
 
 def ensure_bookmark_table(cur):
@@ -857,6 +923,7 @@ def ensure_bookmark_table(cur):
             CREATE TABLE bookmark_item (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                area_id INTEGER,
                 title VARCHAR(200) NOT NULL,
                 description TEXT,
                 value TEXT NOT NULL,
@@ -867,9 +934,14 @@ def ensure_bookmark_table(cur):
             )
             """
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bookmark_user_area_pin "
+            "ON bookmark_item(user_id, area_id, pinned, pin_order)"
+        )
         print("[add] bookmark_item table created")
         return
     add_column(cur, "bookmark_item", "user_id", "INTEGER")
+    add_column(cur, "bookmark_item", "area_id", "INTEGER")
     add_column(cur, "bookmark_item", "title", "VARCHAR(200) NOT NULL DEFAULT ''")
     add_column(cur, "bookmark_item", "description", "TEXT")
     add_column(cur, "bookmark_item", "value", "TEXT NOT NULL DEFAULT ''")
@@ -877,6 +949,10 @@ def ensure_bookmark_table(cur):
     add_column(cur, "bookmark_item", "pin_order", "INTEGER DEFAULT 0")
     add_column(cur, "bookmark_item", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "bookmark_item", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bookmark_user_area_pin "
+        "ON bookmark_item(user_id, area_id, pinned, pin_order)"
+    )
 
 
 def ensure_do_feed_table(cur):
@@ -1226,6 +1302,7 @@ def ensure_document_folder_table(cur):
             CREATE TABLE document_folder (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                area_id INTEGER,
                 parent_id INTEGER,
                 name VARCHAR(120) NOT NULL,
                 order_index INTEGER DEFAULT 0,
@@ -1235,14 +1312,23 @@ def ensure_document_folder_table(cur):
             )
             """
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_folder_user_area_parent "
+            "ON document_folder(user_id, area_id, parent_id)"
+        )
         print("[add] document_folder table created")
         return
+    add_column(cur, "document_folder", "area_id", "INTEGER")
     add_column(cur, "document_folder", "parent_id", "INTEGER")
     add_column(cur, "document_folder", "name", "VARCHAR(120) NOT NULL DEFAULT ''")
     add_column(cur, "document_folder", "order_index", "INTEGER DEFAULT 0")
     add_column(cur, "document_folder", "archived_at", "TIMESTAMP")
     add_column(cur, "document_folder", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "document_folder", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_document_folder_user_area_parent "
+        "ON document_folder(user_id, area_id, parent_id)"
+    )
 
 
 def ensure_document_table(cur):
@@ -1253,6 +1339,7 @@ def ensure_document_table(cur):
             CREATE TABLE document (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                area_id INTEGER,
                 folder_id INTEGER,
                 title VARCHAR(255) NOT NULL,
                 original_filename VARCHAR(255) NOT NULL,
@@ -1270,9 +1357,11 @@ def ensure_document_table(cur):
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_document_user ON document(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_document_user_area ON document(user_id, area_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_document_folder ON document(folder_id)")
         print("[add] document table created")
         return
+    add_column(cur, "document", "area_id", "INTEGER")
     add_column(cur, "document", "folder_id", "INTEGER")
     add_column(cur, "document", "title", "VARCHAR(255) NOT NULL DEFAULT ''")
     add_column(cur, "document", "original_filename", "VARCHAR(255) NOT NULL DEFAULT ''")
@@ -1287,7 +1376,40 @@ def ensure_document_table(cur):
     add_column(cur, "document", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     add_column(cur, "document", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_document_user ON document(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_document_user_area ON document(user_id, area_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_document_folder ON document(folder_id)")
+
+
+def ensure_note_image_table(cur):
+    if not table_exists(cur, "note_image"):
+        cur.execute(
+            """
+            CREATE TABLE note_image (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                note_id INTEGER,
+                original_filename VARCHAR(255),
+                stored_filename VARCHAR(100) NOT NULL UNIQUE,
+                file_type VARCHAR(50) NOT NULL,
+                file_size INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES user(id),
+                FOREIGN KEY (note_id) REFERENCES note(id) ON DELETE SET NULL
+            )
+            """
+        )
+        print("[add] note_image table created")
+    else:
+        print("[ok] note_image table exists")
+    add_column(cur, "note_image", "user_id", "INTEGER NOT NULL DEFAULT 0")
+    add_column(cur, "note_image", "note_id", "INTEGER")
+    add_column(cur, "note_image", "original_filename", "VARCHAR(255)")
+    add_column(cur, "note_image", "stored_filename", "VARCHAR(100) NOT NULL DEFAULT ''")
+    add_column(cur, "note_image", "file_type", "VARCHAR(50) NOT NULL DEFAULT ''")
+    add_column(cur, "note_image", "file_size", "INTEGER DEFAULT 0")
+    add_column(cur, "note_image", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_note_image_user ON note_image(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_note_image_note ON note_image(note_id)")
 
 
 def main():
@@ -1304,6 +1426,7 @@ def main():
         ensure_note_list_item_table(cur)
         ensure_inbox_item_table(cur)
         ensure_note_folder_table(cur)
+        ensure_area_folder_table(cur)
         ensure_area_table(cur)
         ensure_area_item_table(cur)
         ensure_area_section_table(cur)
@@ -1327,6 +1450,7 @@ def main():
         ensure_job_lock_table(cur)
         ensure_document_folder_table(cur)
         ensure_document_table(cur)
+        ensure_note_image_table(cur)
         conn.commit()
         print("Baseline migration complete.")
     finally:

@@ -13,6 +13,12 @@ def _normalize_ids(raw_ids):
     return ids
 
 
+def _filter_area_scope(query, model, area_id):
+    if area_id is None:
+        return query.filter(model.area_id.is_(None))
+    return query.filter(model.area_id == area_id)
+
+
 def bulk_notes_route(
     *,
     request,
@@ -145,6 +151,7 @@ def bulk_vault_documents_route(
     os_module,
     vault_root_for_user,
     now_local,
+    area_id=None,
 ):
     user = get_current_user()
     if not user:
@@ -170,7 +177,11 @@ def bulk_vault_documents_route(
     if not ids:
         return jsonify({"error": "No valid document ids provided"}), 400
 
-    docs = Document.query.filter(Document.id.in_(ids), Document.user_id == user.id).all()
+    docs = _filter_area_scope(
+        Document.query.filter(Document.id.in_(ids), Document.user_id == user.id),
+        Document,
+        area_id,
+    ).all()
     if not docs:
         return jsonify({"error": "No matching documents found"}), 404
 
@@ -216,6 +227,7 @@ def bulk_vault_documents_route(
                     folder = DocumentFolder.query.filter_by(
                         id=doc.folder_id,
                         user_id=user.id,
+                        area_id=area_id,
                     ).first()
                     if not folder or folder.archived_at:
                         doc.folder_id = None
@@ -227,7 +239,11 @@ def bulk_vault_documents_route(
     if action == "pin":
         max_pin = (
             db.session.query(db.func.coalesce(db.func.max(Document.pin_order), 0))
-            .filter(Document.user_id == user.id, Document.pinned.is_(True))
+            .filter(
+                Document.user_id == user.id,
+                Document.area_id.is_(None) if area_id is None else Document.area_id == area_id,
+                Document.pinned.is_(True),
+            )
             .scalar()
             or 0
         )
@@ -264,6 +280,7 @@ def bulk_vault_documents_route(
                 id=folder_id,
                 user_id=user.id,
                 archived_at=None,
+                area_id=area_id,
             ).first()
             if not folder:
                 return jsonify({"error": "Destination folder not found"}), 404

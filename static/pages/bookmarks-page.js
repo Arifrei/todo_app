@@ -9,6 +9,16 @@ const bookmarkState = {
 let bookmarkSelection = null;
 let bookmarkBulkActions = null;
 
+function bookmarkApiPath(path) {
+    const areaId = document.getElementById('areas-page')?.dataset.areaId;
+    if (!areaId) return path;
+    return path.replace('/api/bookmarks', `/api/areas/${areaId}/bookmarks`);
+}
+
+function isAreaBookmarkLibrary() {
+    return Boolean(document.getElementById('areas-page')?.dataset.areaId);
+}
+
 function initBookmarkSelection() {
     bookmarkSelection = new SelectionManager({
         moduleName: 'bookmark',
@@ -23,7 +33,7 @@ function initBookmarkSelection() {
     });
 
     bookmarkBulkActions = new BulkActions({
-        apiEndpoint: '/api/bookmarks/bulk',
+        apiEndpoint: bookmarkApiPath('/api/bookmarks/bulk'),
         selectionManager: bookmarkSelection,
         moduleName: 'bookmark',
         onComplete: () => {
@@ -92,8 +102,11 @@ function renderBookmarkGrid() {
     });
 
     if (!items.length) {
+        const emptyAction = !bookmarkState.search && !isAreaBookmarkLibrary()
+            ? { label: 'Add Bookmark', icon: 'plus', onclick: 'openAddBookmarkModal()' }
+            : null;
         renderEmptyState(grid, 'bookmark', bookmarkState.search ? 'No bookmarks match your search.' : 'No bookmarks yet.',
-            !bookmarkState.search ? { label: 'Add Bookmark', icon: 'plus', onclick: 'openAddBookmarkModal()' } : null);
+            emptyAction);
         return;
     }
 
@@ -165,7 +178,7 @@ async function loadBookmarks() {
     const grid = document.getElementById('bookmark-grid');
     if (grid) grid.innerHTML = '<div class="bookmark-empty">Loading...</div>';
     try {
-        const res = await fetch('/api/bookmarks');
+        const res = await fetch(bookmarkApiPath('/api/bookmarks'));
         if (!res.ok) throw new Error('Failed to load bookmarks');
         bookmarkState.items = await res.json();
         renderBookmarkGrid();
@@ -247,7 +260,7 @@ function renderBookmarkModalView(item) {
 
 async function refreshBookmarkDetails(id) {
     try {
-        const res = await fetch(`/api/bookmarks/${id}`);
+        const res = await fetch(bookmarkApiPath(`/api/bookmarks/${id}`));
         if (!res.ok) throw new Error('Failed to load bookmark');
         const fresh = await res.json();
         const idx = bookmarkState.items.findIndex(i => i.id === fresh.id);
@@ -331,13 +344,13 @@ async function saveBookmarkFromModal() {
     try {
         let res;
         if (bookmarkState.mode === 'add') {
-            res = await fetch('/api/bookmarks', {
+            res = await fetch(bookmarkApiPath('/api/bookmarks'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
         } else {
-            res = await fetch(`/api/bookmarks/${bookmarkState.activeId}`, {
+            res = await fetch(bookmarkApiPath(`/api/bookmarks/${bookmarkState.activeId}`), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -370,7 +383,7 @@ async function saveBookmarkFromModal() {
 function confirmDeleteBookmark(id) {
     openConfirmModal('Delete this bookmark?', async () => {
         try {
-            const res = await fetch(`/api/bookmarks/${id}`, { method: 'DELETE' });
+            const res = await fetch(bookmarkApiPath(`/api/bookmarks/${id}`), { method: 'DELETE' });
             if (!res.ok) throw new Error('Delete failed');
             bookmarkState.items = bookmarkState.items.filter(item => item.id !== id);
             renderBookmarkGrid();
@@ -387,7 +400,7 @@ async function toggleBookmarkPin(id) {
     const item = bookmarkState.items.find(i => i.id === id);
     if (!item) return;
     try {
-        const res = await fetch(`/api/bookmarks/${id}`, {
+        const res = await fetch(bookmarkApiPath(`/api/bookmarks/${id}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinned: !item.pinned })

@@ -18,6 +18,7 @@ def _build_linked_task_payload(item, linked_event, synthetic_id, day_key):
         'display_mode': linked_event.display_mode if linked_event and linked_event.display_mode else 'both',
         'priority': linked_event.priority if linked_event else 'medium',
         'item_note': linked_event.item_note if linked_event else None,
+        'linked_notes': [{'id': n.id, 'title': n.title} for n in (linked_event.notes or [])] if linked_event else [],
         'day': day_key,
         'order_index': linked_event.order_index if linked_event else abs(int(synthetic_id))
     }

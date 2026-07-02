@@ -6,12 +6,17 @@
         areaId: page.dataset.areaId ? Number(page.dataset.areaId) : null,
         area: null,
         areas: [],
+        areaFolders: [],
+        activeFolderId: null,
         sections: [],
         blocks: [],
         legacyItems: [],
+        activeAreaView: 'main',
+        activeLibraryTab: 'bookmarks',
         archivedFilter: '0',
         workspaceFilter: 'all',
         modalAreaId: null,
+        folderModalId: null,
         sectionModalId: null,
         sectionModalType: 'line',
         blockModalId: null,
@@ -48,6 +53,16 @@
         list: { label: 'List', icon: 'fa-solid fa-list-ul', tone: 'list' },
         task_list: { label: 'Task list', icon: 'fa-solid fa-list-check', tone: 'task' },
     };
+    const paneTypeOrder = ['line', 'note', 'list', 'task_list'];
+    const paneLabels = {
+        line: 'Lines',
+        note: 'Notes',
+        list: 'Lists',
+        task_list: 'Tasks',
+    };
+
+    const areaLineLinkPattern = /\[\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]\]|\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
+    const areaLineInlineFormatPattern = /(\*\*([^*\n]+)\*\*|__([^_\n]+)__|\*([^*\n]+)\*|_([^_\n]+)_|~~([^~\n]+)~~|`([^`\n]+)`)/g;
 
     function paneGroupLabel(blockType) {
         if (blockType === 'task_list') return 'task list';
@@ -58,6 +73,96 @@
 
     const $ = (selector, root = document) => root.querySelector(selector);
     const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+    function areaViewStorageKey() {
+        return `todo_app_area_${state.areaId || 'new'}_active_view`;
+    }
+
+    function areaLibraryStorageKey() {
+        return `todo_app_area_${state.areaId || 'new'}_library_tab`;
+    }
+
+    function normalizeAreaView(value) {
+        return value === 'library' ? 'library' : 'main';
+    }
+
+    function normalizeLibraryTab(value) {
+        return ['bookmarks', 'recalls', 'vault'].includes(value) ? value : 'bookmarks';
+    }
+
+    function readLocalStorageValue(key) {
+        try {
+            return window.localStorage ? window.localStorage.getItem(key) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function writeLocalStorageValue(key, value) {
+        try {
+            if (window.localStorage) window.localStorage.setItem(key, value);
+        } catch {
+            // View state is non-critical; ignore storage failures.
+        }
+    }
+
+    function applyAreaLibraryState() {
+        const isLibrary = state.activeAreaView === 'library';
+        $$('[data-area-view-panel]').forEach((panel) => {
+            panel.hidden = panel.dataset.areaViewPanel !== state.activeAreaView;
+        });
+        $$('[data-area-view]').forEach((button) => {
+            const active = button.dataset.areaView === state.activeAreaView;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        $$('[data-area-library-panel]').forEach((panel) => {
+            panel.hidden = panel.dataset.areaLibraryPanel !== state.activeLibraryTab;
+            panel.classList.toggle('active', panel.dataset.areaLibraryPanel === state.activeLibraryTab);
+        });
+        $$('[data-area-library-tab]').forEach((button) => {
+            const active = button.dataset.areaLibraryTab === state.activeLibraryTab;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+
+        const addMenu = $('#area-add-menu');
+        if (addMenu) {
+            addMenu.hidden = isLibrary;
+            if (isLibrary) setAreaAddMenuOpen(false);
+        }
+    }
+
+    function setAreaView(view, persist = true) {
+        state.activeAreaView = normalizeAreaView(view);
+        if (persist) writeLocalStorageValue(areaViewStorageKey(), state.activeAreaView);
+        applyAreaLibraryState();
+    }
+
+    function setAreaLibraryTab(tab, persist = true) {
+        state.activeLibraryTab = normalizeLibraryTab(tab);
+        if (persist) writeLocalStorageValue(areaLibraryStorageKey(), state.activeLibraryTab);
+        applyAreaLibraryState();
+    }
+
+    function initAreaLibraryControls() {
+        const params = new URLSearchParams(window.location.search || '');
+        const requestedLibraryTab = normalizeLibraryTab(params.get('library'));
+        const requestedView = params.has('library') ? 'library' : params.get('view');
+        state.activeAreaView = normalizeAreaView(requestedView || readLocalStorageValue(areaViewStorageKey()) || 'main');
+        state.activeLibraryTab = normalizeLibraryTab(params.get('library') || readLocalStorageValue(areaLibraryStorageKey()) || requestedLibraryTab);
+
+        $$('[data-area-view]').forEach((button) => {
+            button.addEventListener('click', () => setAreaView(button.dataset.areaView));
+        });
+        $$('[data-area-library-tab]').forEach((button) => {
+            button.addEventListener('click', () => {
+                setAreaLibraryTab(button.dataset.areaLibraryTab);
+                setAreaView('library');
+            });
+        });
+        applyAreaLibraryState();
+    }
 
     function notify(message, type = 'info') {
         if (typeof window.showToast === 'function') {
@@ -137,10 +242,61 @@
         if (window.confirm(message)) onConfirm();
     }
 
-    function areaIconMarkup() {
+    function areaIconMarkup(iconClass = 'fa-solid fa-layer-group') {
         const wrapper = el('span', 'area-card-icon');
-        wrapper.appendChild(icon('fa-solid fa-layer-group'));
+        wrapper.appendChild(icon(iconClass));
         return wrapper;
+    }
+
+    function normalizeAreaFolderId(value) {
+        if (value === null || value === undefined || value === '' || value === 'null') return null;
+        const numberValue = Number(value);
+        return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+    }
+
+    function sortedAreaFolders() {
+        return [...(state.areaFolders || [])].sort((a, b) => {
+            return (a.order_index || 0) - (b.order_index || 0)
+                || String(a.name || '').localeCompare(String(b.name || ''))
+                || Number(a.id || 0) - Number(b.id || 0);
+        });
+    }
+
+    function activeAreaFolder() {
+        const folderId = normalizeAreaFolderId(state.activeFolderId);
+        if (folderId === null) return null;
+        return (state.areaFolders || []).find((folder) => Number(folder.id) === folderId) || null;
+    }
+
+    function areasForFolder(folderId) {
+        const normalizedFolderId = normalizeAreaFolderId(folderId);
+        return (state.areas || []).filter((area) => normalizeAreaFolderId(area.folder_id) === normalizedFolderId);
+    }
+
+    function areaMatchesSearch(area, search) {
+        if (!search) return true;
+        return `${area.name || ''} ${area.description || ''}`.toLowerCase().includes(search);
+    }
+
+    function folderMatchesSearch(folder, search) {
+        if (!search) return true;
+        if (`${folder.name || ''}`.toLowerCase().includes(search)) return true;
+        return areasForFolder(folder.id).some((area) => areaMatchesSearch(area, search));
+    }
+
+    function buildAreaFolderOptions() {
+        const options = [{ id: '', label: 'Main page' }];
+        sortedAreaFolders().forEach((folder) => {
+            options.push({ id: folder.id, label: folder.name || 'Untitled folder' });
+        });
+        return options;
+    }
+
+    function fillAreaFolderSelect(selectedFolderId = null) {
+        const select = $('#area-folder-select');
+        if (!select) return;
+        setSelectOptions(select, buildAreaFolderOptions(), 'Main page');
+        select.value = normalizeAreaFolderId(selectedFolderId) === null ? '' : String(selectedFolderId);
     }
 
     function openAreaModal(area = null) {
@@ -149,7 +305,65 @@
         $('#area-name-input').value = area ? area.name || '' : '';
         $('#area-description-input').value = area ? area.description || '' : '';
         $('#area-color-input').value = area ? area.color || '#3b82f6' : '#3b82f6';
+
+        const folderField = $('#area-folder-field');
+        setHidden(folderField, !!state.areaId);
+        if (!state.areaId && folderField) {
+            fillAreaFolderSelect(area ? area.folder_id : state.activeFolderId);
+        }
         openModal('area-modal');
+    }
+
+    function openAreaMoveModal(area) {
+        openAreaModal(area);
+        setTimeout(() => $('#area-folder-select')?.focus(), 30);
+    }
+
+    function openAreaFolderModal(folder = null) {
+        state.folderModalId = folder ? folder.id : null;
+        $('#area-folder-modal-title').textContent = folder ? 'Rename folder' : 'New folder';
+        $('#area-folder-name-input').value = folder ? folder.name || '' : '';
+        openModal('area-folder-modal');
+    }
+
+    async function saveAreaFolderFromModal() {
+        const payload = { name: $('#area-folder-name-input').value.trim() };
+        if (!payload.name) {
+            notify('Folder name is required', 'warning');
+            return;
+        }
+
+        try {
+            await api(
+                state.folderModalId ? `/api/area-folders/${state.folderModalId}` : '/api/area-folders',
+                {
+                    method: state.folderModalId ? 'PUT' : 'POST',
+                    payload,
+                }
+            );
+            closeModal('area-folder-modal');
+            notify(state.folderModalId ? 'Folder renamed' : 'Folder created', 'success');
+            await loadAreas();
+        } catch (error) {
+            notify(error.message || 'Could not save folder', 'error');
+        }
+    }
+
+    async function deleteAreaFolder(folderId = null) {
+        const folder = folderId
+            ? (state.areaFolders || []).find((entry) => Number(entry.id) === Number(folderId))
+            : activeAreaFolder();
+        if (!folder) return;
+        confirmAction('Delete this folder? Areas inside it will move back to the main page.', async () => {
+            try {
+                await api(`/api/area-folders/${folder.id}`, { method: 'DELETE' });
+                if (Number(state.activeFolderId) === Number(folder.id)) state.activeFolderId = null;
+                notify('Folder deleted', 'success');
+                await loadAreas();
+            } catch (error) {
+                notify(error.message || 'Could not delete folder', 'error');
+            }
+        });
     }
 
     function closeAreaCardMenus(exceptMenu = null) {
@@ -176,6 +390,10 @@
             description: $('#area-description-input').value.trim() || null,
             color: $('#area-color-input').value || '#3b82f6',
         };
+        const folderField = $('#area-folder-field');
+        if (folderField && !folderField.hidden) {
+            payload.folder_id = $('#area-folder-select')?.value || null;
+        }
         if (!payload.name) {
             notify('Area name is required', 'warning');
             return;
@@ -202,108 +420,190 @@
         }
     }
 
+    function appendAreaMenuButton(dropdown, iconClass, label, onClick, danger = false) {
+        const item = el('button', danger ? 'area-card-menu-item danger' : 'area-card-menu-item');
+        item.type = 'button';
+        item.setAttribute('role', 'menuitem');
+        item.appendChild(icon(iconClass));
+        item.appendChild(el('span', '', label));
+        item.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeAreaCardMenus();
+            onClick();
+        });
+        dropdown.appendChild(item);
+        return item;
+    }
+
+    function buildAreaCard(area) {
+        const card = el('article', 'area-card');
+        card.style.setProperty('--area-color', area.color || '#3b82f6');
+
+        const link = el('a', 'area-card-link');
+        link.href = `/areas/${area.id}`;
+        link.appendChild(areaIconMarkup());
+
+        const content = el('div', 'area-card-content');
+        content.appendChild(el('h2', '', area.name || 'Untitled area'));
+        if (area.description) content.appendChild(el('p', '', area.description));
+        link.appendChild(content);
+        card.appendChild(link);
+
+        const stats = el('div', 'area-card-stats');
+        stats.appendChild(el('span', '', `${area.section_count || 0} sections`));
+        stats.appendChild(el('span', '', `${area.block_count || 0} blocks`));
+        stats.appendChild(el('span', '', `${area.open_count || 0} open`));
+        card.appendChild(stats);
+
+        const actions = el('div', 'area-card-actions');
+        const menu = el('div', 'area-card-menu');
+        const menuBtn = el('button', 'area-icon-btn area-card-menu-trigger');
+        menuBtn.type = 'button';
+        menuBtn.title = 'Area options';
+        menuBtn.setAttribute('aria-label', 'Area options');
+        menuBtn.setAttribute('aria-haspopup', 'menu');
+        menuBtn.setAttribute('aria-expanded', 'false');
+        menuBtn.appendChild(icon('fa-solid fa-ellipsis-vertical'));
+        menuBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const shouldOpen = !menu.classList.contains('open');
+            closeAreaCardMenus(menu);
+            menu.classList.toggle('open', shouldOpen);
+            menuBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+        });
+
+        const dropdown = el('div', 'area-card-dropdown');
+        dropdown.setAttribute('role', 'menu');
+        appendAreaMenuButton(dropdown, 'fa-solid fa-pen', 'Edit', () => openAreaModal(area));
+        if (!state.areaId) appendAreaMenuButton(dropdown, 'fa-solid fa-folder', 'Move', () => openAreaMoveModal(area));
+        if (!area.is_archived) {
+            appendAreaMenuButton(dropdown, 'fa-solid fa-box-archive', 'Archive', () => archiveArea(area.id), true);
+        }
+
+        menu.appendChild(menuBtn);
+        menu.appendChild(dropdown);
+        actions.appendChild(menu);
+        card.appendChild(actions);
+        return card;
+    }
+
+    function buildAreaFolderCard(folder) {
+        const folderAreas = areasForFolder(folder.id);
+        const card = el('article', 'area-card area-folder-card');
+        const openButton = el('button', 'area-card-link');
+        openButton.type = 'button';
+        openButton.appendChild(areaIconMarkup('fa-solid fa-folder'));
+
+        const content = el('div', 'area-card-content');
+        content.appendChild(el('h2', '', folder.name || 'Untitled folder'));
+        content.appendChild(el('p', '', 'Grouped areas'));
+        openButton.appendChild(content);
+        openButton.addEventListener('click', () => {
+            state.activeFolderId = Number(folder.id);
+            renderAreas();
+        });
+        card.appendChild(openButton);
+
+        const stats = el('div', 'area-card-stats');
+        const count = folderAreas.length;
+        stats.appendChild(el('span', '', `${count} ${count === 1 ? 'area' : 'areas'}`));
+        card.appendChild(stats);
+
+        const actions = el('div', 'area-card-actions');
+        const menu = el('div', 'area-card-menu');
+        const menuBtn = el('button', 'area-icon-btn area-card-menu-trigger');
+        menuBtn.type = 'button';
+        menuBtn.title = 'Folder options';
+        menuBtn.setAttribute('aria-label', 'Folder options');
+        menuBtn.setAttribute('aria-haspopup', 'menu');
+        menuBtn.setAttribute('aria-expanded', 'false');
+        menuBtn.appendChild(icon('fa-solid fa-ellipsis-vertical'));
+        menuBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const shouldOpen = !menu.classList.contains('open');
+            closeAreaCardMenus(menu);
+            menu.classList.toggle('open', shouldOpen);
+            menuBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+        });
+
+        const dropdown = el('div', 'area-card-dropdown');
+        dropdown.setAttribute('role', 'menu');
+        appendAreaMenuButton(dropdown, 'fa-solid fa-pen', 'Rename', () => openAreaFolderModal(folder));
+        appendAreaMenuButton(dropdown, 'fa-solid fa-trash', 'Delete', () => deleteAreaFolder(folder.id), true);
+        menu.appendChild(menuBtn);
+        menu.appendChild(dropdown);
+        actions.appendChild(menu);
+        card.appendChild(actions);
+        return card;
+    }
+
+    function renderAreaFolderBar() {
+        const bar = $('#area-folder-bar');
+        if (!bar) return;
+        const folder = activeAreaFolder();
+        if (!folder) {
+            state.activeFolderId = null;
+            bar.hidden = true;
+            return;
+        }
+        $('#area-folder-current-name').textContent = folder.name || 'Untitled folder';
+        bar.hidden = false;
+    }
+
     function renderAreas() {
         const grid = $('#areas-grid');
         if (!grid) return;
+        renderAreaFolderBar();
         grid.innerHTML = '';
 
         const search = ($('#area-search') && $('#area-search').value.trim().toLowerCase()) || '';
-        const areas = state.areas.filter((area) => {
-            if (!search) return true;
-            return `${area.name || ''} ${area.description || ''}`.toLowerCase().includes(search);
-        });
+        const activeFolderId = normalizeAreaFolderId(state.activeFolderId);
+        let renderedCount = 0;
 
-        if (!areas.length) {
+        if (activeFolderId === null) {
+            sortedAreaFolders()
+                .filter((folder) => folderMatchesSearch(folder, search))
+                .forEach((folder) => {
+                    grid.appendChild(buildAreaFolderCard(folder));
+                    renderedCount += 1;
+                });
+        }
+
+        areasForFolder(activeFolderId)
+            .filter((area) => areaMatchesSearch(area, search))
+            .forEach((area) => {
+                grid.appendChild(buildAreaCard(area));
+                renderedCount += 1;
+            });
+
+        if (!renderedCount) {
             const empty = el('div', 'areas-empty');
+            const message = search
+                ? 'No areas or folders match this search.'
+                : activeFolderId === null
+                    ? 'Create an area or folder for a responsibility, research stream, client, or long-running plan.'
+                    : 'This folder is empty. Add an area here or move one into this folder.';
             empty.innerHTML = `
                 <div class="area-empty-icon"><i class="fa-solid fa-layer-group"></i></div>
                 <h2>No areas found</h2>
-                <p>Create an area for a responsibility, research stream, client, or long-running plan.</p>
+                <p>${message}</p>
             `;
             grid.appendChild(empty);
-            return;
         }
-
-        areas.forEach((area) => {
-            const card = el('article', 'area-card');
-            card.style.setProperty('--area-color', area.color || '#3b82f6');
-
-            const link = el('a', 'area-card-link');
-            link.href = `/areas/${area.id}`;
-            link.appendChild(areaIconMarkup());
-
-            const content = el('div', 'area-card-content');
-            content.appendChild(el('h2', '', area.name || 'Untitled area'));
-            if (area.description) content.appendChild(el('p', '', area.description));
-            link.appendChild(content);
-            card.appendChild(link);
-
-            const stats = el('div', 'area-card-stats');
-            stats.appendChild(el('span', '', `${area.section_count || 0} sections`));
-            stats.appendChild(el('span', '', `${area.block_count || 0} blocks`));
-            stats.appendChild(el('span', '', `${area.open_count || 0} open`));
-            card.appendChild(stats);
-
-            const actions = el('div', 'area-card-actions');
-            const menu = el('div', 'area-card-menu');
-            const menuBtn = el('button', 'area-icon-btn area-card-menu-trigger');
-            menuBtn.type = 'button';
-            menuBtn.title = 'Area options';
-            menuBtn.setAttribute('aria-label', 'Area options');
-            menuBtn.setAttribute('aria-haspopup', 'menu');
-            menuBtn.setAttribute('aria-expanded', 'false');
-            menuBtn.appendChild(icon('fa-solid fa-ellipsis-vertical'));
-            menuBtn.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                const shouldOpen = !menu.classList.contains('open');
-                closeAreaCardMenus(menu);
-                menu.classList.toggle('open', shouldOpen);
-                menuBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
-            });
-
-            const dropdown = el('div', 'area-card-dropdown');
-            dropdown.setAttribute('role', 'menu');
-
-            const editItem = el('button', 'area-card-menu-item');
-            editItem.type = 'button';
-            editItem.setAttribute('role', 'menuitem');
-            editItem.appendChild(icon('fa-solid fa-pen'));
-            editItem.appendChild(el('span', '', 'Edit'));
-            editItem.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                closeAreaCardMenus();
-                openAreaModal(area);
-            });
-            dropdown.appendChild(editItem);
-
-            if (!area.is_archived) {
-                const archiveItem = el('button', 'area-card-menu-item danger');
-                archiveItem.type = 'button';
-                archiveItem.setAttribute('role', 'menuitem');
-                archiveItem.appendChild(icon('fa-solid fa-box-archive'));
-                archiveItem.appendChild(el('span', '', 'Archive'));
-                archiveItem.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    closeAreaCardMenus();
-                    archiveArea(area.id);
-                });
-                dropdown.appendChild(archiveItem);
-            }
-
-            menu.appendChild(menuBtn);
-            menu.appendChild(dropdown);
-            actions.appendChild(menu);
-            card.appendChild(actions);
-            grid.appendChild(card);
-        });
     }
 
     async function loadAreas() {
         try {
-            state.areas = await api(`/api/areas?archived=${encodeURIComponent(state.archivedFilter)}`);
+            const [areas, folders] = await Promise.all([
+                api(`/api/areas?archived=${encodeURIComponent(state.archivedFilter)}`),
+                api('/api/area-folders'),
+            ]);
+            state.areas = areas || [];
+            state.areaFolders = folders || [];
+            if (state.activeFolderId && !activeAreaFolder()) state.activeFolderId = null;
             renderAreas();
         } catch (error) {
             notify(error.message || 'Could not load areas', 'error');
@@ -361,9 +661,20 @@
         return typeMeta[blockType] ? blockType : 'line';
     }
 
-    function sectionsForType(blockType) {
+    function isSectionHidden(section) {
+        return Boolean(section?.is_hidden || section?.hidden_at);
+    }
+
+    function sectionsForType(blockType, options = {}) {
+        const includeHidden = Boolean(options.includeHidden);
+        const hiddenOnly = Boolean(options.hiddenOnly);
         return state.sections
             .filter((section) => sectionBlockType(section) === blockType)
+            .filter((section) => {
+                const hidden = isSectionHidden(section);
+                if (hiddenOnly) return hidden;
+                return includeHidden || !hidden;
+            })
             .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || a.id - b.id);
     }
 
@@ -386,14 +697,29 @@
             .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || a.id - b.id);
     }
 
-    function blocksForType(blockType) {
+    function blocksForType(blockType, options = {}) {
+        const hiddenSectionIds = options.visibleOnly ? hiddenSectionIdsForType(blockType) : null;
         return state.blocks
             .filter((block) => block.block_type === blockType)
+            .filter((block) => {
+                if (!hiddenSectionIds) return true;
+                const sectionId = normalizedSectionId(block.section_id);
+                return sectionId === null || !hiddenSectionIds.has(sectionId);
+            })
             .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || a.id - b.id);
     }
 
     function normalizedSectionId(sectionId) {
         return sectionId == null || sectionId === '' ? null : Number(sectionId);
+    }
+
+    function hiddenSectionIdsForType(blockType) {
+        return new Set(sectionsForType(blockType, { hiddenOnly: true }).map((section) => Number(section.id)));
+    }
+
+    function isTypePaneHidden(blockType) {
+        return sectionsForType(blockType, { hiddenOnly: true }).length > 0
+            && sectionsForType(blockType).length === 0;
     }
 
     function paneSectionKey(section) {
@@ -438,9 +764,37 @@
         return state.blocks.find((block) => block.id === blockId) || null;
     }
 
+    function replaceSection(updated) {
+        const index = state.sections.findIndex((section) => section.id === updated.id);
+        if (index !== -1) state.sections[index] = updated;
+        else state.sections.push(updated);
+    }
+
     function replaceBlock(updated) {
         const index = state.blocks.findIndex((block) => block.id === updated.id);
         if (index !== -1) state.blocks[index] = updated;
+    }
+
+    async function setTypePaneHidden(blockType, hidden) {
+        const sections = hidden
+            ? sectionsForType(blockType, { includeHidden: true }).filter((section) => !isSectionHidden(section))
+            : sectionsForType(blockType, { hiddenOnly: true });
+        if (!sections.length) return;
+
+        try {
+            const updatedSections = await Promise.all(
+                sections.map((section) => api(`/api/area-sections/${section.id}`, {
+                    method: 'PUT',
+                    payload: { hidden },
+                }))
+            );
+            updatedSections.forEach(replaceSection);
+            renderWorkspace();
+            notify(hidden ? `${paneLabels[blockType] || 'Section'} hidden` : `${paneLabels[blockType] || 'Section'} shown`, 'success');
+        } catch (error) {
+            notify(error.message || 'Could not update section', 'error');
+            await loadWorkspace();
+        }
     }
 
     async function updateBlock(blockId, payload) {
@@ -505,15 +859,50 @@
         return first.every((id, index) => Number(id) === Number(second[index]));
     }
 
-    function blockIdsForScope(blockType) {
+    function blockIdsForScope(blockType, options = {}) {
+        const hiddenSectionIds = options.visibleOnly ? hiddenSectionIdsForType(blockType) : null;
         return state.blocks
             .filter((block) => block.block_type === blockType)
+            .filter((block) => {
+                if (!hiddenSectionIds) return true;
+                const sectionId = normalizedSectionId(block.section_id);
+                return sectionId === null || !hiddenSectionIds.has(sectionId);
+            })
             .sort((a, b) => (a.order_index || 0) - (b.order_index || 0) || a.id - b.id)
             .map((block) => block.id);
     }
 
+    function mergeVisibleBlockOrder(blockType, visibleOrderedIds) {
+        const visibleSet = new Set(visibleOrderedIds.map((id) => Number(id)));
+        const currentAllIds = blockIdsForScope(blockType);
+        const merged = [];
+        let visibleIndex = 0;
+
+        currentAllIds.forEach((id) => {
+            if (visibleSet.has(Number(id))) {
+                if (visibleIndex < visibleOrderedIds.length) {
+                    merged.push(Number(visibleOrderedIds[visibleIndex]));
+                    visibleIndex += 1;
+                }
+            } else {
+                merged.push(Number(id));
+            }
+        });
+
+        while (visibleIndex < visibleOrderedIds.length) {
+            merged.push(Number(visibleOrderedIds[visibleIndex]));
+            visibleIndex += 1;
+        }
+
+        return merged;
+    }
+
     function blockPaneForType(blockType) {
         return document.querySelector(`.area-type-pane[data-area-pane="${blockType}"] .area-type-pane-body`);
+    }
+
+    function paneContainerForType(blockType) {
+        return document.querySelector(`.area-type-pane[data-area-pane="${blockType}"]`);
     }
 
     function domBlockIdsForPane(blockType) {
@@ -565,8 +954,9 @@
     }
 
     async function persistBlockOrder(blockType, orderedIds) {
+        const fullOrderedIds = mergeVisibleBlockOrder(blockType, orderedIds);
         const blockMap = new Map(state.blocks.map((block) => [Number(block.id), block]));
-        orderedIds.forEach((id, index) => {
+        fullOrderedIds.forEach((id, index) => {
             const block = blockMap.get(Number(id));
             if (block) block.order_index = index + 1;
         });
@@ -574,7 +964,7 @@
         try {
             await api(`/api/areas/${state.areaId}/blocks/reorder`, {
                 method: 'POST',
-                payload: { ids: orderedIds },
+                payload: { ids: fullOrderedIds },
             });
         } catch (error) {
             notify(error.message || 'Could not reorder items', 'error');
@@ -588,7 +978,7 @@
         state.blockDrag.sourceId = block.id;
         state.blockDrag.sourceType = block.block_type;
         state.blockDrag.sourceCard = card;
-        state.blockDrag.originalIds = blockIdsForScope(block.block_type);
+        state.blockDrag.originalIds = blockIdsForScope(block.block_type, { visibleOnly: true });
         state.blockDrag.moved = false;
         document.body.classList.add('area-block-dragging');
         card.classList.add('area-block-dragging');
@@ -656,7 +1046,7 @@
             clone,
             offsetX: touch.clientX - rect.left,
             offsetY: touch.clientY - rect.top,
-            originalIds: blockIdsForScope(block.block_type),
+            originalIds: blockIdsForScope(block.block_type, { visibleOnly: true }),
             moved: false,
         };
 
@@ -703,12 +1093,13 @@
         if (!map) return;
         map.innerHTML = '';
 
-        if (!state.sections.length) {
+        const visibleSections = state.sections.filter((section) => !isSectionHidden(section));
+        if (!visibleSections.length) {
             map.appendChild(el('p', 'area-map-empty', 'No sections yet.'));
             return;
         }
 
-        state.sections.forEach((section) => {
+        visibleSections.forEach((section) => {
             const button = el('button', 'area-section-map-btn');
             button.type = 'button';
             button.appendChild(el('span', '', section.title));
@@ -909,6 +1300,178 @@
         return block.item_count || 0;
     }
 
+    function normalizeAreaLinkTitle(value) {
+        return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    }
+
+    function findAreaLinkedBlock(title, noteLinkType) {
+        const blockType = noteLinkType === 'list' ? 'list' : 'note';
+        const normalizedTitle = normalizeAreaLinkTitle(title);
+        if (!normalizedTitle) return null;
+        return state.blocks.find((block) => {
+            if (block.block_type !== blockType) return false;
+            return normalizeAreaLinkTitle(blockTitle(block)) === normalizedTitle;
+        }) || null;
+    }
+
+    function appendAreaInlineText(target, text) {
+        target.appendChild(document.createTextNode(String(text || '')));
+    }
+
+    function appendAreaFormattedInlineText(target, text) {
+        const raw = String(text || '');
+        if (!raw) return;
+        areaLineInlineFormatPattern.lastIndex = 0;
+        let lastIndex = 0;
+        for (const match of raw.matchAll(areaLineInlineFormatPattern)) {
+            const matchIndex = match.index ?? 0;
+            if (matchIndex > lastIndex) {
+                appendAreaInlineText(target, raw.slice(lastIndex, matchIndex));
+            }
+
+            let tag = null;
+            let content = '';
+            if (match[2] || match[3]) {
+                tag = 'strong';
+                content = match[2] || match[3] || '';
+            } else if (match[4] || match[5]) {
+                tag = 'em';
+                content = match[4] || match[5] || '';
+            } else if (match[6]) {
+                tag = 's';
+                content = match[6];
+            } else if (match[7]) {
+                tag = 'code';
+                content = match[7];
+            }
+
+            if (!tag || !content) {
+                appendAreaInlineText(target, match[0]);
+            } else {
+                const formatted = document.createElement(tag);
+                appendAreaInlineText(formatted, content);
+                target.appendChild(formatted);
+            }
+            lastIndex = matchIndex + match[0].length;
+        }
+        if (lastIndex < raw.length) {
+            appendAreaInlineText(target, raw.slice(lastIndex));
+        }
+    }
+
+    function appendAreaLineWithLinks(target, line) {
+        const rawLine = String(line || '');
+        areaLineLinkPattern.lastIndex = 0;
+        let lastIndex = 0;
+        for (const match of rawLine.matchAll(areaLineLinkPattern)) {
+            const matchIndex = match.index ?? 0;
+            if (matchIndex > lastIndex) {
+                appendAreaFormattedInlineText(target, rawLine.slice(lastIndex, matchIndex));
+            }
+
+            if (match[1] || match[3]) {
+                const isListLink = !!match[1];
+                const title = (match[1] || match[3] || '').trim();
+                const label = (match[2] || match[4] || title).trim();
+                if (title && label) {
+                    const linkedBlock = findAreaLinkedBlock(title, isListLink ? 'list' : 'note');
+                    const link = document.createElement('a');
+                    link.className = 'note-link';
+                    if (isListLink) link.classList.add('list-link');
+                    link.dataset.noteTitle = title;
+                    link.dataset.noteLinkType = isListLink ? 'list' : 'note';
+                    if (linkedBlock) {
+                        link.dataset.noteId = String(linkedBlock.id);
+                        link.href = `/areas/${state.areaId}/blocks/${linkedBlock.id}`;
+                    } else {
+                        link.href = '#';
+                    }
+                    appendAreaFormattedInlineText(link, label);
+                    target.appendChild(link);
+                } else {
+                    appendAreaFormattedInlineText(target, match[0]);
+                }
+            } else if (match[5] && match[6]) {
+                const label = match[5].trim();
+                const url = match[6].trim();
+                if (label && url) {
+                    const link = document.createElement('a');
+                    link.className = 'external-link';
+                    link.href = url;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    appendAreaFormattedInlineText(link, label);
+                    target.appendChild(link);
+                } else {
+                    appendAreaFormattedInlineText(target, match[0]);
+                }
+            } else {
+                appendAreaFormattedInlineText(target, match[0]);
+            }
+            lastIndex = matchIndex + match[0].length;
+        }
+        if (lastIndex < rawLine.length) {
+            appendAreaFormattedInlineText(target, rawLine.slice(lastIndex));
+        }
+    }
+
+    function renderAreaLineContent(block) {
+        const content = el('div', 'area-line-content');
+        const lines = String(block.content || '').split('\n');
+        lines.forEach((line, index) => {
+            if (index > 0) content.appendChild(document.createElement('br'));
+            appendAreaLineWithLinks(content, line);
+        });
+        content.addEventListener('click', (event) => {
+            const noteLink = event.target.closest('a.note-link');
+            const externalLink = event.target.closest('a.external-link');
+            if (!noteLink && !externalLink) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (externalLink) {
+                const href = externalLink.getAttribute('href') || '';
+                if (href) window.open(href, '_blank', 'noopener,noreferrer');
+                return;
+            }
+            handleAreaLineNoteLinkClick(noteLink);
+        });
+        return content;
+    }
+
+    async function handleAreaLineNoteLinkClick(linkEl) {
+        const existingId = Number(linkEl.dataset.noteId || 0);
+        if (existingId) {
+            window.location.href = `/areas/${state.areaId}/blocks/${existingId}`;
+            return;
+        }
+
+        const title = (linkEl.dataset.noteTitle || linkEl.textContent || '').trim();
+        const noteLinkType = linkEl.dataset.noteLinkType === 'list' ? 'list' : 'note';
+        if (!title) return;
+
+        const existingBlock = findAreaLinkedBlock(title, noteLinkType);
+        if (existingBlock) {
+            window.location.href = `/areas/${state.areaId}/blocks/${existingBlock.id}`;
+            return;
+        }
+
+        try {
+            const saved = await api(`/api/areas/${state.areaId}/blocks`, {
+                method: 'POST',
+                payload: {
+                    block_type: noteLinkType === 'list' ? 'list' : 'note',
+                    title,
+                    content: '',
+                },
+            });
+            if (saved && saved.id) {
+                window.location.href = `/areas/${state.areaId}/blocks/${saved.id}`;
+            }
+        } catch (error) {
+            notify(error.message || 'Could not open linked area item', 'error');
+        }
+    }
+
     function buildAreaTile(block) {
         const button = el('a', 'area-object-link');
         button.href = `/areas/${state.areaId}/blocks/${block.id}`;
@@ -1073,7 +1636,7 @@
         card.appendChild(header);
 
         if (block.block_type === 'line') {
-            card.appendChild(el('p', 'area-line-content', block.content || ''));
+            card.appendChild(renderAreaLineContent(block));
         } else if (block.block_type === 'note') {
             card.appendChild(buildAreaTile(block));
         } else {
@@ -1149,11 +1712,43 @@
         blocks.forEach((block) => pane.appendChild(buildBlockCard(block)));
     }
 
+    function renderHiddenPaneBar() {
+        const bar = $('#area-hidden-pane-bar');
+        if (!bar) return;
+        bar.innerHTML = '';
+
+        const hiddenTypes = paneTypeOrder.filter((blockType) => sectionsForType(blockType, { hiddenOnly: true }).length > 0);
+        bar.hidden = hiddenTypes.length === 0;
+        if (!hiddenTypes.length) return;
+
+        hiddenTypes.forEach((blockType) => {
+            const hiddenSectionIds = hiddenSectionIdsForType(blockType);
+            const hiddenBlockCount = state.blocks.filter((block) => {
+                if (block.block_type !== blockType) return false;
+                return hiddenSectionIds.has(normalizedSectionId(block.section_id));
+            }).length;
+            const button = el('button', 'area-hidden-pane-chip');
+            button.type = 'button';
+            button.title = `Show ${paneLabels[blockType] || 'section'}`;
+            button.setAttribute('aria-label', `Show ${paneLabels[blockType] || 'section'}`);
+            button.appendChild(icon('fa-solid fa-eye'));
+            button.appendChild(el('span', '', `Show ${paneLabels[blockType] || 'Section'}`));
+            button.appendChild(el('small', '', `${hiddenBlockCount} ${hiddenBlockCount === 1 ? 'item' : 'items'}`));
+            button.addEventListener('click', () => setTypePaneHidden(blockType, false));
+            bar.appendChild(button);
+        });
+    }
+
     function renderTypePane(blockType, paneId, countId) {
+        const container = paneContainerForType(blockType);
         const pane = document.getElementById(paneId);
         const count = document.getElementById(countId);
         if (!pane) return;
-        const blocks = blocksForType(blockType);
+        const paneHidden = isTypePaneHidden(blockType);
+        setHidden(container, paneHidden);
+        if (paneHidden) return;
+
+        const blocks = blocksForType(blockType, { visibleOnly: true });
         const sections = sectionsForType(blockType);
         if (pane.dataset.areaDragInit !== 'true') {
             pane.dataset.areaDragInit = 'true';
@@ -1167,6 +1762,12 @@
         if (!blocks.length && !sections.length) {
             const empty = el('p', 'area-pane-empty', `No ${typeMeta[blockType].label.toLowerCase()}s yet.`);
             pane.appendChild(empty);
+            return;
+        }
+
+        if (!sections.length) {
+            if (!blocks.length) return;
+            blocks.forEach((block) => pane.appendChild(buildBlockCard(block)));
             return;
         }
 
@@ -1186,6 +1787,7 @@
         renderAreaHeader();
         renderStats();
         renderSectionMap();
+        renderHiddenPaneBar();
         renderTypePane('line', 'area-lines-pane', 'area-lines-count');
         renderTypePane('note', 'area-notes-pane', 'area-notes-count');
         renderTypePane('list', 'area-lists-pane', 'area-lists-count');
@@ -1301,10 +1903,12 @@
         const menu = $('#area-add-menu');
         const button = $('#area-primary-add-btn');
         if (!menu || !button) return;
+        const closedLabel = menu.dataset.closedLabel || 'Add area item';
+        const openLabel = menu.dataset.openLabel || 'Close add menu';
         menu.classList.toggle('open', isOpen);
         button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        button.setAttribute('aria-label', isOpen ? 'Close add menu' : 'Add area item');
-        button.title = isOpen ? 'Close add menu' : 'Add area item';
+        button.setAttribute('aria-label', isOpen ? openLabel : closedLabel);
+        button.title = isOpen ? openLabel : closedLabel;
     }
 
     function setAreaActionsMenuOpen(isOpen) {
@@ -1754,10 +2358,29 @@
     }
 
     function initAreaList() {
-        $('#area-add-btn')?.addEventListener('click', () => openAreaModal());
+        $('#area-primary-add-btn')?.addEventListener('click', toggleAreaAddMenu);
+        $$('[data-area-home-add]').forEach((button) => {
+            button.addEventListener('click', () => {
+                setAreaAddMenuOpen(false);
+                if (button.dataset.areaHomeAdd === 'folder') openAreaFolderModal();
+                else openAreaModal();
+            });
+        });
+        $('#area-folder-back')?.addEventListener('click', () => {
+            state.activeFolderId = null;
+            renderAreas();
+        });
+        $('#area-folder-edit-btn')?.addEventListener('click', () => {
+            const folder = activeAreaFolder();
+            if (folder) openAreaFolderModal(folder);
+        });
+        $('#area-folder-delete-btn')?.addEventListener('click', () => deleteAreaFolder());
         $('#area-modal-save')?.addEventListener('click', saveAreaFromModal);
         $('#area-modal-cancel')?.addEventListener('click', () => closeModal('area-modal'));
+        $('#area-folder-modal-save')?.addEventListener('click', saveAreaFolderFromModal);
+        $('#area-folder-modal-cancel')?.addEventListener('click', () => closeModal('area-folder-modal'));
         modal('area-modal')?.addEventListener('click', closeAnyModal);
+        modal('area-folder-modal')?.addEventListener('click', closeAnyModal);
 
         $$('.areas-filter-group [data-archived]').forEach((button) => {
             button.addEventListener('click', () => {
@@ -1772,14 +2395,22 @@
             $('#area-search').value = '';
             renderAreas();
         });
-        document.addEventListener('click', () => closeAreaCardMenus());
+        document.addEventListener('click', (event) => {
+            if (!event.target.closest('#area-add-menu')) setAreaAddMenuOpen(false);
+            closeAreaCardMenus();
+        });
         document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') closeAreaCardMenus();
+            if (event.key === 'Escape') {
+                setAreaAddMenuOpen(false);
+                closeAreaCardMenus();
+            }
         });
         loadAreas();
     }
 
     function initAreaDetail() {
+        initAreaLibraryControls();
+
         $('#area-actions-menu-btn')?.addEventListener('click', toggleAreaActionsMenu);
         $('#area-detail-edit-btn')?.addEventListener('click', () => {
             setAreaActionsMenuOpen(false);
@@ -1822,6 +2453,9 @@
         });
         $$('[data-area-add-section-type]').forEach((button) => {
             button.addEventListener('click', () => openSectionModal(null, button.dataset.areaAddSectionType || 'line'));
+        });
+        $$('[data-area-hide-pane-type]').forEach((button) => {
+            button.addEventListener('click', () => setTypePaneHidden(button.dataset.areaHidePaneType || 'line', true));
         });
         document.addEventListener('click', (event) => {
             if (!event.target.closest('#area-add-menu')) setAreaAddMenuOpen(false);

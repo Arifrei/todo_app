@@ -7,7 +7,24 @@ for _name, _value in vars(_app_module).items():
     if not _name.startswith('__'):
         globals()[_name] = _value
 
-def handle_recalls():
+
+def _filter_area_scope(query, model, area_id):
+    if area_id is None:
+        return query.filter(model.area_id.is_(None))
+    return query.filter(model.area_id == area_id)
+
+
+def _area_scope_or_response(area_id):
+    user = get_current_user()
+    if not user:
+        return None, (jsonify({'error': 'No user selected'}), 401)
+    area = Area.query.filter_by(id=area_id, user_id=user.id).first()
+    if not area:
+        return None, (jsonify({'error': 'Area not found'}), 404)
+    return area, None
+
+
+def handle_recalls(area_id=None):
     """List or create recall items."""
     user = get_current_user()
     if not user:
@@ -27,6 +44,7 @@ def handle_recalls():
 
         recall = RecallItem(
             user_id=user.id,
+            area_id=area_id,
             title=title,
             payload_type=payload_type,
             payload=payload,
@@ -44,21 +62,29 @@ def handle_recalls():
 
         return jsonify(recall.to_dict()), 201
 
-    recalls = RecallItem.query.filter_by(user_id=user.id).order_by(
+    query = RecallItem.query.filter_by(user_id=user.id)
+    recalls = _filter_area_scope(query, RecallItem, area_id).order_by(
         RecallItem.updated_at.desc(),
         RecallItem.created_at.desc()
     ).all()
     return jsonify([r.to_dict() for r in recalls])
 
 
+def handle_area_recalls(area_id):
+    area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return handle_recalls(area.id)
 
-def recall_detail(recall_id):
+
+def recall_detail(recall_id, area_id=None):
     """Get, update, or delete a single recall item."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
 
-    recall = RecallItem.query.filter_by(id=recall_id, user_id=user.id).first()
+    query = RecallItem.query.filter_by(id=recall_id, user_id=user.id)
+    recall = _filter_area_scope(query, RecallItem, area_id).first()
     if not recall:
         return jsonify({'error': 'Recall not found'}), 404
 
@@ -97,14 +123,21 @@ def recall_detail(recall_id):
     return jsonify(recall.to_dict())
 
 
+def area_recall_detail(area_id, recall_id):
+    area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return recall_detail(recall_id, area.id)
 
-def regenerate_recall(recall_id):
+
+def regenerate_recall(recall_id, area_id=None):
     """Re-trigger AI processing for a recall item."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
 
-    recall = RecallItem.query.filter_by(id=recall_id, user_id=user.id).first()
+    query = RecallItem.query.filter_by(id=recall_id, user_id=user.id)
+    recall = _filter_area_scope(query, RecallItem, area_id).first()
     if not recall:
         return jsonify({'error': 'Recall not found'}), 404
 
@@ -116,5 +149,12 @@ def regenerate_recall(recall_id):
     start_embedding_job(user.id, ENTITY_RECALL, recall.id)
     start_recall_processing(recall.id)
     return jsonify(recall.to_dict())
+
+
+def area_regenerate_recall(area_id, recall_id):
+    area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return regenerate_recall(recall_id, area.id)
 
 

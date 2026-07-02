@@ -44,6 +44,7 @@ class User(UserMixin, db.Model):
     # Relationships
     lists = db.relationship('TodoList', backref='owner', lazy=True, cascade="all, delete-orphan")
     areas = db.relationship('Area', backref='owner', lazy=True, cascade="all, delete-orphan")
+    area_folders = db.relationship('AreaFolder', backref='owner', lazy=True, cascade="all, delete-orphan")
     inbox_items = db.relationship('InboxItem', backref='owner', lazy=True, cascade="all, delete-orphan")
     notifications = db.relationship('Notification', backref='user', lazy=True, cascade="all, delete-orphan")
     notification_settings = db.relationship('NotificationSetting', backref='user', lazy=True, cascade="all, delete-orphan")
@@ -428,12 +429,77 @@ class NoteFolder(db.Model):
         }
 
 
+class NoteImage(db.Model):
+    """Image file embedded in a note."""
+    __tablename__ = 'note_image'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    note_id = db.Column(db.Integer, db.ForeignKey('note.id', ondelete='SET NULL'), nullable=True)
+    original_filename = db.Column(db.String(255), nullable=True)
+    stored_filename = db.Column(db.String(100), nullable=False, unique=True)
+    file_type = db.Column(db.String(50), nullable=False)
+    file_size = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'note_id': self.note_id,
+            'url': f'/api/notes/images/{self.stored_filename}',
+            'original_filename': self.original_filename,
+            'file_type': self.file_type,
+            'file_size': self.file_size,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class AreaFolder(db.Model):
+    """Folder for organizing Areas on the Areas landing page."""
+    __tablename__ = 'area_folder'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    order_index = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    areas = db.relationship(
+        'Area',
+        backref='folder',
+        lazy=True,
+        order_by="Area.order_index",
+    )
+
+    __table_args__ = (
+        db.Index('idx_area_folder_user_order', 'user_id', 'order_index'),
+        db.Index('idx_area_folder_user_name', 'user_id', 'name'),
+    )
+
+    def to_dict(self, include_counts=False):
+        data = {
+            'id': self.id,
+            'user_id': self.user_id,
+            'name': self.name,
+            'order_index': self.order_index or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_counts:
+            areas = list(self.areas or [])
+            data['area_count'] = len(areas)
+            data['active_area_count'] = sum(1 for area in areas if area.archived_at is None)
+        return data
+
+
 class Area(db.Model):
     """Long-lived responsibility area owned by a user."""
     __tablename__ = 'area'
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    folder_id = db.Column(db.Integer, db.ForeignKey('area_folder.id', ondelete='SET NULL'), nullable=True)
     name = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text, nullable=True)
     color = db.Column(db.String(20), nullable=True)
@@ -466,6 +532,7 @@ class Area(db.Model):
     )
 
     __table_args__ = (
+        db.Index('idx_area_user_folder_order', 'user_id', 'folder_id', 'order_index'),
         db.Index('idx_area_user_archived_order', 'user_id', 'archived_at', 'order_index'),
         db.Index('idx_area_user_name', 'user_id', 'name'),
     )
@@ -474,6 +541,7 @@ class Area(db.Model):
         data = {
             'id': self.id,
             'user_id': self.user_id,
+            'folder_id': self.folder_id,
             'name': self.name,
             'description': self.description,
             'color': self.color or '#3b82f6',
@@ -540,6 +608,7 @@ class AreaSection(db.Model):
     title = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text, nullable=True)
     order_index = db.Column(db.Integer, default=0)
+    hidden_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -565,6 +634,8 @@ class AreaSection(db.Model):
             'title': self.title,
             'description': self.description,
             'order_index': self.order_index or 0,
+            'hidden_at': self.hidden_at.isoformat() if self.hidden_at else None,
+            'is_hidden': bool(self.hidden_at),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -763,6 +834,7 @@ class RecallItem(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=True)
 
     # User-entered fields
     title = db.Column(db.String(120), nullable=False)
@@ -781,6 +853,7 @@ class RecallItem(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
+            'area_id': self.area_id,
             'title': self.title,
             'why': self.why,
             'summary': self.summary,
@@ -1022,6 +1095,7 @@ class BookmarkItem(db.Model):
     """User's saved bookmarks for quick reference."""
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=True)
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
     value = db.Column(db.Text, nullable=False)
@@ -1034,6 +1108,7 @@ class BookmarkItem(db.Model):
         return {
             'id': self.id,
             'user_id': self.user_id,
+            'area_id': self.area_id,
             'title': self.title,
             'description': self.description,
             'value': self.value,
@@ -1307,6 +1382,7 @@ class DocumentFolder(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=True)
     parent_id = db.Column(db.Integer, db.ForeignKey('document_folder.id', ondelete='SET NULL'), nullable=True)
     name = db.Column(db.String(120), nullable=False)
     order_index = db.Column(db.Integer, default=0)
@@ -1321,6 +1397,7 @@ class DocumentFolder(db.Model):
     def to_dict(self, include_children=False):
         data = {
             'id': self.id,
+            'area_id': self.area_id,
             'parent_id': self.parent_id,
             'name': self.name,
             'order_index': self.order_index or 0,
@@ -1340,6 +1417,7 @@ class Document(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    area_id = db.Column(db.Integer, db.ForeignKey('area.id', ondelete='CASCADE'), nullable=True)
     folder_id = db.Column(db.Integer, db.ForeignKey('document_folder.id', ondelete='SET NULL'), nullable=True)
     title = db.Column(db.String(255), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
@@ -1398,6 +1476,7 @@ class Document(db.Model):
         return {
             'id': self.id,
             'user_id': self.user_id,
+            'area_id': self.area_id,
             'folder_id': self.folder_id,
             'title': self.title,
             'original_filename': self.original_filename,

@@ -96,6 +96,130 @@ def test_area_create_edit_archive_restore_and_filters(tmp_path, monkeypatch):
     assert [entry['id'] for entry in client.get('/api/areas?archived=0').get_json()] == [area_id]
 
 
+def test_area_library_items_are_scoped(tmp_path, monkeypatch):
+    app_module = _load_test_app(tmp_path, monkeypatch, 'area-library.db')
+
+    with app_module.app.app_context():
+        app_module.db.create_all()
+        user = _create_user(app_module, 'area-library-owner')
+        first_area = app_module.Area(user_id=user.id, name='Client A')
+        second_area = app_module.Area(user_id=user.id, name='Client B')
+        app_module.db.session.add_all([first_area, second_area])
+        app_module.db.session.flush()
+        app_module.db.session.add_all([
+            app_module.RecallItem(
+                user_id=user.id,
+                title='Global recall',
+                payload_type='text',
+                payload='global',
+                area_id=None,
+            ),
+            app_module.RecallItem(
+                user_id=user.id,
+                title='Area recall',
+                payload_type='text',
+                payload='area',
+                area_id=first_area.id,
+            ),
+        ])
+        app_module.db.session.commit()
+        user_id = user.id
+        first_area_id = first_area.id
+        second_area_id = second_area.id
+
+    client = app_module.app.test_client()
+    _login(client, user_id)
+
+    global_bookmark = client.post(
+        '/api/bookmarks',
+        json={'title': 'Global bookmark', 'value': 'https://global.example'},
+    ).get_json()
+    area_bookmark = client.post(
+        f'/api/areas/{first_area_id}/bookmarks',
+        json={'title': 'Area bookmark', 'value': 'https://area.example'},
+    ).get_json()
+
+    assert [item['id'] for item in client.get('/api/bookmarks').get_json()] == [global_bookmark['id']]
+    assert [item['id'] for item in client.get(f'/api/areas/{first_area_id}/bookmarks').get_json()] == [area_bookmark['id']]
+    assert client.get(f'/api/areas/{second_area_id}/bookmarks').get_json() == []
+    assert client.get(f'/api/bookmarks/{area_bookmark["id"]}').status_code == 404
+    assert client.get(f'/api/areas/{first_area_id}/bookmarks/{global_bookmark["id"]}').status_code == 404
+
+    assert [item['title'] for item in client.get('/api/recalls').get_json()] == ['Global recall']
+    assert [item['title'] for item in client.get(f'/api/areas/{first_area_id}/recalls').get_json()] == ['Area recall']
+    assert client.get(f'/api/areas/{second_area_id}/recalls').get_json() == []
+
+    global_folder = client.post('/api/vault/folders', json={'name': 'Global files'}).get_json()
+    area_folder = client.post(f'/api/areas/{first_area_id}/vault/folders', json={'name': 'Area files'}).get_json()
+
+    assert [item['id'] for item in client.get('/api/vault/folders').get_json()] == [global_folder['id']]
+    assert [item['id'] for item in client.get(f'/api/areas/{first_area_id}/vault/folders').get_json()] == [area_folder['id']]
+    assert client.get(f'/api/areas/{second_area_id}/vault/folders').get_json() == []
+    assert client.get(f'/api/vault/folders/{area_folder["id"]}').status_code == 404
+    assert client.get(f'/api/areas/{first_area_id}/vault/folders/{global_folder["id"]}').status_code == 404
+
+
+
+def test_area_folders_create_assign_move_and_delete(tmp_path, monkeypatch):
+    app_module = _load_test_app(tmp_path, monkeypatch, 'area-folders.db')
+
+    with app_module.app.app_context():
+        app_module.db.create_all()
+        user = _create_user(app_module, 'area-folder-owner')
+        other_user = _create_user(app_module, 'other-area-owner')
+        other_folder = app_module.AreaFolder(user_id=other_user.id, name='Other folder')
+        app_module.db.session.add(other_folder)
+        app_module.db.session.commit()
+        user_id = user.id
+        other_folder_id = other_folder.id
+
+    client = app_module.app.test_client()
+    _login(client, user_id)
+
+    response = client.post('/api/area-folders', json={'name': 'Work'})
+    assert response.status_code == 201
+    folder = response.get_json()
+    folder_id = folder['id']
+    assert folder['name'] == 'Work'
+
+    root_response = client.post('/api/areas', json={'name': 'Home'})
+    assert root_response.status_code == 201
+    root_area = root_response.get_json()
+    assert root_area['folder_id'] is None
+
+    folder_response = client.post('/api/areas', json={'name': 'Client work', 'folder_id': folder_id})
+    assert folder_response.status_code == 201
+    folder_area = folder_response.get_json()
+    assert folder_area['folder_id'] == folder_id
+
+    root_areas = client.get('/api/areas?folder_id=root').get_json()
+    assert [entry['id'] for entry in root_areas] == [root_area['id']]
+
+    folder_areas = client.get(f'/api/areas?folder_id={folder_id}').get_json()
+    assert [entry['id'] for entry in folder_areas] == [folder_area['id']]
+
+    response = client.put(f'/api/areas/{root_area["id"]}', json={'folder_id': folder_id})
+    assert response.status_code == 200
+    moved_area = response.get_json()
+    assert moved_area['folder_id'] == folder_id
+    assert client.get('/api/areas?folder_id=root').get_json() == []
+    assert [entry['id'] for entry in client.get(f'/api/areas?folder_id={folder_id}').get_json()] == [folder_area['id'], root_area['id']]
+
+    response = client.put(f'/api/areas/{root_area["id"]}', json={'folder_id': None})
+    assert response.status_code == 200
+    assert response.get_json()['folder_id'] is None
+
+    response = client.put(f'/api/areas/{root_area["id"]}', json={'folder_id': other_folder_id})
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'Folder not found'
+
+    response = client.delete(f'/api/area-folders/{folder_id}')
+    assert response.status_code == 200
+    assert response.get_json()['deleted'] is True
+    assert client.get('/api/area-folders').get_json() == []
+    root_areas = client.get('/api/areas?folder_id=root').get_json()
+    assert sorted(entry['id'] for entry in root_areas) == sorted([root_area['id'], folder_area['id']])
+
 def test_area_item_create_update_status_dates_and_delete(tmp_path, monkeypatch):
     app_module = _load_test_app(tmp_path, monkeypatch, 'area-items.db')
 
@@ -385,6 +509,64 @@ def test_area_workspace_sections_blocks_and_rows(tmp_path, monkeypatch):
     assert response.status_code == 204
     workspace = client.get(f'/api/areas/{area_id}/workspace').get_json()
     assert all(block['id'] != line_block['id'] for block in workspace['blocks'])
+
+
+def test_area_sections_can_be_hidden_and_restored(tmp_path, monkeypatch):
+    app_module = _load_test_app(tmp_path, monkeypatch, 'area-hidden-sections.db')
+
+    with app_module.app.app_context():
+        app_module.db.create_all()
+        user = _create_user(app_module, 'area-section-hider')
+        app_module.db.session.commit()
+        user_id = user.id
+
+    client = app_module.app.test_client()
+    _login(client, user_id)
+
+    response = client.post('/api/areas', json={'name': 'Seasonal focus'})
+    assert response.status_code == 201
+    area_id = response.get_json()['id']
+
+    sections = client.get(f'/api/areas/{area_id}/sections?block_type=line').get_json()
+    line_section_id = sections[0]['id']
+    line_block = client.post(
+        f'/api/areas/{area_id}/blocks',
+        json={'block_type': 'line', 'section_id': line_section_id, 'content': 'Pause this initiative'},
+    ).get_json()
+
+    response = client.put(f'/api/area-sections/{line_section_id}', json={'hidden': True})
+    assert response.status_code == 200
+    hidden_section = response.get_json()
+    assert hidden_section['is_hidden'] is True
+    assert hidden_section['hidden_at']
+
+    hidden_sections = client.get(f'/api/areas/{area_id}/sections?block_type=line&hidden=1').get_json()
+    assert [section['id'] for section in hidden_sections] == [line_section_id]
+    visible_sections = client.get(f'/api/areas/{area_id}/sections?block_type=line&hidden=0').get_json()
+    assert visible_sections == []
+
+    workspace = client.get(f'/api/areas/{area_id}/workspace').get_json()
+    stored_section = next(section for section in workspace['sections'] if section['id'] == line_section_id)
+    stored_block = next(block for block in workspace['blocks'] if block['id'] == line_block['id'])
+    assert stored_section['is_hidden'] is True
+    assert stored_block['section_id'] == line_section_id
+
+    response = client.post(
+        f'/api/areas/{area_id}/blocks',
+        json={'block_type': 'line', 'content': 'A visible follow-up'},
+    )
+    assert response.status_code == 201
+    visible_block = response.get_json()
+    assert visible_block['section_id'] != line_section_id
+
+    visible_sections = client.get(f'/api/areas/{area_id}/sections?block_type=line&hidden=0').get_json()
+    assert [section['id'] for section in visible_sections] == [visible_block['section_id']]
+
+    response = client.put(f'/api/area-sections/{line_section_id}', json={'is_hidden': False})
+    assert response.status_code == 200
+    restored_section = response.get_json()
+    assert restored_section['is_hidden'] is False
+    assert restored_section['hidden_at'] is None
 
 
 def test_area_blocks_reorder_within_one_type(tmp_path, monkeypatch):

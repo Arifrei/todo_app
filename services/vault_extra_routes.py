@@ -8,8 +8,24 @@ for _name, _value in vars(_app_module).items():
         globals()[_name] = _value
 
 
-def _vault_folder_tree(user_id, folder_id):
-    folders = DocumentFolder.query.filter_by(user_id=user_id).all()
+def _filter_area_scope(query, model, area_id):
+    if area_id is None:
+        return query.filter(model.area_id.is_(None))
+    return query.filter(model.area_id == area_id)
+
+
+def _area_scope_or_response(area_id):
+    user = get_current_user()
+    if not user:
+        return None, None, (jsonify({'error': 'No user selected'}), 401)
+    area = Area.query.filter_by(id=area_id, user_id=user.id).first()
+    if not area:
+        return user, None, (jsonify({'error': 'Area not found'}), 404)
+    return user, area, None
+
+
+def _vault_folder_tree(user_id, folder_id, area_id=None):
+    folders = _filter_area_scope(DocumentFolder.query.filter_by(user_id=user_id), DocumentFolder, area_id).all()
     by_parent = {}
     by_id = {folder.id: folder for folder in folders}
     for folder in folders:
@@ -26,41 +42,45 @@ def _vault_folder_tree(user_id, folder_id):
     return [by_id[item_id] for item_id in ordered_ids if item_id in by_id]
 
 
-def _vault_restore_folder_tree(user_id, folder_id, restored_at):
-    folders = _vault_folder_tree(user_id, folder_id)
+def _vault_restore_folder_tree(user_id, folder_id, restored_at, area_id=None):
+    folders = _vault_folder_tree(user_id, folder_id, area_id)
     folder_ids = [folder.id for folder in folders]
     for folder in folders:
         folder.archived_at = None
         folder.updated_at = restored_at
     if folder_ids:
-        Document.query.filter(
+        _filter_area_scope(Document.query.filter(
             Document.user_id == user_id,
             Document.folder_id.in_(folder_ids),
-        ).update(
+        ), Document, area_id).update(
             {'archived_at': None, 'updated_at': restored_at},
             synchronize_session=False,
         )
     return folders
 
 
-def vault_folder_detail(folder_id):
+def vault_folder_detail(folder_id, area_id=None):
     """Get, update, or archive a vault folder."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
 
-    folder = DocumentFolder.query.filter_by(id=folder_id, user_id=user.id).first_or_404()
+    folder = _filter_area_scope(
+        DocumentFolder.query.filter_by(id=folder_id, user_id=user.id),
+        DocumentFolder,
+        area_id,
+    ).first_or_404()
 
     if request.method == 'GET':
         return jsonify(folder.to_dict())
 
     if request.method == 'DELETE' and parse_bool(request.args.get('permanent')):
-        folders = _vault_folder_tree(user.id, folder.id)
+        folders = _vault_folder_tree(user.id, folder.id, area_id)
         folder_ids = [item.id for item in folders]
-        docs = Document.query.filter(
+        docs = _filter_area_scope(Document.query.filter(
             Document.user_id == user.id,
             Document.folder_id.in_(folder_ids),
-        ).all()
+        ), Document, area_id).all()
         file_paths = [
             os.path.join(
                 _vault_root_for_user(user.id),
@@ -108,10 +128,11 @@ def vault_folder_detail(folder_id):
                 id=parent_id_int,
                 user_id=user.id,
                 archived_at=None,
+                area_id=area_id,
             ).first()
             if not destination:
                 return jsonify({'error': 'Destination folder not found'}), 404
-            descendant_ids = {item.id for item in _vault_folder_tree(user.id, folder.id)}
+            descendant_ids = {item.id for item in _vault_folder_tree(user.id, folder.id, area_id)}
             if parent_id_int in descendant_ids:
                 return jsonify({'error': 'A folder cannot be moved into one of its children'}), 400
         folder.parent_id = parent_id_int
@@ -119,6 +140,7 @@ def vault_folder_detail(folder_id):
             db.func.coalesce(db.func.max(DocumentFolder.order_index), 0)
         ).filter(
             DocumentFolder.user_id == user.id,
+            DocumentFolder.area_id.is_(None) if area_id is None else DocumentFolder.area_id == area_id,
             DocumentFolder.parent_id == parent_id_int,
             DocumentFolder.id != folder.id,
         ).scalar()
@@ -128,11 +150,12 @@ def vault_folder_detail(folder_id):
             _vault_archive_folder_recursive(user.id, folder.id, _now_local())
         else:
             restored_at = _now_local()
-            _vault_restore_folder_tree(user.id, folder.id, restored_at)
+            _vault_restore_folder_tree(user.id, folder.id, restored_at, area_id)
             if folder.parent_id is not None:
                 parent = DocumentFolder.query.filter_by(
                     id=folder.parent_id,
                     user_id=user.id,
+                    area_id=area_id,
                 ).first()
                 if not parent or parent.archived_at:
                     folder.parent_id = None
@@ -141,25 +164,37 @@ def vault_folder_detail(folder_id):
     return jsonify(folder.to_dict())
 
 
+def area_vault_folder_detail(area_id, folder_id):
+    _user, area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return vault_folder_detail(folder_id, area.id)
 
-def vault_document_download(doc_id):
+
+def vault_document_download(doc_id, area_id=None):
     """Download the original file."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    doc = _filter_area_scope(Document.query.filter_by(id=doc_id, user_id=user.id), Document, area_id).first_or_404()
     vault_dir = _vault_root_for_user(user.id)
     download_name = _vault_build_download_name(doc.title, doc.original_filename)
     return send_from_directory(vault_dir, doc.stored_filename, as_attachment=True, download_name=download_name)
 
 
+def area_vault_document_download(area_id, doc_id):
+    _user, area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return vault_document_download(doc_id, area.id)
 
-def vault_document_preview(doc_id):
+
+def vault_document_preview(doc_id, area_id=None):
     """Preview supported document types."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    doc = _filter_area_scope(Document.query.filter_by(id=doc_id, user_id=user.id), Document, area_id).first_or_404()
     if doc.get_file_category() not in ['image', 'pdf', 'text', 'audio', 'video', 'code']:
         return jsonify({'error': 'Preview not supported'}), 400
     vault_dir = _vault_root_for_user(user.id)
@@ -173,13 +208,19 @@ def vault_document_preview(doc_id):
     return response
 
 
+def area_vault_document_preview(area_id, doc_id):
+    _user, area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return vault_document_preview(doc_id, area.id)
 
-def vault_document_move(doc_id):
+
+def vault_document_move(doc_id, area_id=None):
     """Move a document to another folder."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
-    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    doc = _filter_area_scope(Document.query.filter_by(id=doc_id, user_id=user.id), Document, area_id).first_or_404()
     data = request.json or {}
     folder_id = data.get('folder_id')
     if folder_id in (None, ''):
@@ -193,6 +234,7 @@ def vault_document_move(doc_id):
             id=folder_id_int,
             user_id=user.id,
             archived_at=None,
+            area_id=area_id,
         ).first_or_404()
         doc.folder_id = folder_id_int
     doc.updated_at = _now_local()
@@ -200,8 +242,14 @@ def vault_document_move(doc_id):
     return jsonify(doc.to_dict())
 
 
+def area_vault_document_move(area_id, doc_id):
+    _user, area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return vault_document_move(doc_id, area.id)
 
-def vault_search():
+
+def vault_search(area_id=None):
     """Search documents by title, filename, type, or tags."""
     user = get_current_user()
     if not user:
@@ -211,7 +259,7 @@ def vault_search():
         return jsonify([])
     archived_only = parse_bool(request.args.get('archived'))
     like = f"%{query}%"
-    results = Document.query.filter(
+    query = _filter_area_scope(Document.query.filter(
         Document.user_id == user.id,
         Document.archived_at.isnot(None) if archived_only else Document.archived_at.is_(None),
         or_(
@@ -220,7 +268,8 @@ def vault_search():
             Document.file_type.ilike(like),
             Document.tags.ilike(like)
         )
-    ).order_by(
+    ), Document, area_id)
+    results = query.order_by(
         Document.pinned.desc(),
         Document.pin_order.desc(),
         Document.created_at.desc()
@@ -228,22 +277,36 @@ def vault_search():
     return jsonify([doc.to_dict() for doc in results])
 
 
+def area_vault_search(area_id):
+    _user, area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return vault_search(area.id)
 
-def vault_stats():
+
+def vault_stats(area_id=None):
     """Return storage usage stats for the current user."""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'No user selected'}), 401
     total_size = db.session.query(db.func.coalesce(db.func.sum(Document.file_size), 0)).filter(
         Document.user_id == user.id,
+        Document.area_id.is_(None) if area_id is None else Document.area_id == area_id,
         Document.archived_at.is_(None)
     ).scalar() or 0
-    total_count = Document.query.filter_by(user_id=user.id).filter(Document.archived_at.is_(None)).count()
-    pinned_count = Document.query.filter_by(user_id=user.id, pinned=True).filter(Document.archived_at.is_(None)).count()
+    total_count = _filter_area_scope(Document.query.filter_by(user_id=user.id), Document, area_id).filter(Document.archived_at.is_(None)).count()
+    pinned_count = _filter_area_scope(Document.query.filter_by(user_id=user.id, pinned=True), Document, area_id).filter(Document.archived_at.is_(None)).count()
     return jsonify({
         'total_size': int(total_size),
         'document_count': int(total_count),
         'pinned_count': int(pinned_count)
     })
+
+
+def area_vault_stats(area_id):
+    _user, area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return vault_stats(area.id)
 
 

@@ -83,6 +83,10 @@ function initNoteEditorPage() {
         if (converted) {
             bindNoteCheckboxes();
         }
+        // Slash command detection
+        if (typeof tryOpenSlashMenu === 'function') {
+            tryOpenSlashMenu(editor);
+        }
         refreshNoteDirtyState();
         autoGenerateTitle();
     });
@@ -160,7 +164,23 @@ function initNoteEditorPage() {
             return;
         }
 
+        // Check for pasted images first
         const clipboard = e.clipboardData || window.clipboardData;
+        if (clipboard && clipboard.items) {
+            const imageFiles = [];
+            for (const item of clipboard.items) {
+                if (item.type && item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) imageFiles.push(file);
+                }
+            }
+            if (imageFiles.length > 0) {
+                e.preventDefault();
+                uploadAndInsertNoteImages(imageFiles);
+                return;
+            }
+        }
+
         const plainText = clipboard ? (clipboard.getData('text/plain') || '') : '';
         const markdown = window.NoteMarkdown;
         if (!plainText || !markdown || typeof markdown.shouldConvertPastedMarkdown !== 'function') {
@@ -188,6 +208,246 @@ function initNoteEditorPage() {
         autoGenerateTitle();
         updateNoteToolbarStates();
     });
+
+    // Image drag-and-drop
+    editor.addEventListener('dragover', (e) => {
+        if (notesState.activeNoteIsArchived) return;
+        const hasFiles = e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files');
+        if (hasFiles) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            editor.classList.add('note-drop-active');
+        }
+    });
+    editor.addEventListener('dragleave', () => {
+        editor.classList.remove('note-drop-active');
+    });
+    editor.addEventListener('drop', (e) => {
+        editor.classList.remove('note-drop-active');
+        if (notesState.activeNoteIsArchived) return;
+        if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+        const imageFiles = Array.from(e.dataTransfer.files).filter(f => f.type && f.type.startsWith('image/'));
+        if (imageFiles.length > 0) {
+            e.preventDefault();
+            uploadAndInsertNoteImages(imageFiles);
+        }
+    });
+
+    // Image file input (toolbar button)
+    const imageInput = document.getElementById('note-image-input');
+    if (imageInput) {
+        imageInput.addEventListener('change', () => {
+            if (imageInput.files && imageInput.files.length) {
+                uploadAndInsertNoteImages(Array.from(imageInput.files));
+            }
+            imageInput.value = '';
+        });
+    }
+
+    // Dismiss slash menu on blur/click outside
+    document.addEventListener('click', (e) => {
+        const menu = document.getElementById('note-slash-menu');
+        if (menu && menu.style.display !== 'none' && !menu.contains(e.target)) {
+            if (typeof hideSlashMenu === 'function') hideSlashMenu();
+        }
+    });
+
+    // Image click-to-select and resize in editor
+    editor.addEventListener('click', (e) => {
+        // Check both closest (for clicks on wrapper children) and direct img clicks
+        let wrapper = e.target.closest('.note-image-wrapper');
+        if (!wrapper && e.target.classList && e.target.classList.contains('note-embedded-image')) {
+            wrapper = e.target.parentElement;
+        }
+        if (wrapper && wrapper.classList.contains('note-image-wrapper')) {
+            e.preventDefault();
+            selectNoteImage(wrapper);
+            return;
+        }
+        deselectNoteImage();
+    });
+    // Also handle mousedown on images (contenteditable="false" divs may not fire click)
+    editor.addEventListener('mousedown', (e) => {
+        const img = e.target.closest('.note-embedded-image') || (e.target.classList && e.target.classList.contains('note-embedded-image') ? e.target : null);
+        if (img) {
+            const wrapper = img.closest('.note-image-wrapper') || img.parentElement;
+            if (wrapper && wrapper.classList.contains('note-image-wrapper')) {
+                e.preventDefault();
+                setTimeout(() => selectNoteImage(wrapper), 0);
+            }
+        }
+    });
+
+    // Task section checkbox toggle
+    editor.addEventListener('click', (e) => {
+        const cb = e.target.closest('.note-task-item-cb');
+        if (!cb) return;
+        const item = cb.closest('.note-task-item');
+        if (!item) return;
+        item.classList.toggle('checked', cb.checked);
+        setNoteDirty(true);
+    });
+
+    // Task section keydown: Enter creates new item, Backspace on empty removes
+    editor.addEventListener('keydown', (e) => {
+        const textSpan = e.target.closest ? e.target.closest('.note-task-item-text') : null;
+        if (!textSpan) return;
+        const item = textSpan.closest('.note-task-item');
+        const section = textSpan.closest('.note-task-section');
+        if (!item || !section) return;
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const text = textSpan.textContent || '';
+            if (!text.trim()) {
+                // Empty item — exit section: remove item and place cursor after section
+                const itemsContainer = item.closest('.note-task-section-items');
+                item.remove();
+                // Place cursor after the section
+                const br = document.createElement('br');
+                section.parentNode.insertBefore(br, section.nextSibling);
+                const range = document.createRange();
+                range.setStartAfter(br);
+                range.collapse(true);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            } else {
+                // Create new task item below
+                const newItem = _createTaskItem();
+                const itemsContainer = item.closest('.note-task-section-items');
+                if (item.nextSibling) {
+                    itemsContainer.insertBefore(newItem, item.nextSibling);
+                } else {
+                    itemsContainer.appendChild(newItem);
+                }
+                const newText = newItem.querySelector('.note-task-item-text');
+                if (newText) {
+                    const range = document.createRange();
+                    range.selectNodeContents(newText);
+                    range.collapse(true);
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                }
+            }
+            setNoteDirty(true);
+            return;
+        }
+
+        if (e.key === 'Backspace') {
+            const text = textSpan.textContent || '';
+            if (!text.trim() && item.previousElementSibling) {
+                e.preventDefault();
+                const prevItem = item.previousElementSibling;
+                item.remove();
+                const prevText = prevItem.querySelector('.note-task-item-text');
+                if (prevText) {
+                    const range = document.createRange();
+                    range.selectNodeContents(prevText);
+                    range.collapse(false); // end
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                }
+                setNoteDirty(true);
+            }
+        }
+    });
+
+    // Callout: cycle through types on icon click (works on mobile too)
+    editor.addEventListener('click', (e) => {
+        const icon = e.target.closest('.note-callout > i');
+        if (!icon) return;
+        const callout = icon.closest('.note-callout');
+        if (!callout) return;
+        e.preventDefault();
+        const types = ['callout-info', 'callout-warning', 'callout-success', 'callout-error'];
+        const icons = ['fa-circle-info', 'fa-triangle-exclamation', 'fa-circle-check', 'fa-circle-xmark'];
+        const currentIdx = types.findIndex(t => callout.classList.contains(t));
+        const nextIdx = (currentIdx + 1) % types.length;
+        types.forEach(t => callout.classList.remove(t));
+        callout.classList.add(types[nextIdx]);
+        icon.className = `fa-solid ${icons[nextIdx]}`;
+        setNoteDirty(true);
+    });
+
+    // Block deletion: show delete button when focusing inside special blocks
+    const BLOCK_SELECTORS = '.note-task-section, .note-callout, .note-toggle, .note-columns, table';
+    let _activeBlock = null;
+
+    function _showBlockDeleteBtn(block) {
+        if (_activeBlock === block) return;
+        _hideBlockDeleteBtn();
+        _activeBlock = block;
+        block.classList.add('note-block-focused');
+        // Add delete button if not already present
+        if (!block.querySelector('.note-block-delete-btn')) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'note-block-delete-btn';
+            btn.title = 'Delete block';
+            btn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+            btn.addEventListener('mousedown', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                _deleteBlock(block);
+            });
+            btn.addEventListener('touchstart', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                _deleteBlock(block);
+            }, { passive: false });
+            block.style.position = 'relative';
+            block.appendChild(btn);
+        }
+    }
+
+    function _hideBlockDeleteBtn() {
+        if (_activeBlock) {
+            _activeBlock.classList.remove('note-block-focused');
+            const btn = _activeBlock.querySelector('.note-block-delete-btn');
+            if (btn) btn.remove();
+            _activeBlock = null;
+        }
+    }
+
+    function _deleteBlock(block) {
+        if (!block || !block.parentNode) return;
+        const next = block.nextSibling;
+        block.remove();
+        // Remove trailing br if present
+        if (next && next.nodeName === 'BR') next.remove();
+        _activeBlock = null;
+        setNoteDirty(true);
+    }
+
+    // Show delete button when cursor enters a special block
+    editor.addEventListener('focusin', (e) => {
+        const block = e.target.closest(BLOCK_SELECTORS);
+        if (block && editor.contains(block)) {
+            _showBlockDeleteBtn(block);
+        }
+    });
+
+    // Also detect via selectionchange (for keyboard navigation into blocks)
+    document.addEventListener('selectionchange', () => {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        const node = sel.anchorNode;
+        const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+        if (!el || !editor.contains(el)) {
+            _hideBlockDeleteBtn();
+            return;
+        }
+        const block = el.closest(BLOCK_SELECTORS);
+        if (block && editor.contains(block)) {
+            _showBlockDeleteBtn(block);
+        } else {
+            _hideBlockDeleteBtn();
+        }
+    });
+
     titleInput.addEventListener('input', () => {
         if (notesState.activeNoteIsArchived) {
             showReadOnlyToast();
@@ -201,20 +461,40 @@ function initNoteEditorPage() {
         showReadOnlyToast();
     });
 
+    // Slash command keyboard navigation (must be before other keydown handlers)
+    editor.addEventListener('keydown', (e) => {
+        if (typeof handleSlashMenuKeydown === 'function' && handleSlashMenuKeydown(e)) {
+            return;
+        }
+    });
+
     // Add keydown listener for checkbox auto-continuation
     editor.addEventListener('keydown', handleNoteEditorKeydown);
 
-    // Add selection change listener to update toolbar states
+    // Add selection change listener to update toolbar states and table toolbar
     document.addEventListener('selectionchange', () => {
         const activeEl = document.activeElement;
-        if (activeEl === editor) {
+        if (activeEl === editor || editor.contains(document.activeElement)) {
             updateNoteToolbarStates();
+            // Table toolbar: show when cursor is inside a table cell
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0) {
+                const node = sel.anchorNode;
+                const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+                const cell = el ? el.closest('td, th') : null;
+                if (cell && editor.contains(cell)) {
+                    showTableToolbar(cell);
+                } else {
+                    hideTableToolbar();
+                }
+            }
         }
     });
 
     bindNoteToolbar();
     setupNoteLinkModalControls();
     setupNoteExitAutosave();
+    if (typeof initTableToolbarEvents === 'function') initTableToolbarEvents();
 
     if (noteId) {
         loadNoteForEditor(noteId);
@@ -906,6 +1186,212 @@ async function createNoteFromLinkModal(isListed) {
         showToast('Could not create that note.', 'error', 2500);
     }
 }
+
+// ── Image upload, insert, select, resize ────────────────────────────
+
+async function uploadAndInsertNoteImages(files) {
+    if (!files || !files.length) return;
+    const editor = document.getElementById('note-editor');
+    if (!editor) return;
+
+    for (const file of files) {
+        // Insert a loading placeholder at the cursor
+        const placeholder = document.createElement('div');
+        placeholder.className = 'note-image-placeholder';
+        placeholder.contentEditable = 'false';
+        placeholder.innerHTML = '<i class="fa-solid fa-spinner"></i> Uploading image\u2026';
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            range.insertNode(placeholder);
+            const newRange = document.createRange();
+            newRange.setStartAfter(placeholder);
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+        } else {
+            editor.appendChild(placeholder);
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+        const noteId = notesState.activeNoteId;
+        if (noteId) formData.append('note_id', noteId);
+
+        try {
+            const res = await fetch('/api/notes/images', { method: 'POST', body: formData });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                placeholder.remove();
+                showToast(err.error || 'Image upload failed', 'error', 2500);
+                continue;
+            }
+            const data = await res.json();
+            const url = data.url || '';
+            const alt = data.original_filename || 'image';
+            if (url) {
+                // Replace placeholder with actual image
+                _replacePlaceholderWithImage(placeholder, url, alt);
+            } else {
+                placeholder.remove();
+            }
+        } catch (err) {
+            console.error('Image upload error:', err);
+            placeholder.remove();
+            showToast('Image upload failed', 'error', 2500);
+        }
+    }
+}
+
+function _replacePlaceholderWithImage(placeholder, url, alt) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'note-image-wrapper';
+    wrapper.contentEditable = 'false';
+
+    const img = document.createElement('img');
+    img.className = 'note-embedded-image';
+    img.src = url;
+    img.alt = alt || 'image';
+    img.style.maxWidth = '100%';
+    img.draggable = false;
+    wrapper.appendChild(img);
+
+    if (placeholder.parentNode) {
+        placeholder.parentNode.replaceChild(wrapper, placeholder);
+        // Ensure there's a line break after for cursor placement
+        if (!wrapper.nextSibling || wrapper.nextSibling.nodeName !== 'BR') {
+            const br = document.createElement('br');
+            wrapper.parentNode.insertBefore(br, wrapper.nextSibling);
+        }
+    }
+    setNoteDirty(true);
+    refreshNoteDirtyState();
+}
+
+let _selectedNoteImage = null;
+
+function selectNoteImage(wrapperEl) {
+    deselectNoteImage();
+    if (!wrapperEl) return;
+    wrapperEl.classList.add('selected');
+    _selectedNoteImage = wrapperEl;
+
+    // Add resize handles
+    const positions = ['nw', 'ne', 'sw', 'se'];
+    positions.forEach(pos => {
+        const handle = document.createElement('div');
+        handle.className = `note-image-resize-handle handle-${pos}`;
+        handle.dataset.direction = pos;
+        handle.addEventListener('mousedown', startImageResize);
+        handle.addEventListener('touchstart', startImageResize, { passive: false });
+        wrapperEl.appendChild(handle);
+    });
+
+    // Add alignment toolbar
+    const alignBar = document.createElement('div');
+    alignBar.className = 'note-image-align-bar';
+    const currentAlign = ['align-left', 'align-center', 'align-right', 'align-full']
+        .find(c => wrapperEl.classList.contains(c)) || '';
+    const alignOptions = [
+        { cls: 'align-left', icon: 'fa-solid fa-align-left', title: 'Align left' },
+        { cls: 'align-center', icon: 'fa-solid fa-align-center', title: 'Center' },
+        { cls: 'align-right', icon: 'fa-solid fa-align-right', title: 'Align right' },
+        { cls: 'align-full', icon: 'fa-solid fa-arrows-left-right-to-line', title: 'Full width' },
+    ];
+    alignOptions.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'note-image-align-btn' + (currentAlign === opt.cls ? ' active' : '');
+        btn.title = opt.title;
+        btn.innerHTML = `<i class="${opt.icon}"></i>`;
+        btn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            wrapperEl.classList.remove('align-left', 'align-center', 'align-right', 'align-full');
+            if (currentAlign !== opt.cls) {
+                wrapperEl.classList.add(opt.cls);
+            }
+            setNoteDirty(true);
+            // Re-select to refresh toolbar
+            selectNoteImage(wrapperEl);
+        });
+        alignBar.appendChild(btn);
+    });
+    wrapperEl.appendChild(alignBar);
+}
+
+function deselectNoteImage() {
+    if (_selectedNoteImage) {
+        _selectedNoteImage.classList.remove('selected');
+        _selectedNoteImage.querySelectorAll('.note-image-resize-handle, .note-image-align-bar').forEach(h => h.remove());
+        _selectedNoteImage = null;
+    }
+}
+
+let _imageResizeState = null;
+
+function startImageResize(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const handle = e.target;
+    const wrapper = handle.closest('.note-image-wrapper');
+    const img = wrapper ? wrapper.querySelector('.note-embedded-image') : null;
+    if (!wrapper || !img) return;
+
+    const startX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+    const startWidth = img.offsetWidth;
+
+    _imageResizeState = { wrapper, img, startX, startWidth, direction: handle.dataset.direction };
+
+    document.addEventListener('mousemove', doImageResize);
+    document.addEventListener('mouseup', endImageResize);
+    document.addEventListener('touchmove', doImageResize, { passive: false });
+    document.addEventListener('touchend', endImageResize);
+}
+
+function doImageResize(e) {
+    if (!_imageResizeState) return;
+    e.preventDefault();
+    const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
+    const dx = clientX - _imageResizeState.startX;
+    const dir = _imageResizeState.direction;
+    const sign = (dir === 'nw' || dir === 'sw') ? -1 : 1;
+    let newWidth = _imageResizeState.startWidth + dx * sign;
+    const maxW = _imageResizeState.wrapper.parentElement ? _imageResizeState.wrapper.parentElement.offsetWidth : 9999;
+    newWidth = Math.max(50, Math.min(newWidth, maxW));
+    const w = Math.round(newWidth);
+    _imageResizeState.img.style.width = `${w}px`;
+    _imageResizeState.img.style.maxWidth = 'none';
+    // Also set wrapper width so container shrinks with the image
+    _imageResizeState.wrapper.style.width = `${w}px`;
+}
+
+function endImageResize() {
+    if (_imageResizeState) {
+        setNoteDirty(true);
+        _imageResizeState = null;
+    }
+    document.removeEventListener('mousemove', doImageResize);
+    document.removeEventListener('mouseup', endImageResize);
+    document.removeEventListener('touchmove', doImageResize);
+    document.removeEventListener('touchend', endImageResize);
+}
+
+// Delete selected image with Backspace/Delete
+document.addEventListener('keydown', (e) => {
+    if (!_selectedNoteImage) return;
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        const next = _selectedNoteImage.nextSibling;
+        _selectedNoteImage.remove();
+        // Remove trailing br if any
+        if (next && next.nodeName === 'BR') next.remove();
+        _selectedNoteImage = null;
+        setNoteDirty(true);
+    }
+});
+
 
 function bootNoteEditorPage() {
     if (!document.getElementById('note-editor-page')) return;

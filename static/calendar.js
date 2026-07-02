@@ -1909,6 +1909,19 @@ function createDisplayModeMenuItem(ev, dropdown) {
     return item;
 }
 
+function createCalendarAddNoteMenuItem(ev, dropdown) {
+    const item = document.createElement('button');
+    item.className = 'calendar-item-menu-option';
+    item.innerHTML = '<i class="fa-solid fa-note-sticky"></i> Add Note...';
+    item.onclick = async (e) => {
+        e.stopPropagation();
+        const resolved = await resolveCalendarEventId(ev);
+        if (!resolved) return;
+        showCalendarNoteChoiceInDropdown(dropdown, resolved);
+    };
+    return item;
+}
+
 function getCalendarDropdownViewportSize() {
     const viewport = window.visualViewport;
     return {
@@ -2395,6 +2408,15 @@ function renderCalendarEvents() {
           actions.className = 'calendar-actions-row';
           const noteChips = document.createElement('div');
           noteChips.className = 'calendar-note-chips';
+          (ev.linked_notes || []).forEach(note => {
+            const link = document.createElement('a');
+            link.className = 'meta-chip note';
+            link.href = `/notes/${note.id}`;
+            link.title = note.title || `Note #${note.id}`;
+            link.setAttribute('aria-label', note.title || `Note #${note.id}`);
+            link.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
+            noteChips.appendChild(link);
+          });
           appendCalendarItemNoteChip(noteChips, ev);
           const priorityDot = document.createElement('button');
           priorityDot.className = `calendar-priority-dot priority-${ev.priority || 'medium'}`;
@@ -2492,7 +2514,8 @@ function renderCalendarEvents() {
         };
 
         const displayModeMenuItem = createDisplayModeMenuItem(ev, overflowDropdown);
-        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, followUpMenuItem, openBtn, unpinBtn);
+        const noteMenuItem = createCalendarAddNoteMenuItem(ev, overflowDropdown);
+        overflowDropdown.append(reminderMenuItem, rolloverMenuItem, allowOverlapMenuItem, displayModeMenuItem, noteMenuItem, followUpMenuItem, openBtn, unpinBtn);
         overflowMenuContainer.append(overflowBtn);
         document.body.appendChild(overflowDropdown);
 
@@ -3919,8 +3942,8 @@ function startBulkCalendarPriorityPicker(anchor) {
     openBulkPriorityDropdown(button, (val) => bulkCalendarChangePriority(val));
 }
 
-function startBulkCalendarNoteLink(anchor = null) {
-    const targets = getSelectedCalendarEvents(true).filter(ev => !ev.is_phase && !ev.is_group && !ev.is_task_link);
+async function startBulkCalendarNoteLink(anchor = null) {
+    const targets = getSelectedCalendarEvents(true).filter(ev => !ev.is_phase && !ev.is_group);
     if (!targets.length) return;
     if (targets.length > 1) {
         showToast('Link note works one item at a time. Select one item to continue.', 'warning');
@@ -3929,7 +3952,12 @@ function startBulkCalendarNoteLink(anchor = null) {
     const ev = targets[0];
     const menu = document.getElementById('calendar-bulk-more-dropdown');
     if (!menu) return;
-    showCalendarNoteChoiceInDropdown(menu, ev);
+    const resolved = await resolveCalendarEventId(ev);
+    if (!resolved) {
+        showToast('Could not prepare that calendar item for notes.', 'error');
+        return;
+    }
+    showCalendarNoteChoiceInDropdown(menu, resolved);
 }
 
 function enableCalendarDragAndDrop(container) {

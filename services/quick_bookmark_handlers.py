@@ -164,6 +164,12 @@ def quick_access_order_route(
     return jsonify({"message": "Order updated"})
 
 
+def _filter_area_scope(query, model, area_id):
+    if area_id is None:
+        return query.filter(model.area_id.is_(None))
+    return query.filter(model.area_id == area_id)
+
+
 def handle_bookmarks_route(
     *,
     request,
@@ -173,13 +179,15 @@ def handle_bookmarks_route(
     db,
     start_embedding_job,
     entity_bookmark,
+    area_id=None,
 ):
     user = get_current_user()
     if not user:
         return jsonify({"error": "No user selected"}), 401
 
     if request.method == "GET":
-        items = BookmarkItem.query.filter_by(user_id=user.id).order_by(
+        query = BookmarkItem.query.filter_by(user_id=user.id)
+        items = _filter_area_scope(query, BookmarkItem, area_id).order_by(
             BookmarkItem.pinned.desc(),
             BookmarkItem.pin_order.desc(),
             BookmarkItem.updated_at.desc(),
@@ -199,12 +207,14 @@ def handle_bookmarks_route(
     if pinned:
         pin_order = (
             db.session.query(db.func.coalesce(db.func.max(BookmarkItem.pin_order), 0))
-            .filter_by(user_id=user.id)
+            .filter(BookmarkItem.user_id == user.id)
+            .filter(BookmarkItem.area_id.is_(None) if area_id is None else BookmarkItem.area_id == area_id)
             .scalar()
         ) + 1
 
     new_item = BookmarkItem(
         user_id=user.id,
+        area_id=area_id,
         title=title,
         description=description,
         value=value,
@@ -228,12 +238,14 @@ def bookmark_detail_route(
     start_embedding_job,
     delete_embedding,
     entity_bookmark,
+    area_id=None,
 ):
     user = get_current_user()
     if not user:
         return jsonify({"error": "No user selected"}), 401
 
-    item = BookmarkItem.query.filter_by(id=item_id, user_id=user.id).first_or_404()
+    query = BookmarkItem.query.filter_by(id=item_id, user_id=user.id)
+    item = _filter_area_scope(query, BookmarkItem, area_id).first_or_404()
 
     if request.method == "GET":
         return jsonify(item.to_dict())
@@ -259,7 +271,8 @@ def bookmark_detail_route(
             if pinned and not item.pinned:
                 max_pin = (
                     db.session.query(db.func.coalesce(db.func.max(BookmarkItem.pin_order), 0))
-                    .filter_by(user_id=user.id)
+                    .filter(BookmarkItem.user_id == user.id)
+                    .filter(BookmarkItem.area_id.is_(None) if area_id is None else BookmarkItem.area_id == area_id)
                     .scalar()
                 )
                 item.pin_order = (max_pin or 0) + 1
@@ -284,6 +297,7 @@ def bulk_bookmarks_route(
     get_current_user,
     BookmarkItem,
     db,
+    area_id=None,
 ):
     user = get_current_user()
     if not user:
@@ -307,9 +321,10 @@ def bulk_bookmarks_route(
     if not ids:
         return jsonify({"error": "No valid bookmark ids provided"}), 400
 
-    bookmarks = BookmarkItem.query.filter(
+    query = BookmarkItem.query.filter(
         BookmarkItem.id.in_(ids), BookmarkItem.user_id == user.id
-    ).all()
+    )
+    bookmarks = _filter_area_scope(query, BookmarkItem, area_id).all()
     if not bookmarks:
         return jsonify({"error": "No matching bookmarks found"}), 404
 

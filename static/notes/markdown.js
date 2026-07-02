@@ -91,6 +91,15 @@
             return token;
         });
 
+        // ![alt](url) -> image
+        source = source.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/gi, (_, alt, url) => {
+            const token = `@@MDTOKEN_${placeholders.length}@@`;
+            placeholders.push(
+                `<div class="note-image-wrapper" contenteditable="false"><img class="note-embedded-image" src="${escapeAttr(url)}" alt="${escapeAttr(alt)}" style="max-width:100%"></div>`
+            );
+            return token;
+        });
+
         source = source.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (match, label, url) => {
             const lowerUrl = String(url || '').toLowerCase();
             if (!lowerUrl.startsWith('http://') && !lowerUrl.startsWith('https://') && !lowerUrl.startsWith('mailto:')) {
@@ -106,6 +115,7 @@
         source = escapeHtml(source);
         source = source.replace(/(\*\*|__)(.+?)\1/g, '<strong>$2</strong>');
         source = source.replace(/~~(.+?)~~/g, '<del>$1</del>');
+        source = source.replace(/==(.+?)==/g, '<mark>$1</mark>');
         source = source.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
         source = source.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
 
@@ -118,7 +128,7 @@
     }
 
     function renderMarkdownListItem(itemBody) {
-        const taskMatch = itemBody.match(/^\[( |x|X)\]\s+([\s\S]+)$/);
+        const taskMatch = itemBody.match(/^\[( |x|X)?\]\s*([\s\S]*)$/);
         if (taskMatch) {
             const checked = taskMatch[1].toLowerCase() === 'x';
             const body = taskMatch[2]
@@ -149,6 +159,8 @@
 
         const isUnorderedItem = (line) => /^\s{0,3}[-*+]\s+/.test(line || '');
         const isOrderedItem = (line) => /^\s{0,3}\d+[.)]\s+/.test(line || '');
+        const isTableRow = (line) => /^\s*\|.+\|/.test(line || '');
+        const isTableSeparator = (line) => /^\s*\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)*\|/.test(line || '');
         const isBlockStart = (line) => {
             if (!line || !line.trim()) return false;
             return (
@@ -157,7 +169,8 @@
                 /^\s{0,3}>\s?/.test(line) ||
                 isHorizontalRule(line) ||
                 isUnorderedItem(line) ||
-                isOrderedItem(line)
+                isOrderedItem(line) ||
+                isTableRow(line)
             );
         };
 
@@ -240,6 +253,44 @@
                 }
 
                 blocks.push(`<${tag}>${items.join('')}</${tag}>`);
+                continue;
+            }
+
+            // Table: | col | col | with optional separator row
+            if (isTableRow(current)) {
+                const tableRows = [];
+                while (i < lines.length && isTableRow(lines[i])) {
+                    tableRows.push(lines[i]);
+                    i += 1;
+                }
+                if (tableRows.length >= 2) {
+                    const parseCells = (row) => {
+                        return row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+                    };
+                    let headerRow = parseCells(tableRows[0]);
+                    let hasSeparator = isTableSeparator(tableRows[1]);
+                    let dataStart = hasSeparator ? 2 : 1;
+
+                    let html = '<table>';
+                    if (hasSeparator) {
+                        html += '<thead><tr>';
+                        headerRow.forEach(cell => { html += `<th>${renderInlineMarkdown(cell)}</th>`; });
+                        html += '</tr></thead>';
+                    }
+                    html += '<tbody>';
+                    const bodyStart = hasSeparator ? dataStart : 0;
+                    for (let r = bodyStart; r < tableRows.length; r++) {
+                        const cells = parseCells(tableRows[r]);
+                        html += '<tr>';
+                        cells.forEach(cell => { html += `<td>${renderInlineMarkdown(cell)}</td>`; });
+                        html += '</tr>';
+                    }
+                    html += '</tbody></table>';
+                    blocks.push(html);
+                } else {
+                    // Single row - treat as paragraph
+                    blocks.push(`<p>${renderInlineMarkdown(tableRows[0])}</p>`);
+                }
                 continue;
             }
 
@@ -396,7 +447,7 @@
     function tryConvertInlineMarkdownAtSelection(editor, event) {
         if (!editor || !event || event.inputType !== 'insertText') return false;
         const trigger = event.data || '';
-        if (!['*', '_', '~', '`'].includes(trigger)) return false;
+        if (!['*', '_', '~', '`', '='].includes(trigger)) return false;
 
         const selection = window.getSelection();
         if (!selection || selection.rangeCount === 0) return false;
@@ -444,6 +495,13 @@
             return replaceTextRangeWithNode(node, start, offset, 'em', italicUnderscoreMatch[2]);
         }
 
+        // ==highlight== -> <mark>
+        const highlightMatch = before.match(/==([^=\n]+?)==$/);
+        if (highlightMatch && isInlineContentValid(highlightMatch[1])) {
+            const start = before.length - highlightMatch[0].length;
+            return replaceTextRangeWithNode(node, start, offset, 'mark', highlightMatch[1]);
+        }
+
         return false;
     }
 
@@ -470,6 +528,21 @@
             return replaceLineContext(context, blockquote);
         }
 
+        // Check for task/checkbox before bullet list: - [ ] text, - [x] text, - [] text
+        const checkboxMatch = raw.match(/^\s{0,3}[-*+]\s+\[( |x|X)?\]\s*(.*)$/);
+        if (checkboxMatch) {
+            const checked = (checkboxMatch[1] || '').toLowerCase() === 'x';
+            const body = (checkboxMatch[2] || '').trim();
+            const span = document.createElement('span');
+            span.className = 'note-inline-checkbox' + (checked ? ' checked' : '');
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = checked;
+            span.appendChild(cb);
+            span.appendChild(document.createTextNode(' ' + body));
+            return replaceLineContext(context, span);
+        }
+
         const unorderedMatch = raw.match(/^\s{0,3}[-*+]\s+(.*)$/);
         if (unorderedMatch && unorderedMatch[1].trim()) {
             const list = buildListNode(false, unorderedMatch[1]);
@@ -480,6 +553,22 @@
         if (orderedMatch && orderedMatch[1].trim()) {
             const list = buildListNode(true, orderedMatch[1]);
             return replaceLineContext(context, list);
+        }
+
+        // ![alt](url) -> image
+        const imageMatch = raw.match(/^\s{0,3}!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)\s*$/i);
+        if (imageMatch) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'note-image-wrapper';
+            wrapper.contentEditable = 'false';
+            const img = document.createElement('img');
+            img.className = 'note-embedded-image';
+            img.alt = imageMatch[1] || 'image';
+            img.src = imageMatch[2];
+            img.style.maxWidth = '100%';
+            img.draggable = false;
+            wrapper.appendChild(img);
+            return replaceLineContext(context, wrapper, true);
         }
 
         if (/^\s{0,3}(?:[-*_]\s*){3,}$/.test(raw)) {
@@ -537,9 +626,197 @@
         return looksLikeMarkdown(String(text || ''));
     }
 
+    // ── HTML to Markdown converter (for export) ──────────────────────
+
+    function noteHtmlToMarkdown(html) {
+        if (!html) return '';
+        const container = document.createElement('div');
+        container.innerHTML = html;
+        return convertNodeToMarkdown(container).replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function convertNodeToMarkdown(node) {
+        if (!node) return '';
+        if (node.nodeType === Node.TEXT_NODE) {
+            return (node.nodeValue || '').replace(/\u00a0/g, ' ');
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        const tag = node.tagName.toLowerCase();
+
+        // Get inline text for inline elements
+        const inlineChildren = () => {
+            let result = '';
+            for (const child of node.childNodes) {
+                result += convertNodeToMarkdown(child);
+            }
+            return result;
+        };
+
+        // Block children
+        const blockChildren = () => {
+            let result = '';
+            for (const child of node.childNodes) {
+                result += convertNodeToMarkdown(child);
+            }
+            return result;
+        };
+
+        switch (tag) {
+            case 'strong':
+            case 'b':
+                return `**${inlineChildren()}**`;
+            case 'em':
+            case 'i':
+                return `*${inlineChildren()}*`;
+            case 'del':
+            case 's':
+            case 'strike':
+                return `~~${inlineChildren()}~~`;
+            case 'mark':
+                return `==${inlineChildren()}==`;
+            case 'code':
+                if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
+                    return node.textContent || '';
+                }
+                return `\`${node.textContent || ''}\``;
+            case 'u':
+                return inlineChildren();
+            case 'a': {
+                const href = node.getAttribute('href') || '';
+                const text = inlineChildren();
+                if (node.classList.contains('note-link')) {
+                    return `[[${text}]]`;
+                }
+                if (href && href !== '#') {
+                    return `[${text}](${href})`;
+                }
+                return text;
+            }
+            case 'img': {
+                const src = node.getAttribute('src') || '';
+                const alt = node.getAttribute('alt') || 'image';
+                return `![${alt}](${src})`;
+            }
+            case 'br':
+                return '\n';
+            case 'hr':
+                return '\n---\n';
+            case 'h1':
+                return `\n# ${inlineChildren()}\n`;
+            case 'h2':
+                return `\n## ${inlineChildren()}\n`;
+            case 'h3':
+                return `\n### ${inlineChildren()}\n`;
+            case 'h4':
+                return `\n#### ${inlineChildren()}\n`;
+            case 'h5':
+                return `\n##### ${inlineChildren()}\n`;
+            case 'h6':
+                return `\n###### ${inlineChildren()}\n`;
+            case 'p':
+            case 'div':
+                return `\n${inlineChildren()}\n`;
+            case 'blockquote': {
+                const content = blockChildren().trim();
+                return '\n' + content.split('\n').map(line => `> ${line}`).join('\n') + '\n';
+            }
+            case 'pre': {
+                const codeEl = node.querySelector('code');
+                const codeText = codeEl ? (codeEl.textContent || '') : (node.textContent || '');
+                return `\n\`\`\`\n${codeText}\n\`\`\`\n`;
+            }
+            case 'ul': {
+                let result = '\n';
+                const items = node.querySelectorAll(':scope > li');
+                items.forEach(li => {
+                    const checkbox = li.querySelector('.note-inline-checkbox input[type="checkbox"]');
+                    const content = convertLiContent(li);
+                    if (checkbox) {
+                        const checked = checkbox.checked ? 'x' : ' ';
+                        result += `- [${checked}] ${content}\n`;
+                    } else {
+                        result += `- ${content}\n`;
+                    }
+                });
+                return result;
+            }
+            case 'ol': {
+                let result = '\n';
+                const items = node.querySelectorAll(':scope > li');
+                items.forEach((li, i) => {
+                    const content = convertLiContent(li);
+                    result += `${i + 1}. ${content}\n`;
+                });
+                return result;
+            }
+            case 'li':
+                return inlineChildren();
+            case 'table':
+                return convertTableToMarkdown(node);
+            case 'span': {
+                if (node.classList.contains('note-inline-checkbox')) {
+                    const checkbox = node.querySelector('input[type="checkbox"]');
+                    const checked = checkbox && checkbox.checked ? 'x' : ' ';
+                    const text = inlineChildren().replace(/^\s*/, '');
+                    return `- [${checked}] ${text}`;
+                }
+                return inlineChildren();
+            }
+            default:
+                return blockChildren();
+        }
+    }
+
+    function convertLiContent(li) {
+        let result = '';
+        for (const child of li.childNodes) {
+            if (child.nodeType === Node.ELEMENT_NODE) {
+                const tag = child.tagName.toLowerCase();
+                if (tag === 'ul' || tag === 'ol') continue; // Skip nested lists in direct content
+            }
+            result += convertNodeToMarkdown(child);
+        }
+        return result.trim();
+    }
+
+    function convertTableToMarkdown(table) {
+        const rows = table.querySelectorAll('tr');
+        if (!rows.length) return '';
+
+        let md = '\n';
+        const allRows = [];
+        rows.forEach(row => {
+            const cells = [];
+            row.querySelectorAll('th, td').forEach(cell => {
+                cells.push((cell.textContent || '').trim());
+            });
+            allRows.push(cells);
+        });
+
+        if (!allRows.length) return '';
+
+        // Calculate column widths
+        const colCount = Math.max(...allRows.map(r => r.length));
+
+        // First row (header or just data)
+        const firstRow = allRows[0] || [];
+        md += '| ' + firstRow.map(c => c).join(' | ') + ' |\n';
+
+        // Separator
+        md += '| ' + Array.from({ length: colCount }, () => '---').join(' | ') + ' |\n';
+
+        // Data rows
+        for (let r = 1; r < allRows.length; r++) {
+            md += '| ' + allRows[r].map(c => c).join(' | ') + ' |\n';
+        }
+        return md;
+    }
+
+
     window.NoteMarkdown = {
         markdownToHtml,
         normalizeNoteEditorHtml,
+        noteHtmlToMarkdown,
         renderNoteContentForEditor,
         shouldConvertPastedMarkdown,
         tryConvertInlineMarkdownAtSelection,

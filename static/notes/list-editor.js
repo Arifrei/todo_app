@@ -27,6 +27,7 @@ function initListEditorPage() {
     const sectionReorderToggleBtn = document.getElementById('list-section-reorder-toggle');
     const sectionReorderDoneBtn = document.getElementById('list-section-reorder-done-btn');
     const searchToggleBtn = document.getElementById('list-search-toggle');
+    const notesExpandToggle = document.getElementById('list-notes-expand-toggle');
     const stack = document.getElementById('list-pill-stack');
     const selectToggle = document.getElementById('list-select-toggle');
     const bulkMoveBtn = document.getElementById('list-bulk-move-btn');
@@ -72,6 +73,7 @@ function initListEditorPage() {
     if (duplicatesBtn) duplicatesBtn.addEventListener('click', () => openListDuplicatesModal());
     if (sectionReorderToggleBtn) sectionReorderToggleBtn.addEventListener('click', () => toggleListSectionReorderMode());
     if (sectionReorderDoneBtn) sectionReorderDoneBtn.addEventListener('click', () => setListSectionReorderMode(false));
+    if (notesExpandToggle) notesExpandToggle.addEventListener('click', () => toggleAllListItemNotes());
     if (searchToggleBtn) {
         searchToggleBtn.addEventListener('click', () => {
             if (!searchBar) return;
@@ -481,6 +483,56 @@ function syncListModeControls() {
     });
 }
 
+function listItemHasInlineNote(item) {
+    return !!(
+        item &&
+        !isListStructuralItem(item) &&
+        item.note &&
+        item.note.trim()
+    );
+}
+
+function getListInlineNoteCount() {
+    return (listState.items || []).filter(listItemHasInlineNote).length;
+}
+
+function updateListNotesExpansionControl() {
+    const toggleBtn = document.getElementById('list-notes-expand-toggle');
+    if (!toggleBtn) return;
+    const noteCount = getListInlineNoteCount();
+    const expanded = !!listState.allNotesExpanded;
+    toggleBtn.disabled = noteCount === 0 && !expanded;
+    toggleBtn.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+    toggleBtn.title = expanded
+        ? 'Collapse all item notes'
+        : (noteCount ? 'Expand all item notes' : 'No item notes to expand');
+    toggleBtn.innerHTML = expanded
+        ? '<i class="fa-solid fa-compress"></i> Collapse notes'
+        : '<i class="fa-solid fa-expand"></i> Expand notes';
+}
+
+function setAllListItemNotesExpanded(expanded) {
+    const noteCount = getListInlineNoteCount();
+    if (expanded && !noteCount) {
+        updateListNotesExpansionControl();
+        return;
+    }
+    if (listState.sectionReorderMode) {
+        listState.sectionReorderMode = false;
+        resetSectionDragState();
+        updateListSectionReorderUI();
+    }
+    listState.allNotesExpanded = !!expanded;
+    listState.expandedItemId = null;
+    clearListInsertionTarget();
+    clearListItemActions();
+    renderListItems();
+}
+
+function toggleAllListItemNotes() {
+    setAllListItemNotesExpanded(!listState.allNotesExpanded);
+}
+
 function setListEditorReadOnly(isReadOnly) {
     const titleInput = document.getElementById('list-title');
     const saveBtn = document.getElementById('list-save-btn');
@@ -658,6 +710,7 @@ async function loadListForEditor(listId) {
         clearListInsertionTarget();
         listState.editingItemId = null;
         listState.expandedItemId = null;
+        listState.allNotesExpanded = false;
         const titleInput = document.getElementById('list-title');
         const updatedLabel = document.getElementById('list-updated-label');
         if (titleInput) titleInput.value = list.title || '';
@@ -3641,6 +3694,7 @@ function renderListItems() {
         empty.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i><p>No results</p>';
         stack.appendChild(empty);
     }
+    updateListNotesExpansionControl();
 }
 
 function createInsertionSlot(targetConfig, options = {}) {
@@ -3870,7 +3924,7 @@ function createListPill(item) {
     const pill = document.createElement('div');
     const hasNote = !!(item.note && item.note.trim());
     const hasInnerNote = hasMeaningfulListInnerNote(item.inner_note || '');
-    const isExpanded = hasNote && listState.expandedItemId === item.id;
+    const isExpanded = hasNote && (listState.allNotesExpanded || listState.expandedItemId === item.id);
     const isSelected = listSelectionState.ids.has(item.id);
     pill.className = `list-pill${hasNote ? ' has-note' : ''}${isExpanded ? ' expanded' : ''}${isSelected ? ' selected' : ''}`;
     pill.dataset.itemId = item.id;
@@ -3967,7 +4021,7 @@ function createListPill(item) {
         content.appendChild(noteBadgeWrap);
     }
 
-    if (hasNote && isExpanded) {
+    if (hasNote && isExpanded && !listState.allNotesExpanded) {
         const toggleBtn = document.createElement('button');
         toggleBtn.type = 'button';
         toggleBtn.className = 'list-pill-inline-toggle expanded';
@@ -4184,7 +4238,9 @@ function createListPill(item) {
         if (isListSelectionActive()) return;
         if (listState.isArchived) {
             if (hasNote) {
-                listState.expandedItemId = listState.expandedItemId === item.id ? null : item.id;
+                if (!listState.allNotesExpanded) {
+                    listState.expandedItemId = listState.expandedItemId === item.id ? null : item.id;
+                }
                 listState.editingItemId = null;
                 clearListInsertionTarget();
                 renderListItems();
@@ -4193,7 +4249,7 @@ function createListPill(item) {
             }
             return;
         }
-        if (hasNote && listState.expandedItemId !== item.id) {
+        if (hasNote && !listState.allNotesExpanded && listState.expandedItemId !== item.id) {
             listState.expandedItemId = item.id;
             listState.editingItemId = null;
             clearListInsertionTarget();
@@ -4218,13 +4274,17 @@ function createListInputRow(options) {
     input.wrap = 'soft';
     input.value = value || '';
     input.placeholder = placeholder || '';
-    resizeListInputTextarea(input, { minRows: 1, maxRows: 2 });
     let committed = false;
     let noteInput = null;
     const initialNoteValue = noteValue || '';
     const hasExistingNote = initialNoteValue.trim().length > 0;
     const itemStructureType = structureType || (isSection ? 'section' : null);
     const isStructuralInput = itemStructureType === 'section' || itemStructureType === 'subsection';
+    const inputMaxRows = mode === 'insert' && !isStructuralInput ? 6 : 2;
+    if (mode === 'insert' && !isStructuralInput) {
+        row.classList.add('bulk-capable');
+    }
+    resizeListInputTextarea(input, { minRows: 1, maxRows: inputMaxRows });
 
     const commit = async (continueInserting = false) => {
         if (committed) return;
@@ -4235,6 +4295,36 @@ function createListInputRow(options) {
                 await deleteListItem(itemId);
             }
             resetListInputState();
+            return;
+        }
+        if (mode === 'insert' && !isStructuralInput && getBulkListInputLineCount(raw) >= 2) {
+            const validation = validateBulkListLines(raw);
+            if (!validation.ok) {
+                committed = false;
+                showToast(validation.error || 'Lines do not fit list criteria.', 'warning', 2500);
+                return;
+            }
+            try {
+                const createdCount = await createBulkListItems(validation.lines || []);
+                if (continueInserting && mode === 'insert') {
+                    if (insertionTarget) {
+                        setListInsertionTarget({
+                            ...insertionTarget,
+                            insertIndex: insertIndex + createdCount,
+                        });
+                    } else {
+                        clearListInsertionTarget();
+                    }
+                    listState.editingItemId = null;
+                    await loadListItems();
+                } else {
+                    resetListInputState();
+                }
+            } catch (err) {
+                committed = false;
+                console.error('Bulk list item save failed:', err);
+                showToast('Could not save items.', 'error');
+            }
             return;
         }
         let parsed;
@@ -4296,6 +4386,29 @@ function createListInputRow(options) {
         loadListItems();
     };
 
+    const createBulkListItems = async (lines) => {
+        let createdCount = 0;
+        if (mode === 'insert' && insertIndex !== null && insertIndex !== undefined) {
+            let idx = insertIndex;
+            for (const line of lines) {
+                const parsed = parseListItemInput(line);
+                if (!parsed.text) continue;
+                await createListItem(parsed, idx);
+                idx += 1;
+                createdCount += 1;
+            }
+            return createdCount;
+        }
+
+        for (const line of lines) {
+            const parsed = parseListItemInput(line);
+            if (!parsed.text) continue;
+            await createListItem(parsed, null);
+            createdCount += 1;
+        }
+        return createdCount;
+    };
+
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -4309,7 +4422,7 @@ function createListInputRow(options) {
         }
     });
     input.addEventListener('input', () => {
-        resizeListInputTextarea(input, { minRows: 1, maxRows: 2 });
+        resizeListInputTextarea(input, { minRows: 1, maxRows: inputMaxRows });
     });
 
     input.addEventListener('paste', async (e) => {
@@ -4327,18 +4440,12 @@ function createListInputRow(options) {
         if (!lines.length) return;
 
         try {
+            const createdCount = await createBulkListItems(lines);
             if (mode === 'insert' && insertIndex !== null && insertIndex !== undefined) {
-                let idx = insertIndex;
-                for (const line of lines) {
-                    const parsed = parseListItemInput(line);
-                    if (!parsed.text) continue;
-                    await createListItem(parsed, idx);
-                    idx += 1;
-                }
                 if (insertionTarget) {
                     setListInsertionTarget({
                         ...insertionTarget,
-                        insertIndex: insertIndex + lines.length,
+                        insertIndex: insertIndex + createdCount,
                     });
                 } else {
                     clearListInsertionTarget();
@@ -4348,11 +4455,6 @@ function createListInputRow(options) {
                 return;
             }
 
-            for (const line of lines) {
-                const parsed = parseListItemInput(line);
-                if (!parsed.text) continue;
-                await createListItem(parsed, null);
-            }
             resetListInputState();
         } catch (err) {
             console.error('Bulk paste failed:', err);
@@ -4411,7 +4513,7 @@ function createListInputRow(options) {
     }
     if (autoFocus) {
         requestAnimationFrame(() => {
-            resizeListInputTextarea(input, { minRows: 1, maxRows: 2 });
+            resizeListInputTextarea(input, { minRows: 1, maxRows: inputMaxRows });
             input.focus();
             input.setSelectionRange(input.value.length, input.value.length);
         });
@@ -4487,11 +4589,18 @@ function parseListItemMainInput(raw) {
 
 const NOTE_LIST_CONVERSION_RULES = {
     minLines: 2,
-    maxLines: 100,
-    maxChars: 80,
-    maxWords: 12,
-    maxWordsWithPunct: 8
+    maxLines: 100
 };
+
+function getBulkListInputLineCount(rawText) {
+    return String(rawText || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .length;
+}
 
 function validateBulkListLines(rawText) {
     const text = String(rawText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -4512,24 +4621,7 @@ function validateBulkListLines(rawText) {
         return { ok: false, error: `Need at least ${NOTE_LIST_CONVERSION_RULES.minLines} non-empty lines.` };
     }
     if (cleanedLines.length > NOTE_LIST_CONVERSION_RULES.maxLines) {
-        return { ok: false, error: `Too many lines to convert (max ${NOTE_LIST_CONVERSION_RULES.maxLines}).` };
-    }
-
-    for (const line of cleanedLines) {
-        if (line.length > NOTE_LIST_CONVERSION_RULES.maxChars) {
-            return { ok: false, error: `Lines must be ${NOTE_LIST_CONVERSION_RULES.maxChars} characters or fewer.` };
-        }
-        const words = line.match(/[A-Za-z0-9']+/g) || [];
-        if (words.length > NOTE_LIST_CONVERSION_RULES.maxWords) {
-            return { ok: false, error: `Lines must be ${NOTE_LIST_CONVERSION_RULES.maxWords} words or fewer.` };
-        }
-        const sentenceMarks = line.match(/[.!?]/g) || [];
-        if (sentenceMarks.length > 1) {
-            return { ok: false, error: 'Lines must be single phrases, not multiple sentences.' };
-        }
-        if (sentenceMarks.length === 1 && words.length > NOTE_LIST_CONVERSION_RULES.maxWordsWithPunct) {
-            return { ok: false, error: `Lines must be short phrases (max ${NOTE_LIST_CONVERSION_RULES.maxWordsWithPunct} words if punctuated).` };
-        }
+        return { ok: false, error: `Too many lines to add (max ${NOTE_LIST_CONVERSION_RULES.maxLines}).` };
     }
 
     return { ok: true, lines: cleanedLines };

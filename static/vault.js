@@ -21,6 +21,12 @@ let vaultActiveMenuTrigger = null;
 let vaultMoveContext = null;
 let vaultPreviewDocument = null;
 
+function vaultApiPath(path) {
+    const areaId = document.getElementById('areas-page')?.dataset.areaId;
+    if (!areaId) return path;
+    return path.replace('/api/vault', `/api/areas/${areaId}/vault`);
+}
+
 function initVaultSelection() {
     vaultSelection = new SelectionManager({
         moduleName: 'vault',
@@ -35,7 +41,7 @@ function initVaultSelection() {
     });
 
     vaultBulkActions = new BulkActions({
-        apiEndpoint: '/api/vault/documents/bulk',
+        apiEndpoint: vaultApiPath('/api/vault/documents/bulk'),
         selectionManager: vaultSelection,
         moduleName: 'document',
         onComplete: () => {
@@ -393,7 +399,7 @@ function renderVaultItems() {
         item.setAttribute('aria-label', `File ${doc.title}`);
         const isImage = category === 'image';
         const visual = isImage
-            ? `<img class="vault-item-thumbnail" src="/api/vault/documents/${doc.id}/preview" alt="" loading="lazy">`
+            ? `<img class="vault-item-thumbnail" src="${vaultApiPath(`/api/vault/documents/${doc.id}/preview`)}" alt="" loading="lazy">`
             : `<div class="vault-item-icon ${category}"><i class="${iconClass}"></i></div>`;
         const location = vaultState.search ? vaultFolderPathLabel(doc.folder_id) : '';
         const extension = (doc.file_extension || '').toUpperCase();
@@ -466,7 +472,7 @@ function renderVaultItems() {
 async function loadVaultFolders() {
     try {
         const archived = vaultIsArchivedScope() ? '?archived=true' : '';
-        const res = await fetch(`/api/vault/folders${archived}`);
+        const res = await fetch(vaultApiPath(`/api/vault/folders${archived}`));
         if (!res.ok) throw new Error('Folder load failed');
         vaultState.folders = await res.json();
         renderVaultBreadcrumb();
@@ -481,8 +487,8 @@ async function loadVaultDocuments() {
     const requestId = ++vaultDocumentRequestId;
     const archivedParam = vaultIsArchivedScope() ? '&archived=true' : '';
     const query = vaultState.search
-        ? `/api/vault/search?q=${encodeURIComponent(vaultState.search)}${archivedParam}`
-        : `/api/vault/documents?folder_id=${vaultState.activeFolderId || ''}${archivedParam}`;
+        ? vaultApiPath(`/api/vault/search?q=${encodeURIComponent(vaultState.search)}${archivedParam}`)
+        : vaultApiPath(`/api/vault/documents?folder_id=${vaultState.activeFolderId || ''}${archivedParam}`);
     try {
         const res = await fetch(query);
         if (!res.ok) throw new Error('Document load failed');
@@ -499,7 +505,7 @@ async function loadVaultDocuments() {
 
 async function loadVaultStats() {
     try {
-        const res = await fetch('/api/vault/stats');
+        const res = await fetch(vaultApiPath('/api/vault/stats'));
         if (!res.ok) throw new Error('Stats load failed');
         vaultState.stats = await res.json();
     } catch (err) {
@@ -605,13 +611,13 @@ async function saveVaultFolder() {
     try {
         let res;
         if (idInput && idInput.value) {
-            res = await fetch(`/api/vault/folders/${idInput.value}`, {
+            res = await fetch(vaultApiPath(`/api/vault/folders/${idInput.value}`), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
             });
         } else {
-            res = await fetch('/api/vault/folders', {
+            res = await fetch(vaultApiPath('/api/vault/folders'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, parent_id: vaultState.activeFolderId })
@@ -691,7 +697,7 @@ async function saveVaultDocument() {
         return;
     }
     try {
-        const res = await fetch(`/api/vault/documents/${idInput.value}`, {
+        const res = await fetch(vaultApiPath(`/api/vault/documents/${idInput.value}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, tags: tagsInput.value.trim() })
@@ -782,8 +788,8 @@ async function saveVaultMove() {
             await vaultBulkActions.move(destinationId, 'folder');
         } else {
             const endpoint = context.type === 'folder'
-                ? `/api/vault/folders/${context.item.id}`
-                : `/api/vault/documents/${context.item.id}`;
+                ? vaultApiPath(`/api/vault/folders/${context.item.id}`)
+                : vaultApiPath(`/api/vault/documents/${context.item.id}`);
             const payload = context.type === 'folder'
                 ? { parent_id: destinationId }
                 : { folder_id: destinationId };
@@ -807,12 +813,12 @@ async function saveVaultMove() {
 }
 
 function vaultDownloadDoc(doc) {
-    window.location.href = `/api/vault/documents/${doc.id}/download`;
+    window.location.href = vaultApiPath(`/api/vault/documents/${doc.id}/download`);
 }
 
 async function vaultTogglePin(doc) {
     try {
-        const res = await fetch(`/api/vault/documents/${doc.id}`, {
+        const res = await fetch(vaultApiPath(`/api/vault/documents/${doc.id}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pinned: !doc.pinned })
@@ -848,7 +854,7 @@ function vaultOpenDoc(doc) {
     const archiveBtn = document.getElementById('vault-preview-archive');
     const editBtn = document.getElementById('vault-preview-edit');
     if (!modal || !title || !body) return;
-    const path = `/api/vault/documents/${doc.id}/preview`;
+    const path = vaultApiPath(`/api/vault/documents/${doc.id}/preview`);
     vaultPreviewDocument = doc;
     title.textContent = doc.title;
     if (doc.file_category === 'image') {
@@ -872,7 +878,7 @@ function vaultOpenDoc(doc) {
 function vaultArchiveDoc(doc) {
     openConfirmModal(`Archive "${doc.title}"?`, async () => {
         try {
-            const res = await fetch(`/api/vault/documents/${doc.id}`, { method: 'DELETE' });
+            const res = await fetch(vaultApiPath(`/api/vault/documents/${doc.id}`), { method: 'DELETE' });
             if (!res.ok) throw new Error('Archive failed');
             closeVaultPreviewModal();
             await loadVaultDocuments();
@@ -886,7 +892,7 @@ function vaultArchiveDoc(doc) {
 
 async function vaultRestoreDoc(doc) {
     try {
-        const res = await fetch(`/api/vault/documents/${doc.id}`, {
+        const res = await fetch(vaultApiPath(`/api/vault/documents/${doc.id}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ archived: false })
@@ -904,7 +910,7 @@ async function vaultRestoreDoc(doc) {
 function vaultDeleteDoc(doc) {
     openConfirmModal(`Permanently delete "${doc.title}"? This cannot be undone.`, async () => {
         try {
-            const res = await fetch(`/api/vault/documents/${doc.id}?permanent=true`, {
+            const res = await fetch(vaultApiPath(`/api/vault/documents/${doc.id}?permanent=true`), {
                 method: 'DELETE'
             });
             if (!res.ok) throw new Error('Delete failed');
@@ -921,7 +927,7 @@ function vaultDeleteDoc(doc) {
 function vaultArchiveFolder(folder) {
     openConfirmModal(`Archive folder "${folder.name}"?`, async () => {
         try {
-            const res = await fetch(`/api/vault/folders/${folder.id}`, { method: 'DELETE' });
+            const res = await fetch(vaultApiPath(`/api/vault/folders/${folder.id}`), { method: 'DELETE' });
             if (!res.ok) throw new Error('Archive failed');
             await loadVaultFolders();
             if (vaultState.activeFolderId === folder.id) {
@@ -939,7 +945,7 @@ function vaultArchiveFolder(folder) {
 
 async function vaultRestoreFolder(folder) {
     try {
-        const res = await fetch(`/api/vault/folders/${folder.id}`, {
+        const res = await fetch(vaultApiPath(`/api/vault/folders/${folder.id}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ archived: false })
@@ -958,7 +964,7 @@ function vaultDeleteFolder(folder) {
         `Permanently delete "${folder.name}" and everything inside it? This cannot be undone.`,
         async () => {
             try {
-                const res = await fetch(`/api/vault/folders/${folder.id}?permanent=true`, {
+                const res = await fetch(vaultApiPath(`/api/vault/folders/${folder.id}?permanent=true`), {
                     method: 'DELETE'
                 });
                 if (!res.ok) throw new Error('Delete failed');
@@ -1002,7 +1008,7 @@ async function vaultHandleUpload() {
     }
     vaultUploadAbortController = new AbortController();
     try {
-        const res = await fetch('/api/vault/documents', {
+        const res = await fetch(vaultApiPath('/api/vault/documents'), {
             method: 'POST',
             body: formData,
             signal: vaultUploadAbortController.signal

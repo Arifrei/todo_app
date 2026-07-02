@@ -4,9 +4,21 @@
 <div class="areas-page" id="areas-page" data-area-id="{{ area_id or '' }}">
     {% if area_id %}
     <div class="area-compact-bar">
-        <a class="areas-back-link" href="/areas" aria-label="Back to areas">
-            <i class="fa-solid fa-arrow-left"></i>
-        </a>
+        <div class="area-compact-left">
+            <a class="areas-back-link" href="/areas" aria-label="Back to areas">
+                <i class="fa-solid fa-arrow-left"></i>
+            </a>
+            <div class="area-mode-switch" role="tablist" aria-label="Area view">
+                <button class="area-mode-chip active" type="button" role="tab" aria-selected="true" aria-controls="area-main-view" data-area-view="main">
+                    <i class="fa-solid fa-table-cells-large"></i>
+                    <span>Main</span>
+                </button>
+                <button class="area-mode-chip" type="button" role="tab" aria-selected="false" aria-controls="area-library-view" data-area-view="library">
+                    <i class="fa-solid fa-book-open"></i>
+                    <span>Library</span>
+                </button>
+            </div>
+        </div>
         <div class="areas-detail-actions">
             <div class="area-actions-menu" id="area-actions-menu">
                 <button class="btn-icon header-menu-trigger" type="button" id="area-actions-menu-btn" title="More area options" aria-label="More area options" aria-haspopup="menu" aria-expanded="false" aria-controls="area-actions-dropdown">
@@ -49,14 +61,18 @@
         </div>
     </div>
 
-    <section class="area-workspace-shell area-workspace-clean">
+    <section class="area-workspace-shell area-workspace-clean area-view-panel" id="area-main-view" data-area-view-panel="main" role="tabpanel">
         <main class="area-workspace-main">
+            <div class="area-hidden-pane-bar" id="area-hidden-pane-bar" hidden></div>
             <div class="area-type-grid" id="area-type-grid">
                 <section class="area-type-pane line" data-area-pane="line">
                     <header>
                         <span><i class="fa-solid fa-grip-lines"></i> Lines</span>
                         <div class="area-pane-header-actions">
                             <strong id="area-lines-count">0</strong>
+                            <button class="area-pane-section-btn area-pane-hide-btn" type="button" data-area-hide-pane-type="line" title="Hide Lines section" aria-label="Hide Lines section">
+                                <i class="fa-solid fa-eye-slash"></i>
+                            </button>
                             <button class="area-pane-section-btn" type="button" data-area-add-section-type="line" title="Add line list" aria-label="Add line list">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
@@ -69,6 +85,9 @@
                         <span><i class="fa-regular fa-note-sticky"></i> Notes</span>
                         <div class="area-pane-header-actions">
                             <strong id="area-notes-count">0</strong>
+                            <button class="area-pane-section-btn area-pane-hide-btn" type="button" data-area-hide-pane-type="note" title="Hide Notes section" aria-label="Hide Notes section">
+                                <i class="fa-solid fa-eye-slash"></i>
+                            </button>
                             <button class="area-pane-section-btn" type="button" data-area-add-section-type="note" title="Add note list" aria-label="Add note list">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
@@ -81,6 +100,9 @@
                         <span><i class="fa-solid fa-list-ul"></i> Lists</span>
                         <div class="area-pane-header-actions">
                             <strong id="area-lists-count">0</strong>
+                            <button class="area-pane-section-btn area-pane-hide-btn" type="button" data-area-hide-pane-type="list" title="Hide Lists section" aria-label="Hide Lists section">
+                                <i class="fa-solid fa-eye-slash"></i>
+                            </button>
                             <button class="area-pane-section-btn" type="button" data-area-add-section-type="list" title="Add list group" aria-label="Add list group">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
@@ -93,6 +115,9 @@
                         <span><i class="fa-solid fa-list-check"></i> Tasks</span>
                         <div class="area-pane-header-actions">
                             <strong id="area-tasks-count">0</strong>
+                            <button class="area-pane-section-btn area-pane-hide-btn" type="button" data-area-hide-pane-type="task_list" title="Hide Tasks section" aria-label="Hide Tasks section">
+                                <i class="fa-solid fa-eye-slash"></i>
+                            </button>
                             <button class="area-pane-section-btn" type="button" data-area-add-section-type="task_list" title="Add task list" aria-label="Add task list">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
@@ -103,15 +128,337 @@
             </div>
         </main>
     </section>
+
+    <section class="area-library-shell area-view-panel" id="area-library-view" data-area-view-panel="library" role="tabpanel" hidden>
+        <div class="area-library-tabs" role="tablist" aria-label="Area library modules">
+            <button class="area-library-tab active" type="button" role="tab" aria-selected="true" aria-controls="area-library-bookmarks" data-area-library-tab="bookmarks">
+                <i class="fa-solid fa-bookmark"></i>
+                <span>Bookmarks</span>
+            </button>
+            <button class="area-library-tab" type="button" role="tab" aria-selected="false" aria-controls="area-library-recalls" data-area-library-tab="recalls">
+                <i class="fa-solid fa-inbox"></i>
+                <span>Recalls</span>
+            </button>
+            <button class="area-library-tab" type="button" role="tab" aria-selected="false" aria-controls="area-library-vault" data-area-library-tab="vault">
+                <i class="fa-solid fa-folder-open"></i>
+                <span>Vault</span>
+            </button>
+        </div>
+
+        <div class="area-library-panels">
+            <section class="area-library-panel active" id="area-library-bookmarks" data-area-library-panel="bookmarks" role="tabpanel">
+                <div class="bookmarks-page area-library-module">
+                    <header class="header-row">
+                        <div>
+                            <h1>Bookmarks</h1>
+                            <p class="u-text-muted">Quick-reference snippets, links, and commands in one place.</p>
+                        </div>
+                        <button class="btn btn-primary header-add-circle" type="button" data-onclick="openAddBookmarkModal()" aria-label="Add bookmark" title="Add bookmark">
+                            <i class="fa-solid fa-plus"></i>
+                        </button>
+                    </header>
+
+                    <div class="bookmarks-toolbar">
+                        <label class="module-search-label" for="bookmark-search">Search bookmarks</label>
+                        <div class="bookmarks-search">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="bookmark-search" placeholder="Search bookmarks...">
+                        </div>
+                    </div>
+
+                    <div class="bulk-actions u-hidden" id="bookmark-bulk-bar">
+                        <div class="bulk-left">
+                            <input type="checkbox" id="bookmark-select-all">
+                            <label for="bookmark-select-all" class="u-cursor-pointer">Select all</label>
+                            <span id="bookmark-bulk-count" class="u-text-muted u-ml-05"></span>
+                            <button class="btn btn-secondary btn-small u-ml-05" type="button" id="bookmark-bulk-clear">Clear</button>
+                        </div>
+                        <div class="bulk-buttons">
+                            <button class="btn btn-secondary" type="button" id="bookmark-bulk-pin">
+                                <i class="fa-solid fa-thumbtack"></i> Pin
+                            </button>
+                            <button class="btn-icon delete" type="button" id="bookmark-bulk-delete" title="Delete selected" aria-label="Delete selected bookmarks">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bookmark-grid" id="bookmark-grid"></div>
+                </div>
+            </section>
+
+            <section class="area-library-panel" id="area-library-recalls" data-area-library-panel="recalls" role="tabpanel" hidden>
+                <div class="recalls-layout area-library-module">
+                    <header class="recalls-header">
+                        <div class="recalls-header-top">
+                            <div>
+                                <h1>Recalls</h1>
+                                <p class="recalls-subtitle">Context-based memory triggers to resurface at the right time.</p>
+                            </div>
+                            <button type="button" class="recall-add-btn header-add-circle" id="recall-add-btn" aria-label="Add recall" title="Add recall">
+                                <i class="fa-solid fa-plus"></i>
+                            </button>
+                        </div>
+
+                        <div class="recall-add-form" id="recall-add-form">
+                            <input type="text" id="recall-add-input" class="recall-add-input" placeholder="Title; URL or text...">
+                            <div class="recall-add-hint">Format: My title; https://example.com</div>
+                        </div>
+                    </header>
+
+                    <div class="recall-cards" id="recall-cards"></div>
+                </div>
+            </section>
+
+            <section class="area-library-panel" id="area-library-vault" data-area-library-panel="vault" role="tabpanel" hidden>
+                <div class="vault-page area-library-module">
+                    <header class="header-row vault-header">
+                        <div>
+                            <h1>Vault</h1>
+                            <p class="vault-subtitle">Your documents, organized.</p>
+                        </div>
+                        <div class="vault-header-actions">
+                            <div class="tasks-fab-container" id="vault-fab">
+                                <button class="tasks-fab-main" id="vault-fab-main" aria-label="Add" aria-controls="vault-fab" aria-expanded="false">
+                                    <i class="fa-solid fa-plus"></i>
+                                </button>
+                                <div class="tasks-fab-options" id="vault-fab-options">
+                                    <button class="tasks-fab-option" type="button" id="vault-new-folder-btn">
+                                        <i class="fa-solid fa-folder-plus"></i>
+                                        <span>Folder</span>
+                                    </button>
+                                    <button class="tasks-fab-option" type="button" id="vault-upload-btn">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                                        <span>Upload</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div class="vault-toolbar">
+                        <nav class="vault-nav" id="vault-breadcrumb"></nav>
+                        <div class="vault-toolbar-right">
+                            <label class="module-search-label" for="vault-search-input">Search files</label>
+                            <div class="vault-search-box" id="vault-search-box">
+                                <i class="fa-solid fa-magnifying-glass"></i>
+                                <input type="text" id="vault-search-input" placeholder="Search files...">
+                                <button class="vault-search-clear" id="vault-search-clear" type="button" title="Clear">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                            </div>
+                            <div class="vault-toolbar-actions">
+                                <select id="vault-scope-select" class="vault-sort-select" title="Show vault items">
+                                    <option value="active">Active</option>
+                                    <option value="archived">Trash</option>
+                                </select>
+                                <select id="vault-sort-select" class="vault-sort-select" title="Sort by">
+                                    <option value="recent">Recent</option>
+                                    <option value="title">Name</option>
+                                    <option value="size">Size</option>
+                                    <option value="type">Type</option>
+                                </select>
+                                <button class="vault-view-btn" type="button" id="vault-view-toggle" title="Toggle view">
+                                    <i class="fa-solid fa-grip"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bulk-actions u-hidden" id="vault-bulk-bar">
+                        <div class="bulk-left">
+                            <input type="checkbox" id="vault-select-all">
+                            <label for="vault-select-all" class="u-cursor-pointer">Select all</label>
+                            <span id="vault-bulk-count" class="u-text-muted u-ml-05"></span>
+                            <button class="btn btn-secondary btn-small u-ml-05" type="button" id="vault-bulk-clear">Clear</button>
+                        </div>
+                        <div class="bulk-buttons">
+                            <button class="btn btn-secondary vault-bulk-active-only" type="button" id="vault-bulk-pin">
+                                <i class="fa-solid fa-thumbtack"></i> Pin
+                            </button>
+                            <button class="btn btn-secondary vault-bulk-active-only" type="button" id="vault-bulk-move">
+                                <i class="fa-solid fa-folder"></i> Move
+                            </button>
+                            <button class="btn btn-secondary" type="button" id="vault-bulk-archive">
+                                <i class="fa-solid fa-box-archive"></i>
+                                <span id="vault-bulk-archive-label">Archive</span>
+                            </button>
+                            <button class="btn-icon delete" type="button" id="vault-bulk-delete" title="Delete selected permanently" aria-label="Delete selected vault files permanently">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="vault-content" id="vault-content">
+                        <div class="vault-grid" id="vault-grid"></div>
+                    </div>
+
+                    <div class="vault-empty u-hidden" id="vault-empty">
+                        <div class="vault-empty-icon">
+                            <i class="fa-solid fa-folder-open"></i>
+                        </div>
+                        <h3>No files here yet</h3>
+                        <p>Upload documents or create folders to get started.</p>
+                        <div class="vault-empty-actions">
+                            <button class="btn btn-secondary" type="button" id="vault-empty-folder">
+                                <i class="fa-solid fa-folder-plus"></i> New folder
+                            </button>
+                            <button class="btn btn-primary" type="button" id="vault-empty-upload">
+                                <i class="fa-solid fa-cloud-arrow-up"></i> Upload files
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </section>
+
+    <div class="bookmark-modal-overlay" id="bookmark-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bookmark-modal-title">
+        <div class="bookmark-modal" tabindex="-1">
+            <div class="bookmark-modal-header">
+                <h2 id="bookmark-modal-title">Bookmark</h2>
+                <button class="bookmark-modal-close" id="bookmark-modal-close" type="button" aria-label="Close bookmark dialog">&times;</button>
+            </div>
+            <div class="bookmark-modal-body" id="bookmark-modal-body"></div>
+        </div>
+    </div>
+
+    <div class="recall-modal-overlay" id="recall-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="recall-modal-title-text">
+        <div class="recall-modal" tabindex="-1">
+            <div class="recall-modal-header">
+                <h2 id="recall-modal-title-text">Recall</h2>
+                <button class="recall-modal-close" id="recall-modal-close" type="button" aria-label="Close recall dialog">&times;</button>
+            </div>
+            <div class="recall-modal-body" id="recall-modal-body"></div>
+        </div>
+    </div>
+
+    <div class="modal" id="vault-folder-modal" role="dialog" aria-modal="true" aria-labelledby="vault-folder-modal-title">
+        <div class="modal-content vault-modal-content" tabindex="-1">
+            <h2 id="vault-folder-modal-title">New Folder</h2>
+            <div class="form-group">
+                <label for="vault-folder-name">Folder name</label>
+                <input type="text" id="vault-folder-name" class="form-control" placeholder="Enter folder name...">
+            </div>
+            <input type="hidden" id="vault-folder-id">
+            <div class="modal-actions">
+                <button class="btn" type="button" id="vault-folder-cancel">Cancel</button>
+                <button class="btn btn-primary" type="button" id="vault-folder-save">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="vault-document-modal" role="dialog" aria-modal="true" aria-labelledby="vault-document-modal-title">
+        <div class="modal-content vault-modal-content" tabindex="-1">
+            <h2 id="vault-document-modal-title">Edit file</h2>
+            <div class="form-group">
+                <label for="vault-document-title">Title</label>
+                <input type="text" id="vault-document-title" class="form-control" maxlength="255">
+            </div>
+            <div class="form-group">
+                <label for="vault-document-tags">Tags <span class="form-hint">(comma separated)</span></label>
+                <input type="text" id="vault-document-tags" class="form-control" placeholder="work, receipts, personal...">
+            </div>
+            <input type="hidden" id="vault-document-id">
+            <div class="modal-actions">
+                <button class="btn" type="button" id="vault-document-cancel">Cancel</button>
+                <button class="btn btn-primary" type="button" id="vault-document-save">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="vault-move-modal" role="dialog" aria-modal="true" aria-labelledby="vault-move-modal-title">
+        <div class="modal-content vault-modal-content" tabindex="-1">
+            <h2 id="vault-move-modal-title">Move item</h2>
+            <div class="form-group">
+                <label for="vault-move-select">Destination folder</label>
+                <select id="vault-move-select" class="form-control"></select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" type="button" id="vault-move-cancel">Cancel</button>
+                <button class="btn btn-primary" type="button" id="vault-move-save">Move</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="vault-upload-modal" role="dialog" aria-modal="true" aria-labelledby="vault-upload-modal-title">
+        <div class="modal-content vault-modal-content vault-upload-content" tabindex="-1">
+            <h2 id="vault-upload-modal-title">Upload Files</h2>
+            <div class="vault-drop-zone" id="vault-drop-zone">
+                <div class="vault-drop-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                <div class="vault-drop-text">Drop files here or</div>
+                <button class="btn btn-secondary" type="button" id="vault-browse-btn">Browse</button>
+                <input type="file" id="vault-file-input" multiple>
+            </div>
+            <div class="vault-upload-files" id="vault-upload-files"></div>
+            <div class="vault-upload-options">
+                <div class="form-group">
+                    <label for="vault-folder-select">Destination</label>
+                    <select id="vault-folder-select" class="form-control"></select>
+                </div>
+                <div class="form-group">
+                    <label for="vault-tags-input">Tags <span class="form-hint">(comma separated)</span></label>
+                    <input type="text" id="vault-tags-input" class="form-control" placeholder="work, receipts, personal...">
+                </div>
+            </div>
+            <div class="vault-upload-progress u-hidden" id="vault-upload-progress">
+                <div class="vault-upload-bar" id="vault-upload-bar"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" type="button" id="vault-upload-cancel">Cancel</button>
+                <button class="btn btn-primary" type="button" id="vault-upload-submit">
+                    <i class="fa-solid fa-upload"></i> Upload
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="vault-preview-modal" role="dialog" aria-modal="true" aria-labelledby="vault-preview-title">
+        <div class="modal-content vault-preview-content" tabindex="-1">
+            <div class="vault-preview-header">
+                <h2 id="vault-preview-title">Document</h2>
+                <button class="btn-icon" type="button" id="vault-preview-close" title="Close" aria-label="Close preview" data-modal-close>
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="vault-preview-body" id="vault-preview-body"></div>
+            <div class="vault-preview-actions">
+                <button class="btn btn-secondary" type="button" id="vault-preview-edit">
+                    <i class="fa-solid fa-pen"></i> Edit
+                </button>
+                <button class="btn btn-danger" type="button" id="vault-preview-archive">
+                    <i class="fa-solid fa-box-archive"></i> Archive
+                </button>
+                <div class="u-flex-1"></div>
+                <button class="btn" type="button" id="vault-preview-download">
+                    <i class="fa-solid fa-download"></i> Download
+                </button>
+            </div>
+        </div>
+    </div>
     {% else %}
     <header class="header-row">
         <div>
             <h1>Areas</h1>
             <p class="u-text-muted">Long-lived responsibilities and the control centers inside them.</p>
         </div>
-        <button class="btn btn-primary header-add-circle" type="button" id="area-add-btn" aria-label="Add area" title="Add area">
-            <i class="fa-solid fa-plus"></i>
-        </button>
+        <div class="areas-header-actions">
+            <div class="area-add-menu" id="area-add-menu" data-closed-label="Add" data-open-label="Close add menu">
+                <button class="btn btn-primary header-add-circle area-add-trigger" type="button" id="area-primary-add-btn" aria-label="Add" title="Add" aria-haspopup="menu" aria-expanded="false" aria-controls="area-add-dropdown">
+                    <i class="fa-solid fa-plus"></i>
+                </button>
+                <div class="area-add-dropdown area-home-add-dropdown" id="area-add-dropdown" role="menu" aria-label="Add">
+                    <button type="button" role="menuitem" data-area-home-add="area">
+                        <i class="fa-solid fa-layer-group"></i>
+                        <span>Area</span>
+                    </button>
+                    <button type="button" role="menuitem" data-area-home-add="folder">
+                        <i class="fa-solid fa-folder-plus"></i>
+                        <span>Folder</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </header>
 
     <div class="areas-toolbar">
@@ -129,6 +476,24 @@
             <button class="area-filter-chip active" type="button" data-archived="0">Active</button>
             <button class="area-filter-chip" type="button" data-archived="1">Archived</button>
             <button class="area-filter-chip" type="button" data-archived="all">All</button>
+        </div>
+    </div>
+
+    <div class="area-folder-bar" id="area-folder-bar" hidden>
+        <button class="area-folder-back" type="button" id="area-folder-back" aria-label="Back to all areas" title="Back to all areas">
+            <i class="fa-solid fa-arrow-left"></i>
+        </button>
+        <div class="area-folder-bar-title">
+            <span>Folder</span>
+            <strong id="area-folder-current-name">Folder</strong>
+        </div>
+        <div class="area-folder-bar-actions">
+            <button class="area-icon-btn" type="button" id="area-folder-edit-btn" aria-label="Rename folder" title="Rename folder">
+                <i class="fa-solid fa-pen"></i>
+            </button>
+            <button class="area-icon-btn danger" type="button" id="area-folder-delete-btn" aria-label="Delete folder" title="Delete folder">
+                <i class="fa-solid fa-trash"></i>
+            </button>
         </div>
     </div>
 
@@ -151,9 +516,30 @@
             <label for="area-color-input">Color</label>
             <input type="color" id="area-color-input" class="form-control area-color-input" value="#3b82f6">
         </div>
+        <div class="form-group" id="area-folder-field">
+            <label for="area-folder-select">Location</label>
+            <select id="area-folder-select" class="form-control"></select>
+        </div>
         <div class="modal-actions">
             <button class="btn" type="button" id="area-modal-cancel">Cancel</button>
             <button class="btn btn-primary" type="button" id="area-modal-save">
+                <i class="fa-solid fa-check"></i>
+                <span>Save</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="modal" id="area-folder-modal" role="dialog" aria-modal="true" aria-labelledby="area-folder-modal-title">
+    <div class="modal-content area-modal-content" tabindex="-1">
+        <h2 id="area-folder-modal-title">Folder</h2>
+        <div class="form-group">
+            <label for="area-folder-name-input">Name</label>
+            <input type="text" id="area-folder-name-input" class="form-control" maxlength="120" placeholder="Folder name">
+        </div>
+        <div class="modal-actions">
+            <button class="btn" type="button" id="area-folder-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" type="button" id="area-folder-modal-save">
                 <i class="fa-solid fa-check"></i>
                 <span>Save</span>
             </button>
@@ -271,5 +657,10 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', filename='pages/areas-page.js') }}?v=areas-page-20260629-required-lists" defer></script>
+<script src="{{ url_for('static', filename='pages/areas-page.js') }}?v=areas-page-20260701-hidden-sections" defer></script>
+{% if area_id %}
+<script src="{{ url_for('static', filename='pages/bookmarks-page.js') }}?v=area-library-20260630" defer></script>
+<script src="{{ url_for('static', filename='recalls.js') }}?v=area-library-20260630" defer></script>
+<script src="{{ url_for('static', filename='vault.js') }}?v=area-library-20260630" defer></script>
+{% endif %}
 {% endblock %}

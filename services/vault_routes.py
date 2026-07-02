@@ -1,6 +1,23 @@
 """Extracted heavy route handlers from app.py."""
 
-def vault_documents():
+
+def _filter_area_scope(query, model, area_id):
+    if area_id is None:
+        return query.filter(model.area_id.is_(None))
+    return query.filter(model.area_id == area_id)
+
+
+def _area_scope_or_response(a, area_id):
+    user = a.get_current_user()
+    if not user:
+        return None, None, (a.jsonify({'error': 'No user selected'}), 401)
+    area = a.Area.query.filter_by(id=area_id, user_id=user.id).first()
+    if not area:
+        return user, None, (a.jsonify({'error': 'Area not found'}), 404)
+    return user, area, None
+
+
+def vault_documents(area_id=None):
     import app as a
     DEFAULT_VAULT_MAX_SIZE = a.DEFAULT_VAULT_MAX_SIZE
     Document = a.Document
@@ -26,7 +43,7 @@ def vault_documents():
         archived_only = str(request.args.get('archived') or '').lower() in ['1', 'true', 'yes', 'on']
         folder_id = request.args.get('folder_id')
         folder_id_int = int(folder_id) if folder_id and str(folder_id).isdigit() else None
-        query = Document.query.filter_by(user_id=user.id)
+        query = _filter_area_scope(Document.query.filter_by(user_id=user.id), Document, area_id)
         if archived_only:
             query = query.filter(Document.archived_at.isnot(None))
         else:
@@ -76,6 +93,7 @@ def vault_documents():
             id=folder_id_int,
             user_id=user.id,
             archived_at=None,
+            area_id=area_id,
         ).first_or_404()
 
     prepared = []
@@ -134,6 +152,7 @@ def vault_documents():
                 raise ValueError('File exceeds size limit')
             doc = Document(
                 user_id=user.id,
+                area_id=area_id,
                 folder_id=folder_id_int,
                 title=item['title'],
                 original_filename=item['original_filename'],
@@ -161,7 +180,16 @@ def vault_documents():
         return jsonify(created[0].to_dict()), 201
     return jsonify([doc.to_dict() for doc in created]), 201
 
-def vault_folders():
+
+def area_vault_documents(area_id):
+    import app as a
+    _user, area, response = _area_scope_or_response(a, area_id)
+    if response:
+        return response
+    return vault_documents(area.id)
+
+
+def vault_folders(area_id=None):
     import app as a
     DocumentFolder = a.DocumentFolder
     db = a.db
@@ -190,13 +218,16 @@ def vault_folders():
                 id=parent_id_int,
                 user_id=user.id,
                 archived_at=None,
+                area_id=area_id,
             ).first_or_404()
         max_order = db.session.query(db.func.coalesce(db.func.max(DocumentFolder.order_index), 0)).filter(
             DocumentFolder.user_id == user.id,
+            DocumentFolder.area_id.is_(None) if area_id is None else DocumentFolder.area_id == area_id,
             DocumentFolder.parent_id == parent_id_int
         ).scalar()
         folder = DocumentFolder(
             user_id=user.id,
+            area_id=area_id,
             parent_id=parent_id_int,
             name=name,
             order_index=(max_order or 0) + 1
@@ -205,7 +236,7 @@ def vault_folders():
         db.session.commit()
         return jsonify(folder.to_dict()), 201
 
-    folder_query = DocumentFolder.query.filter_by(user_id=user.id)
+    folder_query = _filter_area_scope(DocumentFolder.query.filter_by(user_id=user.id), DocumentFolder, area_id)
     if archived_only:
         folder_query = folder_query.filter(DocumentFolder.archived_at.isnot(None))
     else:
@@ -221,7 +252,16 @@ def vault_folders():
     ).all()
     return jsonify([f.to_dict() for f in folders])
 
-def vault_document_detail(doc_id):
+
+def area_vault_folders(area_id):
+    import app as a
+    _user, area, response = _area_scope_or_response(a, area_id)
+    if response:
+        return response
+    return vault_folders(area.id)
+
+
+def vault_document_detail(doc_id, area_id=None):
     import app as a
     Document = a.Document
     DocumentFolder = a.DocumentFolder
@@ -239,7 +279,7 @@ def vault_document_detail(doc_id):
     if not user:
         return jsonify({'error': 'No user selected'}), 401
 
-    doc = Document.query.filter_by(id=doc_id, user_id=user.id).first_or_404()
+    doc = _filter_area_scope(Document.query.filter_by(id=doc_id, user_id=user.id), Document, area_id).first_or_404()
 
     if request.method == 'GET':
         return jsonify(doc.to_dict())
@@ -287,6 +327,7 @@ def vault_document_detail(doc_id):
                 id=folder_id_int,
                 user_id=user.id,
                 archived_at=None,
+                area_id=area_id,
             ).first_or_404()
             doc.folder_id = folder_id_int
     if 'archived' in data:
@@ -301,6 +342,7 @@ def vault_document_detail(doc_id):
                 folder = DocumentFolder.query.filter_by(
                     id=doc.folder_id,
                     user_id=user.id,
+                    area_id=area_id,
                 ).first()
                 if not folder or folder.archived_at:
                     doc.folder_id = None
@@ -309,6 +351,7 @@ def vault_document_detail(doc_id):
         if pinned and not doc.pinned:
             max_pin = db.session.query(db.func.coalesce(db.func.max(Document.pin_order), 0)).filter(
                 Document.user_id == user.id,
+                Document.area_id.is_(None) if area_id is None else Document.area_id == area_id,
                 Document.pinned.is_(True)
             ).scalar()
             doc.pin_order = (max_pin or 0) + 1
@@ -318,3 +361,11 @@ def vault_document_detail(doc_id):
     doc.updated_at = _now_local()
     db.session.commit()
     return jsonify(doc.to_dict())
+
+
+def area_vault_document_detail(area_id, doc_id):
+    import app as a
+    _user, area, response = _area_scope_or_response(a, area_id)
+    if response:
+        return response
+    return vault_document_detail(doc_id, area.id)

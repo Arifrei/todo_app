@@ -1511,6 +1511,9 @@ async function ensureLinkedTaskEvent(ev) {
     ev.reminder_minutes_before = created.reminder_minutes_before;
     ev.priority = created.priority || ev.priority;
     ev.rollover_enabled = created.rollover_enabled || false;
+    ev.display_mode = created.display_mode || ev.display_mode || 'both';
+    ev.item_note = created.item_note || ev.item_note || null;
+    ev.status = created.status || ev.status || 'not_started';
     if (created.allow_overlap !== null && created.allow_overlap !== undefined) {
         ev.allow_overlap = created.allow_overlap;
     } else if (ev.allow_overlap === null || ev.allow_overlap === undefined) {

@@ -640,18 +640,22 @@ def upsert_task(task, included=None, user=None, config=None, commit=True, parent
 
     included = included or {}
     task_id = _task_id(task)
+    name = _task_name(task)
     if not task_id:
+        current_app.logger.debug('Teamwork upsert: skipping task with no id (name=%s)', name)
         return {'action': 'skipped', 'reason': 'missing_task_id'}
     ignored_task_ids = ignored_task_ids if ignored_task_ids is not None else get_ignored_task_ids(user.id)
     if task_id in ignored_task_ids:
         deleted = delete_imported_task(task_id, user_id=user.id, commit=False)
         if commit:
             db.session.commit()
+        current_app.logger.debug('Teamwork upsert: task %s (%s) ignored', task_id, name)
         return {'action': 'deleted' if deleted else 'skipped', 'reason': 'ignored', 'task_id': task_id}
     if not _task_is_assigned_to_configured_user(task, config):
         deleted = delete_imported_task(task_id, user_id=user.id, commit=False)
         if commit:
             db.session.commit()
+        current_app.logger.debug('Teamwork upsert: task %s (%s) not assigned to configured user', task_id, name)
         return {'action': 'deleted' if deleted else 'skipped', 'reason': 'not_assigned', 'task_id': task_id}
 
     status = _task_status(task)
@@ -660,9 +664,11 @@ def upsert_task(task, included=None, user=None, config=None, commit=True, parent
         deleted = delete_imported_task(task_id, user_id=user.id, commit=False)
         if commit:
             db.session.commit()
+        reason = 'deleted' if status == 'deleted' else 'missing_due_date'
+        current_app.logger.debug('Teamwork upsert: task %s (%s) skipped reason=%s', task_id, name, reason)
         return {
             'action': 'deleted' if deleted else 'skipped',
-            'reason': 'deleted' if status == 'deleted' else 'missing_due_date',
+            'reason': reason,
             'task_id': task_id,
         }
 
@@ -707,6 +713,7 @@ def upsert_task(task, included=None, user=None, config=None, commit=True, parent
 
     if commit:
         db.session.commit()
+    current_app.logger.info('Teamwork upsert: %s task %s (%s) day=%s status=%s', action, task_id, name, due_date_value, status)
     return {'action': action, 'task_id': task_id, 'event_id': event.id, 'day': due_date_value.isoformat()}
 
 
@@ -734,6 +741,9 @@ def sync_all_assigned_tasks():
         else:
             stats['skipped'] += 1
 
+    current_app.logger.info('Teamwork sync: starting fetch (user_id=%s, assignee=%s, projects=%s)',
+                            user.id, config.assignee_user_id, config.sync_project_ids)
+
     for task, included in client.iter_tasks(include_completed=False):
         try:
             task_id = _task_id(task)
@@ -760,17 +770,23 @@ def sync_all_assigned_tasks():
             stats['errors'] += 1
             current_app.logger.exception('Failed syncing Teamwork task')
 
+    current_app.logger.info('Teamwork sync: fetched %d tasks from API', len(seen_task_ids))
+
     existing_task_ids = [
         external_id for (external_id,) in db.session.query(CalendarEvent.external_id)
         .filter_by(user_id=user.id, external_source=SOURCE_NAME)
         .all()
         if external_id and external_id not in seen_task_ids
     ]
+    if existing_task_ids:
+        current_app.logger.info('Teamwork sync: reconciling %d locally-imported tasks not in API response', len(existing_task_ids))
     for task_id in existing_task_ids:
         try:
             task, included = client.get_assigned_task(task_id, include_completed=True)
             if not task:
                 deleted = delete_imported_task(task_id, user_id=user.id, commit=False)
+                current_app.logger.info('Teamwork sync: reconcile task %s -> %s (not_found_or_not_assigned)',
+                                        task_id, 'deleted' if deleted else 'skipped')
                 _count_result({
                     'action': 'deleted' if deleted else 'skipped',
                     'reason': 'not_found_or_not_assigned',
@@ -801,17 +817,23 @@ def sync_single_task(task_id, completed_fallback=False, single_task_fallback=Fal
     user = get_target_user(config)
     if not user:
         raise TeamworkConfigError('No local user exists for Teamwork calendar sync')
+    current_app.logger.info('Teamwork single sync: task_id=%s completed_fallback=%s single_task_fallback=%s',
+                            task_id, completed_fallback, single_task_fallback)
     if str(task_id) in get_ignored_task_ids(user.id):
         deleted = delete_imported_task(task_id, user_id=user.id)
+        current_app.logger.info('Teamwork single sync: task %s is ignored', task_id)
         return {'action': 'deleted' if deleted else 'skipped', 'reason': 'ignored', 'task_id': str(task_id)}
     client = TeamworkClient(config)
     task, included = client.get_assigned_task(task_id, include_completed=True)
     if not task and (completed_fallback or single_task_fallback):
+        current_app.logger.info('Teamwork single sync: task %s not in assigned list, falling back to direct fetch', task_id)
         task, included = client.get_task(task_id)
     if not task:
         if completed_fallback:
+            current_app.logger.info('Teamwork single sync: task %s not found, marking done (completed_fallback)', task_id)
             return mark_imported_task_done(task_id, user_id=user.id)
         deleted = delete_imported_task(task_id, user_id=user.id)
+        current_app.logger.info('Teamwork single sync: task %s not found -> %s', task_id, 'deleted' if deleted else 'skipped')
         return {'action': 'deleted' if deleted else 'skipped', 'reason': 'not_found_or_not_assigned', 'task_id': str(task_id)}
     return upsert_task(task, included=included, user=user, config=config, parent_lookup=client.get_task_name)
 
@@ -855,8 +877,10 @@ def _webhook_event_text(payload, event_name=None):
 def handle_webhook_payload(payload, event_name=None):
     task_id = extract_task_id_from_webhook(payload)
     if not task_id:
+        current_app.logger.warning('Teamwork webhook: could not extract task_id from payload (event=%s)', event_name)
         return {'action': 'skipped', 'reason': 'missing_task_id'}
     event_l = _webhook_event_text(payload, event_name)
+    current_app.logger.info('Teamwork webhook: event=%s task_id=%s event_text=%s', event_name, task_id, event_l)
     if 'deleted' in event_l:
         deleted = delete_imported_task(task_id)
         return {'action': 'deleted' if deleted else 'skipped', 'task_id': task_id, 'reason': 'webhook_deleted'}
@@ -864,6 +888,6 @@ def handle_webhook_payload(payload, event_name=None):
         task_id,
         completed_fallback='completed' in event_l,
         single_task_fallback=any(
-            value in event_l for value in ('updated', 'assigned', 'moved', 'reopened')
+            value in event_l for value in ('created', 'new', 'updated', 'assigned', 'moved', 'reopened')
         ),
     )

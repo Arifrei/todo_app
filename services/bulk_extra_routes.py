@@ -36,6 +36,35 @@ def bulk_vault_documents():
     )
 
 
+def _area_scope_or_response(area_id):
+    user = get_current_user()
+    if not user:
+        return None, (jsonify({'error': 'No user selected'}), 401)
+    area = Area.query.filter_by(id=area_id, user_id=user.id).first()
+    if not area:
+        return None, (jsonify({'error': 'Area not found'}), 404)
+    return area, None
+
+
+def area_bulk_vault_documents(area_id):
+    """Bulk operations on Area vault documents."""
+    area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return bulk_vault_documents_route(
+        request=request,
+        jsonify=jsonify,
+        get_current_user=get_current_user,
+        Document=Document,
+        DocumentFolder=DocumentFolder,
+        db=db,
+        os_module=os,
+        vault_root_for_user=_vault_root_for_user,
+        now_local=_now_local,
+        area_id=area.id,
+    )
+
+
 
 def bulk_bookmarks():
     """Bulk operations on bookmarks: delete, pin, unpin."""
@@ -45,6 +74,21 @@ def bulk_bookmarks():
         get_current_user=get_current_user,
         BookmarkItem=BookmarkItem,
         db=db,
+    )
+
+
+def area_bulk_bookmarks(area_id):
+    """Bulk operations on Area bookmarks."""
+    area, response = _area_scope_or_response(area_id)
+    if response:
+        return response
+    return bulk_bookmarks_route(
+        request=request,
+        jsonify=jsonify,
+        get_current_user=get_current_user,
+        BookmarkItem=BookmarkItem,
+        db=db,
+        area_id=area.id,
     )
 
 

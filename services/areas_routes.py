@@ -85,6 +85,10 @@ def _area_query_for_user(a, user):
     return a.Area.query.filter_by(user_id=user.id)
 
 
+def _area_folder_query_for_user(a, user):
+    return a.AreaFolder.query.filter_by(user_id=user.id)
+
+
 def _area_item_query_for_user(a, user):
     return a.AreaItem.query.filter_by(user_id=user.id)
 
@@ -106,6 +110,23 @@ def _next_order(a, model, **filters):
     for field, value in filters.items():
         query = query.filter(getattr(model, field) == value)
     return (query.scalar() or 0) + 1
+
+
+def _parse_area_folder_id(a, user, raw_folder_id):
+    if raw_folder_id in (None, ''):
+        return None, None
+    if isinstance(raw_folder_id, str) and raw_folder_id.strip().lower() in {'main', 'root', 'none', 'null'}:
+        return None, None
+    try:
+        folder_id = int(raw_folder_id)
+    except (TypeError, ValueError):
+        return None, 'Invalid folder_id'
+    if folder_id <= 0:
+        return None, 'Invalid folder_id'
+    folder = _area_folder_query_for_user(a, user).filter_by(id=folder_id).first()
+    if not folder:
+        return None, 'Folder not found'
+    return folder.id, None
 
 
 def _validate_linked_note(a, user, raw_note_id):
@@ -151,12 +172,22 @@ def _validate_linked_area_block(a, user, area_id, raw_block_id):
     return block_id, block, None
 
 
-def _apply_area_payload(a, area, data, *, creating=False):
+def _apply_area_payload(a, user, area, data, *, creating=False):
+    moved_folder = False
+    destination_order = None
     if creating or 'name' in data:
         name = _trim(data.get('name'), 120)
         if not name:
             return 'Name is required'
         area.name = name
+    if 'folder_id' in data:
+        folder_id, error = _parse_area_folder_id(a, user, data.get('folder_id'))
+        if error:
+            return error
+        moved_folder = area.folder_id != folder_id
+        if moved_folder and not creating and 'order_index' not in data:
+            destination_order = _next_order(a, a.Area, user_id=user.id, folder_id=folder_id)
+        area.folder_id = folder_id
     if 'description' in data:
         area.description = _nullable_text(data.get('description'))
     if 'color' in data:
@@ -169,6 +200,10 @@ def _apply_area_payload(a, area, data, *, creating=False):
         order_index = _parse_order_index(data.get('order_index'))
         if order_index is not None:
             area.order_index = order_index
+    elif destination_order is not None:
+        area.order_index = destination_order
+    elif creating or moved_folder:
+        area.order_index = _next_order(a, a.Area, user_id=user.id, folder_id=area.folder_id)
     return None
 
 
@@ -188,11 +223,13 @@ def _seed_area_workspace(a, user, area):
         )
 
 
-def _ensure_section_for_type(a, user, area, block_type, *, exclude_section_id=None):
+def _ensure_section_for_type(a, user, area, block_type, *, exclude_section_id=None, include_hidden=False):
     block_type = (block_type or 'line').lower()
     query = _area_section_query_for_user(a, user).filter_by(area_id=area.id, block_type=block_type)
     if exclude_section_id is not None:
         query = query.filter(a.AreaSection.id != exclude_section_id)
+    if not include_hidden:
+        query = query.filter(a.AreaSection.hidden_at.is_(None))
     section = query.order_by(a.AreaSection.order_index.asc(), a.AreaSection.id.asc()).first()
     if section:
         return section
@@ -211,14 +248,16 @@ def _ensure_section_for_type(a, user, area, block_type, *, exclude_section_id=No
 
 def _ensure_area_workspace_lists(a, user, area):
     for block_type, _title, _description in DEFAULT_SECTIONS:
-        _ensure_section_for_type(a, user, area, block_type)
+        _ensure_section_for_type(a, user, area, block_type, include_hidden=True)
 
     sections = _area_section_query_for_user(a, user).filter_by(area_id=area.id).all()
     section_map = {section.id: section for section in sections}
-    default_by_type = {
-        block_type: _ensure_section_for_type(a, user, area, block_type)
-        for block_type, _title, _description in DEFAULT_SECTIONS
-    }
+    default_by_type = {}
+
+    def default_section_for(block_type):
+        if block_type not in default_by_type:
+            default_by_type[block_type] = _ensure_section_for_type(a, user, area, block_type)
+        return default_by_type[block_type]
 
     changed = False
     blocks = _area_block_query_for_user(a, user).filter_by(area_id=area.id).all()
@@ -227,7 +266,7 @@ def _ensure_area_workspace_lists(a, user, area):
         section = section_map.get(block.section_id)
         if section and (section.block_type or 'line') == block_type:
             continue
-        block.section_id = default_by_type[block_type].id
+        block.section_id = default_section_for(block_type).id
         changed = True
     if changed:
         a.db.session.flush()
@@ -253,6 +292,13 @@ def _apply_section_payload(section, data, *, creating=False):
         order_index = _parse_order_index(data.get('order_index'))
         if order_index is not None:
             section.order_index = order_index
+    if 'hidden' in data or 'is_hidden' in data:
+        hidden = _parse_bool(data.get('hidden') if 'hidden' in data else data.get('is_hidden'))
+        if hidden:
+            if section.hidden_at is None:
+                section.hidden_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        else:
+            section.hidden_at = None
     return None
 
 
@@ -773,6 +819,69 @@ def area_block_editor_page(area_id, block_id):
     )
 
 
+def handle_area_folders():
+    a = _app_module()
+    user = a.get_current_user()
+    if not user:
+        return a.jsonify({'error': 'No user selected'}), 401
+
+    if a.request.method == 'POST':
+        data = a.request.get_json(silent=True) or {}
+        name = _trim(data.get('name'), 120)
+        if not name:
+            return a.jsonify({'error': 'Folder name is required'}), 400
+        folder = a.AreaFolder(
+            user_id=user.id,
+            name=name,
+            order_index=_next_order(a, a.AreaFolder, user_id=user.id),
+        )
+        a.db.session.add(folder)
+        a.db.session.commit()
+        return a.jsonify(folder.to_dict(include_counts=True)), 201
+
+    folders = _area_folder_query_for_user(a, user).order_by(
+        a.AreaFolder.order_index.asc(),
+        a.AreaFolder.name.asc(),
+        a.AreaFolder.id.asc(),
+    ).all()
+    return a.jsonify([folder.to_dict(include_counts=True) for folder in folders])
+
+
+def area_folder_detail(folder_id):
+    a = _app_module()
+    user = a.get_current_user()
+    if not user:
+        return a.jsonify({'error': 'No user selected'}), 401
+
+    folder = _area_folder_query_for_user(a, user).filter_by(id=folder_id).first_or_404()
+
+    if a.request.method == 'GET':
+        return a.jsonify(folder.to_dict(include_counts=True))
+
+    if a.request.method == 'DELETE':
+        _area_query_for_user(a, user).filter_by(folder_id=folder.id).update(
+            {'folder_id': None},
+            synchronize_session=False,
+        )
+        a.db.session.delete(folder)
+        a.db.session.commit()
+        return a.jsonify({'deleted': True})
+
+    data = a.request.get_json(silent=True) or {}
+    if 'name' in data:
+        name = _trim(data.get('name'), 120)
+        if not name:
+            return a.jsonify({'error': 'Folder name is required'}), 400
+        folder.name = name
+    if 'order_index' in data:
+        order_index = _parse_order_index(data.get('order_index'))
+        if order_index is not None:
+            folder.order_index = order_index
+    folder.updated_at = a._now_local()
+    a.db.session.commit()
+    return a.jsonify(folder.to_dict(include_counts=True))
+
+
 def handle_areas():
     a = _app_module()
     user = a.get_current_user()
@@ -782,6 +891,11 @@ def handle_areas():
     if a.request.method == 'GET':
         archived_filter = str(a.request.args.get('archived', '0')).strip().lower()
         query = _area_query_for_user(a, user)
+        if 'folder_id' in a.request.args:
+            folder_id, error = _parse_area_folder_id(a, user, a.request.args.get('folder_id'))
+            if error:
+                return a.jsonify({'error': error}), 400
+            query = query.filter(a.Area.folder_id == folder_id)
         if archived_filter in {'1', 'true', 'yes', 'archived'}:
             query = query.filter(a.Area.archived_at.isnot(None))
         elif archived_filter != 'all':
@@ -798,6 +912,7 @@ def handle_areas():
             )
 
         areas = query.order_by(
+            a.Area.folder_id.asc(),
             a.Area.order_index.asc(),
             a.Area.updated_at.desc(),
             a.Area.id.asc(),
@@ -810,9 +925,9 @@ def handle_areas():
         name='',
         color=DEFAULT_AREA_COLOR,
         icon=DEFAULT_AREA_ICON,
-        order_index=_next_order(a, a.Area, user_id=user.id),
+        order_index=0,
     )
-    error = _apply_area_payload(a, area, data, creating=True)
+    error = _apply_area_payload(a, user, area, data, creating=True)
     if error:
         return a.jsonify({'error': error}), 400
     a.db.session.add(area)
@@ -836,7 +951,7 @@ def area_detail(area_id):
 
     if a.request.method == 'PUT':
         data = a.request.get_json(silent=True) or {}
-        error = _apply_area_payload(a, area, data)
+        error = _apply_area_payload(a, user, area, data)
         if error:
             return a.jsonify({'error': error}), 400
         a.db.session.commit()
@@ -907,6 +1022,14 @@ def area_sections(area_id):
             if block_type not in AREA_BLOCK_TYPES:
                 return a.jsonify({'error': 'Invalid section type'}), 400
             query = query.filter(a.AreaSection.block_type == block_type)
+        hidden_filter = _trim(a.request.args.get('hidden'), 20).lower()
+        if hidden_filter:
+            if hidden_filter in {'1', 'true', 'yes', 'hidden'}:
+                query = query.filter(a.AreaSection.hidden_at.isnot(None))
+            elif hidden_filter in {'0', 'false', 'no', 'visible'}:
+                query = query.filter(a.AreaSection.hidden_at.is_(None))
+            elif hidden_filter != 'all':
+                return a.jsonify({'error': 'Invalid hidden filter'}), 400
         sections = query.order_by(
             a.AreaSection.order_index.asc(),
             a.AreaSection.id.asc(),

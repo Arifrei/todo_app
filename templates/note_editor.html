@@ -91,9 +91,29 @@
             <button class="note-tool" type="button" data-command="quote" title="Quote block" aria-label="Quote block" aria-pressed="false"><i class="fa-solid fa-quote-left"></i></button>
             <button class="note-tool" type="button" data-command="code" title="Code" aria-label="Code formatting" aria-pressed="false"><i class="fa-solid fa-code"></i></button>
             <button class="note-tool" type="button" data-command="removeFormat" title="Clear formatting" aria-label="Clear formatting"><i class="fa-solid fa-eraser"></i></button>
+            <span class="note-tool-divider"></span>
+            <button class="note-tool" type="button" data-command="image" title="Insert image" aria-label="Insert image"><i class="fa-solid fa-image"></i></button>
+        </div>
+        <input type="file" id="note-image-input" accept="image/jpeg,image/png,image/webp,image/gif" multiple style="display:none">
+
+        <div id="note-editor" class="note-editor-surface" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Note content editor" data-placeholder="Start typing your note... (type / for commands)"></div>
+
+        <!-- Slash command menu -->
+        <div id="note-slash-menu" class="note-slash-menu" style="display:none">
+            <div class="note-slash-menu-list" id="note-slash-menu-list"></div>
         </div>
 
-        <div id="note-editor" class="note-editor-surface" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Note content editor" data-placeholder="Start typing your note..."></div>
+        <!-- Table editing toolbar -->
+        <div id="note-table-toolbar" class="note-table-toolbar" style="display:none">
+            <button type="button" data-action="add-row-above" title="Add row above"><i class="fa-solid fa-arrow-up"></i></button>
+            <button type="button" data-action="add-row-below" title="Add row below"><i class="fa-solid fa-arrow-down"></i></button>
+            <span class="note-tool-divider"></span>
+            <button type="button" data-action="add-col-left" title="Add column left"><i class="fa-solid fa-arrow-left"></i></button>
+            <button type="button" data-action="add-col-right" title="Add column right"><i class="fa-solid fa-arrow-right"></i></button>
+            <span class="note-tool-divider"></span>
+            <button type="button" data-action="delete-row" title="Delete row"><i class="fa-solid fa-minus"></i> Row</button>
+            <button type="button" data-action="delete-col" title="Delete column"><i class="fa-solid fa-minus"></i> Col</button>
+        </div>
     </section>
 </div>
 
@@ -112,6 +132,12 @@
             </button>
             <button class="btn btn-secondary u-w-full u-justify-center" id="share-note-email-btn">
                 <i class="fa-solid fa-envelope"></i> Share via Email
+            </button>
+            <button class="btn btn-secondary u-w-full u-justify-center" id="share-note-md-btn">
+                <i class="fa-solid fa-file-lines"></i> Download as Markdown
+            </button>
+            <button class="btn btn-secondary u-w-full u-justify-center" id="share-note-pdf-btn">
+                <i class="fa-solid fa-file-pdf"></i> Export as PDF
             </button>
         </div>
 

@@ -1856,7 +1856,7 @@ body.list-section-dragging .list-section-drag-handle {
 .list-pill {
     border: 1px solid var(--border-color);
     border-radius: 16px;
-    padding: 0.55rem 6.8rem 0.55rem 0.8rem;
+    padding: 0.55rem 0.8rem;
     display: flex;
     align-items: center;
     gap: 0.6rem;
@@ -1989,12 +1989,32 @@ body.list-section-dragging .list-section-drag-handle {
     flex: 1;
     display: flex;
     gap: 0.5rem;
-    align-items: flex-start;
-    flex-wrap: wrap;
+    align-items: center;
+    flex-wrap: nowrap;
     min-width: 0;
+    max-width: 100%;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-x: auto;
+    overflow-y: hidden;
+    text-overflow: clip;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.list-pill-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.list-pill-content > span,
+.list-pill-content > a {
+    flex: 0 0 auto;
+    min-width: max-content;
+    max-width: none;
+    overflow-wrap: normal;
+    white-space: nowrap;
 }
 
 .list-pill-content a {
@@ -2111,8 +2131,20 @@ body.list-section-dragging .list-section-drag-handle {
 
 .list-pill.expanded .list-pill-content {
     white-space: normal;
+    flex-wrap: wrap;
     flex: 1 1 auto;
     min-width: 0;
+    overflow: visible;
+    overflow-wrap: anywhere;
+}
+
+.list-pill.expanded .list-pill-content > span,
+.list-pill.expanded .list-pill-content > a {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 .list-pill.expanded .list-pill-note {
@@ -2335,6 +2367,11 @@ body.list-section-dragging .list-section-drag-handle {
     background: var(--white);
 }
 
+.list-pill-input.bulk-capable {
+    align-items: flex-start;
+    padding-right: 0.8rem;
+}
+
 .list-pill-input textarea {
     width: 100%;
     border: none;
@@ -2344,6 +2381,10 @@ body.list-section-dragging .list-section-drag-handle {
     font-size: 1rem;
     font-family: inherit;
     line-height: 1.4;
+}
+
+.list-pill-input.bulk-capable textarea {
+    white-space: pre-wrap;
 }
 
 .list-pill-input textarea::placeholder {
@@ -2582,7 +2623,7 @@ body.list-section-dragging .list-section-drag-handle {
     }
 
     .list-pill-content {
-        display: block;
+        display: flex;
         width: 100%;
         min-width: 0;
         max-width: 100%;
@@ -2590,19 +2631,14 @@ body.list-section-dragging .list-section-drag-handle {
         overflow-x: auto;
         overflow-y: hidden;
         text-overflow: clip;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-    }
-
-    .list-pill-content::-webkit-scrollbar {
-        width: 0;
-        height: 0;
-        display: none;
     }
 
     .list-pill-content > span,
-    .list-pill-content > a,
+    .list-pill-content > a {
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+
     .list-pill-content > .list-date-badge,
     .list-pill-content > .list-note-indicators,
     .list-pill-content > .list-pill-inline-toggle {
@@ -2643,5 +2679,618 @@ body.list-section-dragging .list-section-drag-handle {
 
     .list-pill-input.contextual {
         padding-top: 0.45rem;
+    }
+}
+
+
+/* ── Embedded images ──────────────────────────────────────────────── */
+
+.note-image-wrapper {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    margin: 0.5rem 0;
+    line-height: 0;
+    border-radius: 6px;
+    transition: outline 0.15s ease;
+    vertical-align: top;
+}
+
+.note-embedded-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.note-image-wrapper.selected {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.note-image-resize-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: var(--primary-color);
+    border: 2px solid var(--card-bg, #fff);
+    border-radius: 2px;
+    z-index: 5;
+    display: none;
+}
+
+.note-image-wrapper.selected .note-image-resize-handle {
+    display: block;
+}
+
+.note-image-resize-handle.handle-nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.note-image-resize-handle.handle-ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.note-image-resize-handle.handle-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.note-image-resize-handle.handle-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
+
+/* Image alignment */
+.note-image-wrapper.align-left { float: left; margin: 0.5rem 1rem 0.5rem 0; }
+.note-image-wrapper.align-center { margin-left: auto; margin-right: auto; float: none; }
+.note-image-wrapper.align-right { float: right; margin: 0.5rem 0 0.5rem 1rem; }
+.note-image-wrapper.align-full { width: 100%; float: none; }
+.note-image-wrapper.align-full .note-embedded-image { width: 100%; }
+
+/* Image alignment toolbar */
+.note-image-align-bar {
+    position: absolute;
+    top: -36px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: none;
+    gap: 2px;
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 6px;
+    padding: 3px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    z-index: 10;
+}
+.note-image-wrapper.selected .note-image-align-bar { display: flex; }
+.note-image-align-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-secondary, #666);
+    font-size: 0.8rem;
+}
+.note-image-align-btn:hover { background: var(--bg-secondary, #f0f0f0); }
+.note-image-align-btn.active { background: var(--primary-color); color: #fff; }
+
+/* Image upload placeholder */
+.note-image-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    margin: 0.5rem 0;
+    background: var(--bg-secondary, #f5f5f5);
+    border: 2px dashed var(--border-color, #ddd);
+    border-radius: 6px;
+    color: var(--text-secondary, #888);
+    font-size: 0.85rem;
+    gap: 0.5rem;
+}
+.note-image-placeholder i { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.note-editor-surface.note-drop-active {
+    outline: 2px dashed var(--primary-color);
+    outline-offset: -4px;
+    background: color-mix(in srgb, var(--primary-color) 5%, transparent);
+}
+
+
+/* ── Enhanced checkboxes ──────────────────────────────────────────── */
+
+.note-editor-surface .note-inline-checkbox.checked {
+    text-decoration: line-through;
+    opacity: 0.55;
+}
+
+.note-editor-surface .note-inline-checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    margin-right: 0.4rem;
+    margin-top: -2px;
+    accent-color: var(--primary-color);
+    cursor: pointer;
+    transition: transform 0.15s ease;
+}
+
+.note-editor-surface .note-inline-checkbox input[type="checkbox"]:hover {
+    transform: scale(1.15);
+}
+
+
+/* ── Slash command menu ───────────────────────────────────────────── */
+
+.note-slash-menu {
+    position: fixed;
+    z-index: 1000;
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    max-height: 320px;
+    overflow-y: auto;
+    min-width: 220px;
+    padding: 4px;
+}
+
+.note-slash-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 6px;
+    font-size: 0.92rem;
+    transition: background 0.1s ease;
+}
+
+.note-slash-item:hover,
+.note-slash-item.active {
+    background: var(--hover-bg, #f0f0f0);
+}
+
+.note-slash-item i {
+    width: 20px;
+    text-align: center;
+    opacity: 0.65;
+    font-size: 0.85rem;
+}
+
+.note-slash-item .slash-label {
+    flex: 1;
+}
+
+.note-slash-item .slash-shortcut {
+    font-size: 0.78rem;
+    opacity: 0.45;
+    font-family: monospace;
+}
+
+
+/* ── Tables in editor ─────────────────────────────────────────────── */
+
+.note-editor-surface table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.5rem 0;
+    font-size: inherit;
+}
+
+.note-editor-surface td,
+.note-editor-surface th {
+    border: 1px solid var(--border-color, #ddd);
+    padding: 6px 10px;
+    min-width: 60px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.note-editor-surface th {
+    background: var(--hover-bg, #f5f5f5);
+    font-weight: 600;
+}
+
+.note-editor-surface mark {
+    background: #fff3a8;
+    padding: 1px 2px;
+    border-radius: 2px;
+}
+
+/* ── Table editing toolbar ───────────────────────────────────────── */
+
+.note-table-toolbar {
+    position: fixed;
+    z-index: 15;
+    display: none;
+    gap: 2px;
+    background: var(--card-bg, #fff);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 8px;
+    padding: 3px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    align-items: center;
+}
+.note-table-toolbar button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    color: var(--text-secondary, #666);
+    white-space: nowrap;
+}
+.note-table-toolbar button:hover {
+    background: var(--bg-secondary, #f0f0f0);
+    color: var(--text-color);
+}
+.note-table-toolbar .note-tool-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border-color, #ddd);
+    margin: 0 2px;
+}
+
+/* ── Callout blocks ──────────────────────────────────────────────── */
+
+.note-callout {
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border-left: 4px solid;
+    margin: 0.5rem 0;
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    min-height: 2rem;
+}
+.note-callout > i { flex: 0 0 auto; margin-top: 2px; }
+.note-callout > span { flex: 1; min-width: 0; outline: none; }
+.note-callout.callout-info { background: #eff6ff; border-color: #3b82f6; color: #1e40af; }
+.note-callout.callout-warning { background: #fffbeb; border-color: #f59e0b; color: #92400e; }
+.note-callout.callout-success { background: #f0fdf4; border-color: #22c55e; color: #166534; }
+.note-callout.callout-error { background: #fef2f2; border-color: #ef4444; color: #991b1b; }
+
+/* ── Toggle / collapsible ────────────────────────────────────────── */
+
+.note-toggle {
+    margin: 0.5rem 0;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.note-toggle summary {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-weight: 500;
+    outline: none;
+    user-select: none;
+}
+.note-toggle summary:hover { background: var(--hover-bg, #f5f5f5); }
+.note-toggle-content {
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--border-color);
+    outline: none;
+    min-height: 1.5rem;
+}
+
+/* ── Two-column layout ───────────────────────────────────────────── */
+
+.note-columns {
+    display: flex;
+    gap: 1rem;
+    margin: 0.5rem 0;
+}
+.note-column {
+    flex: 1;
+    min-width: 0;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    padding: 0.5rem;
+    min-height: 60px;
+    outline: none;
+}
+
+/* ── Task section (list-like) ────────────────────────────────────── */
+
+.note-task-section {
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 0.45rem 0.6rem 0.6rem;
+    margin: 0.5rem 0;
+    background: var(--card-bg, #fff);
+}
+.note-task-section-header {
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.4rem;
+    color: var(--text-secondary);
+    outline: none;
+    min-height: 1.2rem;
+}
+.note-task-section-header:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-muted, #aaa);
+}
+.note-task-section-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.note-task-item {
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 0.45rem 0.7rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #f8fafc;
+    transition: border-color 0.15s ease;
+}
+.note-task-item:hover {
+    border-color: rgba(59, 130, 246, 0.25);
+}
+.note-task-item.checked .note-task-item-text {
+    text-decoration: line-through;
+    opacity: 0.55;
+}
+.note-task-item-cb {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+.note-task-item-text {
+    flex: 1;
+    min-width: 0;
+    outline: none;
+    border: none;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+}
+.note-task-item-text:empty::before {
+    content: 'Type a task...';
+    color: var(--text-muted, #aaa);
+}
+
+/* ── Block formatting reset ───────────────────────────────────────── */
+
+.note-callout > span,
+.note-toggle summary,
+.note-toggle-content,
+.note-column,
+.note-task-section-header,
+.note-task-item-text {
+    font-style: normal;
+    font-weight: normal;
+    text-decoration: none;
+}
+
+/* ── Block delete button ─────────────────────────────────────────── */
+
+.note-block-delete-btn {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color, #ddd);
+    background: var(--card-bg, #fff);
+    color: var(--text-secondary, #888);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.7rem;
+    z-index: 20;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.note-block-focused .note-block-delete-btn { opacity: 1; }
+.note-block-delete-btn:hover {
+    background: #fef2f2;
+    color: #ef4444;
+    border-color: #fca5a5;
+}
+
+
+/* ── Print / PDF export ───────────────────────────────────────────── */
+
+@media print {
+    body * {
+        visibility: hidden;
+    }
+    .note-print-view,
+    .note-print-view * {
+        visibility: visible;
+    }
+    .note-print-view {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+    }
+}
+
+.note-print-view {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1a1a1a;
+}
+
+.note-print-view h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 0.5rem;
+}
+
+.note-print-view h2 { font-size: 1.5rem; margin-top: 1.5rem; }
+.note-print-view h3 { font-size: 1.25rem; margin-top: 1.25rem; }
+.note-print-view h4 { font-size: 1.1rem; margin-top: 1rem; }
+
+.note-print-view img {
+    max-width: 100%;
+    height: auto;
+    page-break-inside: avoid;
+}
+
+.note-print-view table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.75rem 0;
+    page-break-inside: avoid;
+}
+
+.note-print-view td,
+.note-print-view th {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+}
+
+.note-print-view th {
+    background: #f5f5f5;
+    font-weight: 600;
+}
+
+.note-print-view blockquote {
+    border-left: 3px solid #ccc;
+    margin: 0.75rem 0;
+    padding: 0.5rem 1rem;
+    color: #555;
+}
+
+.note-print-view pre {
+    background: #f5f5f5;
+    padding: 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    page-break-inside: avoid;
+}
+
+.note-print-view code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.9em;
+}
+
+.note-print-view .note-inline-checkbox input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border: 1.5px solid #666;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 0.4rem;
+    position: relative;
+}
+
+.note-print-view .note-inline-checkbox input[type="checkbox"]:checked::after {
+    content: '\2713';
+    position: absolute;
+    top: -2px;
+    left: 1px;
+    font-size: 12px;
+    color: #333;
+}
+
+
+/* ── Mobile: Note editor blocks & toolbars ───────────────────────── */
+
+@media (max-width: 768px) {
+    /* Slash menu: full width on small screens */
+    .note-slash-menu {
+        left: 8px !important;
+        right: 8px;
+        max-width: calc(100vw - 16px);
+        min-width: unset;
+    }
+
+    /* Table toolbar: constrain to viewport */
+    .note-table-toolbar {
+        left: 4px !important;
+        right: 4px;
+        max-width: calc(100vw - 8px);
+        overflow-x: auto;
+        flex-wrap: nowrap;
+    }
+    .note-table-toolbar button {
+        padding: 6px;
+        min-height: 36px;
+        min-width: 36px;
+        justify-content: center;
+    }
+
+    /* Image alignment bar: ensure visible */
+    .note-image-align-bar {
+        top: -32px;
+    }
+    .note-image-align-btn {
+        width: 36px;
+        height: 36px;
+    }
+
+    /* Block delete button: larger touch target */
+    .note-block-delete-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 0.8rem;
+        top: -12px;
+        right: -8px;
+    }
+
+    /* Columns: stack vertically on mobile */
+    .note-columns {
+        flex-direction: column;
+    }
+
+    /* Tables: horizontal scroll */
+    .note-editor-surface table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Callouts: smaller padding */
+    .note-callout {
+        padding: 0.6rem 0.75rem;
+    }
+
+    /* Task items: larger touch targets */
+    .note-task-item {
+        padding: 0.55rem 0.7rem;
+        min-height: 40px;
+    }
+    .note-task-item-cb {
+        width: 20px;
+        height: 20px;
+    }
+
+    /* Image resize handles: larger for touch */
+    .note-image-resize-handle {
+        width: 16px;
+        height: 16px;
+    }
+    .note-image-resize-handle.handle-nw { top: -8px; left: -8px; }
+    .note-image-resize-handle.handle-ne { top: -8px; right: -8px; }
+    .note-image-resize-handle.handle-sw { bottom: -8px; left: -8px; }
+    .note-image-resize-handle.handle-se { bottom: -8px; right: -8px; }
+}
+
+/* Touch devices: always show block delete on focused blocks */
+@media (hover: none) {
+    .note-block-focused .note-block-delete-btn {
+        opacity: 1;
+    }
+    .note-task-item-cb {
+        width: 20px;
+        height: 20px;
     }
 }

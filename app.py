@@ -22,7 +22,7 @@ from backend.embedding_service import (
     delete_embedding_for_entity,
     refresh_embedding_for_entity,
 )
-from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, InboxItem, Area, AreaSection, AreaBlock, AreaBlockItem, AreaItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
+from models import db, User, TodoList, TodoItem, Note, NoteFolder, NoteListItem, NoteLink, NoteImage, InboxItem, AreaFolder, Area, AreaSection, AreaBlock, AreaBlockItem, AreaItem, CalendarEvent, RecurringEvent, RecurrenceException, Notification, NotificationSetting, PushSubscription, RecallItem, QuickAccessItem, BookmarkItem, DoFeedItem, PlannerFolder, PlannerSimpleItem, PlannerGroup, PlannerMultiItem, PlannerMultiLine, DocumentFolder, Document
 from apscheduler.schedulers.background import BackgroundScheduler
 from pywebpush import webpush, WebPushException
 import requests
@@ -93,6 +93,8 @@ except (TypeError, ValueError):
     app.config['VAULT_MAX_FILE_SIZE'] = DEFAULT_VAULT_MAX_SIZE
 
 db.init_app(app)
+with app.app_context():
+    db.create_all()
 scheduler = None
 # Ensure our app logger emits INFO to the console
 if app.logger.level > logging.INFO or app.logger.level == logging.NOTSET:
@@ -365,6 +367,26 @@ def current_user_info():
     return _impl()
 
 
+@app.route('/api/scheduler/status')
+def scheduler_status():
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'No user selected'}), 401
+    import backend.app_core_logic as _core
+    sched = getattr(_core, 'scheduler', None)
+    running = bool(sched and sched.running)
+    jobs = []
+    if running:
+        for job in sched.get_jobs():
+            jobs.append({
+                'id': job.id,
+                'name': job.name,
+                'next_run': job.next_run_time.isoformat() if job.next_run_time else None,
+                'trigger': str(job.trigger),
+            })
+    return jsonify({'running': running, 'jobs': jobs})
+
+
 @app.route('/api/user/profile', methods=['GET', 'PUT'])
 def user_profile():
     from services.user_routes import user_profile as _impl
@@ -531,6 +553,16 @@ def map_inbox_item_route(item_id):
 def delete_inbox_item(item_id):
     from services.inbox_routes import delete_inbox_item as _impl
     return _impl(item_id)
+
+@app.route('/api/area-folders', methods=['GET', 'POST'])
+def handle_area_folders():
+    from services.areas_routes import handle_area_folders as _impl
+    return _impl()
+
+@app.route('/api/area-folders/<int:folder_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_folder_detail(folder_id):
+    from services.areas_routes import area_folder_detail as _impl
+    return _impl(folder_id)
 
 @app.route('/api/areas', methods=['GET', 'POST'])
 def handle_areas():
@@ -733,6 +765,16 @@ def move_note_folders():
     from services.notes_routes import move_note_folders as _impl
     return _impl()
 
+@app.route('/api/notes/images', methods=['POST'])
+def upload_note_image():
+    from services.notes_image_routes import upload_note_image as _impl
+    return _impl()
+
+@app.route('/api/notes/images/<filename>', methods=['GET'])
+def serve_note_image(filename):
+    from services.notes_image_routes import serve_note_image as _impl
+    return _impl(filename)
+
 
 @app.route('/api/vault/folders', methods=['GET', 'POST'])
 def vault_folders():
@@ -740,15 +782,32 @@ def vault_folders():
     return _impl()
 
 
+@app.route('/api/areas/<int:area_id>/vault/folders', methods=['GET', 'POST'])
+def area_vault_folders(area_id):
+    from services.vault_routes import area_vault_folders as _impl
+    return _impl(area_id)
+
+
 @app.route('/api/vault/folders/<int:folder_id>', methods=['GET', 'PUT', 'DELETE'])
 def vault_folder_detail(folder_id):
     from services.inline_routes import vault_folder_detail as _impl
     return _impl(folder_id)
 
+@app.route('/api/areas/<int:area_id>/vault/folders/<int:folder_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_vault_folder_detail(area_id, folder_id):
+    from services.vault_extra_routes import area_vault_folder_detail as _impl
+    return _impl(area_id, folder_id)
+
 @app.route('/api/vault/documents', methods=['GET', 'POST'])
 def vault_documents():
     from services.vault_routes import vault_documents as _impl
     return _impl()
+
+
+@app.route('/api/areas/<int:area_id>/vault/documents', methods=['GET', 'POST'])
+def area_vault_documents(area_id):
+    from services.vault_routes import area_vault_documents as _impl
+    return _impl(area_id)
 
 
 @app.route('/api/vault/documents/<int:doc_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -757,45 +816,91 @@ def vault_document_detail(doc_id):
     return _impl(doc_id)
 
 
+@app.route('/api/areas/<int:area_id>/vault/documents/<int:doc_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_vault_document_detail(area_id, doc_id):
+    from services.vault_routes import area_vault_document_detail as _impl
+    return _impl(area_id, doc_id)
+
+
 @app.route('/api/vault/documents/<int:doc_id>/download', methods=['GET'])
 def vault_document_download(doc_id):
     from services.inline_routes import vault_document_download as _impl
     return _impl(doc_id)
+
+@app.route('/api/areas/<int:area_id>/vault/documents/<int:doc_id>/download', methods=['GET'])
+def area_vault_document_download(area_id, doc_id):
+    from services.vault_extra_routes import area_vault_document_download as _impl
+    return _impl(area_id, doc_id)
 
 @app.route('/api/vault/documents/<int:doc_id>/preview', methods=['GET'])
 def vault_document_preview(doc_id):
     from services.inline_routes import vault_document_preview as _impl
     return _impl(doc_id)
 
+@app.route('/api/areas/<int:area_id>/vault/documents/<int:doc_id>/preview', methods=['GET'])
+def area_vault_document_preview(area_id, doc_id):
+    from services.vault_extra_routes import area_vault_document_preview as _impl
+    return _impl(area_id, doc_id)
+
 @app.route('/api/vault/documents/<int:doc_id>/move', methods=['POST'])
 def vault_document_move(doc_id):
     from services.inline_routes import vault_document_move as _impl
     return _impl(doc_id)
+
+@app.route('/api/areas/<int:area_id>/vault/documents/<int:doc_id>/move', methods=['POST'])
+def area_vault_document_move(area_id, doc_id):
+    from services.vault_extra_routes import area_vault_document_move as _impl
+    return _impl(area_id, doc_id)
 
 @app.route('/api/vault/search', methods=['GET'])
 def vault_search():
     from services.inline_routes import vault_search as _impl
     return _impl()
 
+@app.route('/api/areas/<int:area_id>/vault/search', methods=['GET'])
+def area_vault_search(area_id):
+    from services.vault_extra_routes import area_vault_search as _impl
+    return _impl(area_id)
+
 @app.route('/api/vault/stats', methods=['GET'])
 def vault_stats():
     from services.inline_routes import vault_stats as _impl
     return _impl()
+
+@app.route('/api/areas/<int:area_id>/vault/stats', methods=['GET'])
+def area_vault_stats(area_id):
+    from services.vault_extra_routes import area_vault_stats as _impl
+    return _impl(area_id)
 
 @app.route('/api/recalls', methods=['GET', 'POST'])
 def handle_recalls():
     from services.inline_routes import handle_recalls as _impl
     return _impl()
 
+@app.route('/api/areas/<int:area_id>/recalls', methods=['GET', 'POST'])
+def handle_area_recalls(area_id):
+    from services.recall_extra_routes import handle_area_recalls as _impl
+    return _impl(area_id)
+
 @app.route('/api/recalls/<int:recall_id>', methods=['GET', 'PUT', 'DELETE'])
 def recall_detail(recall_id):
     from services.inline_routes import recall_detail as _impl
     return _impl(recall_id)
 
+@app.route('/api/areas/<int:area_id>/recalls/<int:recall_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_recall_detail(area_id, recall_id):
+    from services.recall_extra_routes import area_recall_detail as _impl
+    return _impl(area_id, recall_id)
+
 @app.route('/api/recalls/<int:recall_id>/regenerate', methods=['POST'])
 def regenerate_recall(recall_id):
     from services.inline_routes import regenerate_recall as _impl
     return _impl(recall_id)
+
+@app.route('/api/areas/<int:area_id>/recalls/<int:recall_id>/regenerate', methods=['POST'])
+def area_regenerate_recall(area_id, recall_id):
+    from services.recall_extra_routes import area_regenerate_recall as _impl
+    return _impl(area_id, recall_id)
 
 @app.route('/api/notes/<int:note_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_note(note_id):
@@ -921,10 +1026,20 @@ def handle_bookmarks():
     from services.inline_routes import handle_bookmarks as _impl
     return _impl()
 
+@app.route('/api/areas/<int:area_id>/bookmarks', methods=['GET', 'POST'])
+def handle_area_bookmarks(area_id):
+    from services.quick_bookmark_extra_routes import handle_area_bookmarks as _impl
+    return _impl(area_id)
+
 @app.route('/api/bookmarks/<int:item_id>', methods=['GET', 'PUT', 'DELETE'])
 def bookmark_detail(item_id):
     from services.inline_routes import bookmark_detail as _impl
     return _impl(item_id)
+
+@app.route('/api/areas/<int:area_id>/bookmarks/<int:item_id>', methods=['GET', 'PUT', 'DELETE'])
+def area_bookmark_detail(area_id, item_id):
+    from services.quick_bookmark_extra_routes import area_bookmark_detail as _impl
+    return _impl(area_id, item_id)
 
 @app.route('/api/planner', methods=['GET'])
 def get_planner_data():
@@ -1241,10 +1356,20 @@ def bulk_vault_documents():
     from services.inline_routes import bulk_vault_documents as _impl
     return _impl()
 
+@app.route('/api/areas/<int:area_id>/vault/documents/bulk', methods=['POST'])
+def area_bulk_vault_documents(area_id):
+    from services.bulk_extra_routes import area_bulk_vault_documents as _impl
+    return _impl(area_id)
+
 @app.route('/api/bookmarks/bulk', methods=['POST'])
 def bulk_bookmarks():
     from services.inline_routes import bulk_bookmarks as _impl
     return _impl()
+
+@app.route('/api/areas/<int:area_id>/bookmarks/bulk', methods=['POST'])
+def area_bulk_bookmarks(area_id):
+    from services.bulk_extra_routes import area_bulk_bookmarks as _impl
+    return _impl(area_id)
 
 
 if __name__ == '__main__':

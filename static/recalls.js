@@ -10,6 +10,12 @@ if (typeof recallState === 'undefined') {
     };
 }
 
+function recallApiPath(path) {
+    const areaId = document.getElementById('areas-page')?.dataset.areaId;
+    if (!areaId) return path;
+    return path.replace('/api/recalls', `/api/areas/${areaId}/recalls`);
+}
+
 function initRecallsPage() {
     const cardsEl = document.getElementById('recall-cards');
     const addInput = document.getElementById('recall-add-input');
@@ -73,7 +79,7 @@ async function loadAllRecalls() {
     const cardsEl = document.getElementById('recall-cards');
     if (cardsEl) cardsEl.innerHTML = '<div class="recall-empty">Loading...</div>';
     try {
-        const res = await fetch('/api/recalls');
+        const res = await fetch(recallApiPath('/api/recalls'));
         if (res.status === 401) {
             window.location.href = '/select-user';
             return;
@@ -349,7 +355,7 @@ async function saveRecallFromModal(id) {
     if (summaryInput) fields.summary = summaryInput.value.trim();
 
     try {
-        const res = await fetch(`/api/recalls/${id}`, {
+        const res = await fetch(recallApiPath(`/api/recalls/${id}`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(fields)
@@ -392,7 +398,7 @@ async function handleAddRecall(input) {
     const payload_type = detectPayloadType(parsed.content);
 
     try {
-        const res = await fetch('/api/recalls', {
+        const res = await fetch(recallApiPath('/api/recalls'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -468,7 +474,7 @@ async function pollPendingAI() {
 
     for (const id of idsToCheck) {
         try {
-            const res = await fetch(`/api/recalls/${id}`);
+            const res = await fetch(recallApiPath(`/api/recalls/${id}`));
             if (!res.ok) continue;
             const recall = await res.json();
 
@@ -499,7 +505,7 @@ async function pollPendingAI() {
 function deleteRecall(id) {
     openConfirmModal('Delete this recall?', async () => {
         try {
-            const res = await fetch(`/api/recalls/${id}`, { method: 'DELETE' });
+            const res = await fetch(recallApiPath(`/api/recalls/${id}`), { method: 'DELETE' });
             if (!res.ok) throw new Error('Delete failed');
             recallState.items = recallState.items.filter(item => item.id !== id);
             recallState.pollingIds = recallState.pollingIds.filter(i => i !== id);

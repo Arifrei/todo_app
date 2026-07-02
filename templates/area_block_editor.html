@@ -23,6 +23,10 @@
             <a class="btn btn-icon-only" id="area-editor-area-btn" href="/areas/{{ area_id }}" aria-label="Area" title="Area">
                 <i class="fa-solid fa-layer-group"></i>
             </a>
+            <button class="btn mobile-icon-only" id="area-editor-restore-btn" type="button" disabled>
+                <i class="fa-solid fa-rotate-left"></i>
+                <span class="btn-text">Restore</span>
+            </button>
             <button class="btn btn-primary" id="area-editor-save-btn" type="button">
                 <i class="fa-solid fa-floppy-disk"></i>
                 <span>Save</span>
@@ -185,5 +189,5 @@
 
 {% block page_scripts %}
 <script src="{{ url_for('static', filename='notes/markdown.js') }}" defer></script>
-<script src="{{ url_for('static', filename='pages/area-block-editor.js') }}?v=area-editor-20260626-area-bubble-drag" defer></script>
+<script src="{{ url_for('static', filename='pages/area-block-editor.js') }}?v=area-editor-20260630-autosave-restore" defer></script>
 {% endblock %}

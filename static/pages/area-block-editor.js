@@ -2,6 +2,8 @@
     const page = document.getElementById('area-block-editor-page');
     if (!page) return;
 
+    const AREA_NOTE_AUTOSAVE_DELAY = 1200;
+
     const state = {
         areaId: Number(page.dataset.areaId),
         blockId: Number(page.dataset.blockId),
@@ -11,6 +13,13 @@
         workspaceBlocks: [],
         dirty: false,
         saving: false,
+        autoSaveTimer: null,
+        autoSaveInFlight: false,
+        activeSnapshot: null,
+        sessionSnapshot: null,
+        changeVersion: 0,
+        closeAfterSaveRequested: false,
+        navigatingAway: false,
         rowModalType: 'item',
         rowModalId: null,
         innerNoteItemId: null,
@@ -63,6 +72,7 @@
             requestOptions.headers['Content-Type'] = 'application/json';
             requestOptions.body = JSON.stringify(options.payload);
         }
+        if (options.keepalive) requestOptions.keepalive = true;
         const response = await fetch(url, requestOptions);
         if (response.status === 204) return null;
         const contentType = response.headers.get('content-type') || '';
@@ -90,10 +100,88 @@
         return `Saved ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
     }
 
-    function setDirty(next = true) {
-        state.dirty = !!next;
+    function getReturnUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const raw = params.get('return');
+        if (raw && raw.startsWith('/')) return raw;
+        try {
+            const referrer = document.referrer ? new URL(document.referrer) : null;
+            if (referrer && referrer.origin === window.location.origin && referrer.href !== window.location.href) {
+                return `${referrer.pathname}${referrer.search}${referrer.hash}`;
+            }
+        } catch (_) {
+            // Referrer is optional; fall back to the owning area.
+        }
+        return `/areas/${state.areaId}`;
+    }
+
+    function navigateToReturnUrl() {
+        state.navigatingAway = true;
+        window.location.href = getReturnUrl();
+    }
+
+    function clearAreaAutoSaveTimer() {
+        if (!state.autoSaveTimer) return;
+        clearTimeout(state.autoSaveTimer);
+        state.autoSaveTimer = null;
+    }
+
+    function normalizeAreaNoteHtml(rawContent) {
+        const markdown = window.NoteMarkdown;
+        return markdown && typeof markdown.normalizeNoteEditorHtml === 'function'
+            ? markdown.normalizeNoteEditorHtml(rawContent)
+            : rawContent;
+    }
+
+    function getAreaNoteSnapshot({ forSave = false } = {}) {
+        const titleInput = $('#area-block-title');
+        const editor = $('#area-note-editor');
+        const meta = typeMeta[state.blockType] || typeMeta.note;
+        const rawTitle = titleInput ? (titleInput.value || '').trim() : '';
+        const rawContent = editor ? (editor.innerHTML || '').trim() : '';
+        return {
+            title: forSave ? (rawTitle || meta.fallback) : rawTitle,
+            content: forSave ? normalizeAreaNoteHtml(rawContent) : rawContent,
+        };
+    }
+
+    function setAreaNoteSnapshotsFromEditor() {
+        const snapshot = getAreaNoteSnapshot();
+        state.activeSnapshot = { ...snapshot };
+        state.sessionSnapshot = { ...snapshot };
+        updateRestoreButton();
+    }
+
+    function hasAreaNoteSessionChanges() {
+        if (state.blockType !== 'note' || !state.sessionSnapshot) return false;
+        const current = getAreaNoteSnapshot();
+        const session = state.sessionSnapshot;
+        return current.title !== (session.title || '') || current.content !== (session.content || '');
+    }
+
+    function updateRestoreButton() {
+        const restoreBtn = $('#area-editor-restore-btn');
+        if (!restoreBtn) return;
+        restoreBtn.disabled = state.blockType !== 'note' || state.saving || !hasAreaNoteSessionChanges();
+    }
+
+    function setSaving(next) {
+        state.saving = !!next;
         const saveBtn = $('#area-editor-save-btn');
         if (saveBtn) saveBtn.disabled = state.saving;
+        updateRestoreButton();
+    }
+
+    function setDirty(next = true, options = {}) {
+        state.dirty = !!next;
+        if (next && options.bumpVersion !== false) state.changeVersion += 1;
+        if (!next) clearAreaAutoSaveTimer();
+        const saveBtn = $('#area-editor-save-btn');
+        if (saveBtn) saveBtn.disabled = state.saving;
+        updateRestoreButton();
+        if (next && state.blockType === 'note' && options.autosave !== false) {
+            scheduleAreaNoteAutosave();
+        }
     }
 
     function setUpdatedLabel(text) {
@@ -135,8 +223,18 @@
         render();
     }
 
-    async function saveBlock({ closeAfter = false } = {}) {
-        if (!state.block || state.saving) return;
+    async function saveBlock({ closeAfter = false, silent = false, keepalive = false } = {}) {
+        if (!state.block) return;
+        if (state.saving) {
+            if (closeAfter) state.closeAfterSaveRequested = true;
+            return;
+        }
+        if (!state.dirty && closeAfter) {
+            navigateToReturnUrl();
+            return;
+        }
+        if (!state.dirty && silent) return;
+
         const titleInput = titleInputForType();
         const meta = typeMeta[state.blockType] || typeMeta.note;
         const payload = {
@@ -144,35 +242,106 @@
         };
 
         if (state.blockType === 'note') {
-            const editor = $('#area-note-editor');
-            const rawContent = editor ? (editor.innerHTML || '').trim() : '';
-            const markdown = window.NoteMarkdown;
-            payload.content = markdown && typeof markdown.normalizeNoteEditorHtml === 'function'
-                ? markdown.normalizeNoteEditorHtml(rawContent)
-                : rawContent;
+            payload.content = getAreaNoteSnapshot({ forSave: true }).content;
         }
 
+        const saveVersion = state.changeVersion;
+        const closeRequested = closeAfter || state.closeAfterSaveRequested;
+        state.closeAfterSaveRequested = false;
+        let shouldSaveAgain = false;
+        let shouldNavigate = false;
+
         try {
-            state.saving = true;
+            setSaving(true);
+            if (!silent) setUpdatedLabel('Saving...');
             const saved = await api(`/api/area-blocks/${state.blockId}`, {
                 method: 'PUT',
                 payload,
+                keepalive,
             });
             state.block = saved;
-            setDirty(false);
             setUpdatedLabel(formatUpdated(saved.updated_at));
-            if (closeAfter) window.location.href = `/areas/${state.areaId}`;
+            state.activeSnapshot = {
+                title: payload.title,
+                content: payload.content || '',
+            };
+
+            if (state.changeVersion === saveVersion) {
+                setDirty(false, { autosave: false, bumpVersion: false });
+                shouldNavigate = closeRequested;
+            } else {
+                state.dirty = true;
+                shouldSaveAgain = closeRequested;
+                updateRestoreButton();
+            }
         } catch (error) {
-            notify(error.message || 'Could not save', 'error');
+            if (!silent) notify(error.message || 'Could not save', 'error');
+            else console.error('Area note auto-save failed:', error);
         } finally {
-            state.saving = false;
-            setDirty(state.dirty);
+            setSaving(false);
+            if (state.closeAfterSaveRequested && !state.navigatingAway) {
+                await saveBlock({ closeAfter: true, silent });
+                return;
+            }
+            if (state.dirty && !state.navigatingAway) {
+                if (shouldSaveAgain) {
+                    await saveBlock({ closeAfter: closeRequested, silent });
+                    return;
+                }
+                scheduleAreaNoteAutosave();
+            }
         }
+
+        if (shouldNavigate) navigateToReturnUrl();
     }
 
     async function saveBeforeLeaving() {
+        if (state.dirty) await saveBlock({ closeAfter: true });
+        else navigateToReturnUrl();
+    }
+
+    async function saveBeforeAreaNavigation(event) {
+        const target = event.currentTarget;
+        const href = target && target.href ? target.href : `/areas/${state.areaId}`;
+        event.preventDefault();
         if (state.dirty) await saveBlock();
-        window.location.href = `/areas/${state.areaId}`;
+        if (!state.dirty) {
+            state.navigatingAway = true;
+            window.location.href = href;
+        }
+    }
+
+    function scheduleAreaNoteAutosave() {
+        if (state.blockType !== 'note' || !state.blockId || !state.dirty) return;
+        clearAreaAutoSaveTimer();
+        state.autoSaveTimer = setTimeout(async () => {
+            state.autoSaveTimer = null;
+            if (!state.dirty) return;
+            if (state.autoSaveInFlight) {
+                scheduleAreaNoteAutosave();
+                return;
+            }
+            state.autoSaveInFlight = true;
+            try {
+                await saveBlock({ silent: true });
+            } finally {
+                state.autoSaveInFlight = false;
+            }
+        }, AREA_NOTE_AUTOSAVE_DELAY);
+    }
+
+    async function restoreAreaNoteSession() {
+        if (state.blockType !== 'note' || state.saving || !state.sessionSnapshot) return;
+        if (!hasAreaNoteSessionChanges()) return;
+        const titleInput = $('#area-block-title');
+        const editor = $('#area-note-editor');
+        if (!titleInput || !editor) return;
+        titleInput.value = state.sessionSnapshot.title || '';
+        editor.innerHTML = state.sessionSnapshot.content || '';
+        bindEditorCheckboxes(editor);
+        setDirty(true);
+        await saveBlock({ silent: true });
+        notify('Restored to session start.', 'success');
     }
 
     function render() {
@@ -185,6 +354,7 @@
         if (state.blockType === 'note') {
             showOnlyPanel('area-note-panel');
             renderNoteEditor();
+            setAreaNoteSnapshotsFromEditor();
         } else if (state.blockType === 'task_list') {
             showOnlyPanel('area-task-panel');
             renderTaskEditor();
@@ -743,9 +913,17 @@
         });
     }
 
+    function saveAreaNoteOnExit() {
+        if (state.navigatingAway || state.blockType !== 'note' || !state.dirty) return;
+        saveBlock({ silent: true, keepalive: true });
+    }
+
     function bindEvents() {
         $('#area-editor-back-btn')?.addEventListener('click', saveBeforeLeaving);
-        $('#area-editor-save-btn')?.addEventListener('click', () => saveBlock());
+        $('#area-editor-area-btn')?.addEventListener('click', saveBeforeAreaNavigation);
+        $('#area-editor-area-bubble')?.addEventListener('click', saveBeforeAreaNavigation);
+        $('#area-editor-save-btn')?.addEventListener('click', () => saveBlock({ closeAfter: true }));
+        $('#area-editor-restore-btn')?.addEventListener('click', restoreAreaNoteSession);
         $('#area-block-title')?.addEventListener('input', () => setDirty(true));
         $('#area-list-title')?.addEventListener('input', () => setDirty(true));
         $('#area-task-title')?.addEventListener('input', () => setDirty(true));
@@ -850,6 +1028,10 @@
             if (!state.dirty) return;
             event.preventDefault();
             event.returnValue = '';
+        });
+        window.addEventListener('pagehide', saveAreaNoteOnExit);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') saveAreaNoteOnExit();
         });
     }
 
